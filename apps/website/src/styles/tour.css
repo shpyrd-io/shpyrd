@@ -16,6 +16,16 @@
   }
 }
 
+/* The same bar lying flat, under a card (the access scenarios). */
+@keyframes tour-fill-x {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
 /* A new line of the audit trail opening its room before it shows. */
 @keyframes tour-open {
   from {
@@ -26,4 +36,29 @@
     max-height: 4rem;
     opacity: 1;
   }
+}
+
+/* Slide 8's mini hero: the app out of the chat's top, straight up into the
+   cloud (--rise above where it starts), shrinking, gone once there. */
+@keyframes mini-ship-rise {
+  from {
+    translate: -50% 0;
+    scale: 1;
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  to {
+    translate: -50% calc(-1 * var(--rise));
+    scale: 0.15;
+    opacity: 0;
+  }
+}
+
+/* On a phone (Giovani, 2026-10-29): a slide's grids give their items no
+   room under their content's widest line, so a long row (a caption kept on
+   one line, a wide picture) cannot push the slide wider than the screen. */
+section.deck-rise .grid > * {
+  min-width: 0;
 }

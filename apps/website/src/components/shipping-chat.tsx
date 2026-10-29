@@ -185,7 +185,7 @@ export function ShippingChat() {
     ...(past("going-live")
       ? [
           {
-            label: "crm.acme.shpyrd.app is live · sign-in required",
+            label: "crm.yourapp.com is live · sign-in required",
             status: past("shipped") ? "done" : "pending",
           } as const,
         ]
@@ -198,12 +198,12 @@ export function ShippingChat() {
   const windowOf = (agent: Agent) => (
     // After aniwall.aura.build's showcase: the app sits in a frame of frosted
     // glass, the window itself light, its edges drawn in white rather than grey.
-    <div className={cn(glass, "rounded-[18px] p-2.5")}>
+    <div className={cn(glass, "rounded-2xl p-2.5")}>
     <AppWindow
       title={name(agent, "size-3.5")}
       detail="~/projects/crm"
       className={cn(
-        "h-[34rem] rounded-[10px] border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
+        "h-[34rem] rounded-2xl border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
         "[&_[data-slot=app-window-bar]]:border-foreground/6 [&_[data-slot=app-window-bar]]:bg-transparent [&_[data-slot=app-window-footer]]:border-foreground/6",
       )}
       footer={<Composer text={draft} placeholder={`Message ${agent.name}…`} />}
@@ -244,7 +244,7 @@ export function ShippingChat() {
             >
               {past("shipped") ? (
                 <span>
-                  Done. It&apos;s live at <Url>https://crm.acme.shpyrd.app</Url>, behind your work
+                  Done. It&apos;s live at <Url>https://crm.yourapp.com</Url>, behind your work
                   sign-in. Only you can open it for now.
                 </span>
               ) : (
@@ -272,7 +272,7 @@ export function ShippingChat() {
             >
               {past("shared") ? (
                 <span>
-                  Done. Sales can open <Url>https://crm.acme.shpyrd.app</Url>, and will find it
+                  Done. Sales can open <Url>https://crm.yourapp.com</Url>, and will find it
                   among their apps next time they sign in.
                 </span>
               ) : (

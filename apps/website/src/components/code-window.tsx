@@ -29,7 +29,7 @@ export function CodeWindow({
   roomy?: boolean;
 }) {
   return (
-    <div className={cn(glass, "rounded-[18px] p-2.5", className)}>
+    <div className={cn(glass, "rounded-2xl p-2.5", className)}>
       <AppWindow
         title={
           <span className="inline-flex items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:text-primary">
@@ -39,7 +39,7 @@ export function CodeWindow({
         }
         detail={detail}
         className={cn(
-          "rounded-[10px] border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
+          "rounded-2xl border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
           "[&_[data-slot=app-window-bar]]:border-foreground/6 [&_[data-slot=app-window-bar]]:bg-transparent",
         )}
       >

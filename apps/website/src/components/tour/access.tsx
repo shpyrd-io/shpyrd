@@ -89,7 +89,7 @@ export function Access() {
         </div>
 
         <div className="grid gap-4">
-          <BrowserFrame address={person.id === "outside" ? "https://acme.shpyrd.app/login" : access.url} className="min-h-72">
+          <BrowserFrame address={person.id === "outside" ? "https://apps.yourapp.com/login" : access.url} className="min-h-72">
             <div key={person.id} className="grid min-h-64 animate-in fade-in slide-in-from-bottom-2 zoom-in-[0.98] duration-slow ease-enter blur-in-6">
               {person.allowed ? (
                 // The customer's own app: whatever they built.
@@ -133,7 +133,7 @@ export function Access() {
                   <div className="grid w-full max-w-xs justify-items-center gap-5 text-center">
                     <LogoMark className="size-12" />
                     <div className="grid gap-1">
-                      <p className="font-heading text-xl font-medium">Acme</p>
+                      <p className="font-heading text-xl font-medium">Your company</p>
                       <p className="text-sm text-muted-foreground">Sign in to open its applications.</p>
                     </div>
                     <Button size="xl" variant="outline" className="w-full" iconEnd={<ArrowRight />}>

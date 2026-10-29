@@ -48,7 +48,7 @@ export function ProposalNav({
   return (
     <nav
       aria-label={`${label} proposals`}
-      className="flex flex-wrap items-center gap-x-1 gap-y-2 rounded-lg border border-dashed px-3 py-2 text-sm"
+      className="flex flex-wrap items-center gap-x-1 gap-y-2 rounded-2xl border border-dashed px-3 py-2 text-sm"
     >
       <span className="mr-2 text-muted-foreground">{label}</span>
       {items.map((p) => (
@@ -100,7 +100,7 @@ export function DeniedScreen({ app, team }: { app: string; team: string }) {
           {app} is available to the {team} team
         </p>
         <p className="text-sm text-muted-foreground">
-          You are signed in as pedro@acme.com.
+          You are signed in as pedro@yourapp.com.
         </p>
         <Button variant="outline" className="w-full">
           Sign in as someone else
@@ -124,7 +124,7 @@ export function PurchaseApp({ person }: { person: string }) {
         <p className="font-heading font-medium">Purchase requests</p>
         <p className="truncate text-xs text-muted-foreground">Hello, {person}</p>
       </div>
-      <ul className="divide-y rounded-lg border">
+      <ul className="divide-y rounded-2xl border">
         {rows.map((r) => (
           <li key={r.what} className="flex items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1">
@@ -202,9 +202,10 @@ export function ConnectOnce() {
 // The end of the homepage (and the old homepage proposals): the shipyard at
 // work beside the way in. shpyrd cloud first, always; running it yourself is
 // there too, as the second way, because it is open source and says so.
-export function Closing() {
+export function Closing({ note }: { note?: React.ReactNode }) {
   return (
     <ShipyardCta
+      note={note}
       heading="Start on shpyrd cloud"
       description="Sign up, connect your agent, and ship your first app. Or run it yourself: shpyrd is open source under MPL-2.0, and the quick start takes you from nothing to a deployed app."
       actions={
@@ -212,7 +213,9 @@ export function Closing() {
           <Button size="lg" asChild>
             <a href={signUp}>Get started</a>
           </Button>
-          <Button variant="outline" size="lg" asChild>
+          {/* Running it yourself is a way out of signing up: a quiet link,
+              not a second button of the same weight. */}
+          <Button variant="link" size="lg" asChild>
             <a href="/docs/installation">Run it yourself</a>
           </Button>
         </>

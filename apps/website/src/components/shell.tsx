@@ -3,14 +3,51 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArchiveRestore, Bot, Boxes, Cloud, Cloudy, Compass, Database, Download, FileCode, GitPullRequest, Globe, Heart, LayoutDashboard, Lightbulb, LockKeyhole, Map as MapIcon, Menu, Moon, Network, Puzzle, Rocket, Ruler, ScrollText, ShieldCheck, SquareTerminal, Sun, SunMoon, UploadCloud } from "lucide-react";
+import {
+  ArchiveRestore,
+  Bot,
+  Boxes,
+  Cloud,
+  Cloudy,
+  Compass,
+  Database,
+  Download,
+  FileCode,
+  GitPullRequest,
+  Globe,
+  Heart,
+  LayoutDashboard,
+  Lightbulb,
+  LockKeyhole,
+  Map as MapIcon,
+  Menu,
+  Moon,
+  Network,
+  Puzzle,
+  Rocket,
+  Ruler,
+  ScrollText,
+  ShieldCheck,
+  SquareTerminal,
+  Sun,
+  SunMoon,
+  UploadCloud,
+} from "lucide-react";
 import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
-import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
+import {
+  Breadcrumbs,
+  BreadcrumbsItem,
+} from "@shpyrd/ui/components/breadcrumbs";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
 import { Footer } from "@shpyrd/ui/components/footer";
 import { MinimalFooter } from "@shpyrd/ui/components/minimal-footer";
-import { NavList, NavListGroup, NavListItem, NavListSubNav } from "@shpyrd/ui/components/nav-list";
+import {
+  NavList,
+  NavListGroup,
+  NavListItem,
+  NavListSubNav,
+} from "@shpyrd/ui/components/nav-list";
 import {
   PageLayout,
   PageLayoutFooter,
@@ -38,8 +75,14 @@ const github = "https://github.com/shpyrd-io/shpyrd";
 // The legal pages, on their own site.
 const legal = [
   { title: "Legal", href: "https://legal.shpyrd.io/" },
-  { title: "Terms of Service", href: "https://legal.shpyrd.io/global/terms-of-service" },
-  { title: "Privacy Policy", href: "https://legal.shpyrd.io/global/privacy-policy" },
+  {
+    title: "Terms of Service",
+    href: "https://legal.shpyrd.io/global/terms-of-service",
+  },
+  {
+    title: "Privacy Policy",
+    href: "https://legal.shpyrd.io/global/privacy-policy",
+  },
 ];
 const discord = site.discord.href;
 
@@ -74,22 +117,36 @@ const docIcons: Record<string, React.ReactElement> = {
   "https://donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01": <Heart />,
 };
 
-const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
+const iconHover =
+  "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
 
 // The repository's stars beside its mark, as supabase.com has them: a short
 // number (95, 1.2K), quiet, no pill. Asked of the site's own route
 // (app/api/github), which asks GitHub at most once an hour.
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const compact = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
 
 // Getting Started (/getting-started) is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
-  ...(sectionsLive ? [{ title: "Getting Started", href: "/getting-started" }] : []),
+  ...(sectionsLive
+    ? [{ title: "Getting Started", href: "/getting-started" }]
+    : []),
   { title: "Pricing", href: "/pricing" },
   { title: "Docs", href: "/docs/getting-started" },
   { title: "Changelog", href: "/changelog" },
 ];
 
-export function Shell({ children, features, solutionGroups }: { children: React.ReactNode; features: FeatureEntry[]; solutionGroups: SolutionGroup[] }) {
+export function Shell({
+  children,
+  features,
+  solutionGroups,
+}: {
+  children: React.ReactNode;
+  features: FeatureEntry[];
+  solutionGroups: SolutionGroup[];
+}) {
   const path = usePathname();
   const here = find(path);
   const isDocument = path.startsWith("/docs");
@@ -110,58 +167,99 @@ export function Shell({ children, features, solutionGroups }: { children: React.
     <Link
       key={l.href}
       href={l.href}
-      aria-current={path === l.href || path.startsWith(`${l.href}/`) ? "page" : undefined}
+      aria-current={
+        path === l.href || path.startsWith(`${l.href}/`) ? "page" : undefined
+      }
     >
       {l.title}
     </Link>
   );
   // The two menus of the copy brief (arquivos de copy, 2026-10-09): what
   // shpyrd does, six features; and who and what it is for, in three groups.
-  const entry = (base: string) => (p: { slug: string; name: string; card: string; icon: keyof typeof icons }) => ({
-    link: link({ title: p.name, href: `${base}/${p.slug}` }),
-    description: p.card,
-    icon: icons[p.icon],
-  });
+  const entry =
+    (base: string) =>
+    (p: {
+      slug: string;
+      name: string;
+      card: string;
+      icon: keyof typeof icons;
+    }) => ({
+      link: link({ title: p.name, href: `${base}/${p.slug}` }),
+      description: p.card,
+      icon: icons[p.icon],
+    });
   const featuresMenu = {
     label: "Features",
     columns: [{ label: "Features", links: features.map(entry("/features")) }],
   };
   const newSolutionsMenu = {
     label: "Solutions",
-    columns: solutionGroups.map((g) => ({ label: g.name, links: g.items.map(entry("/solutions")) })),
+    columns: solutionGroups.map((g) => ({
+      label: g.name,
+      links: g.items.map(entry("/solutions")),
+    })),
   };
-  const primary = [
-    { title: "Docs", href: "/docs/getting-started" },
-    { title: "Pricing", href: "/pricing" },
-  ];
+  // Order of the header (Giovani, 2026-10-13): what it does, who it is
+  // for, what it costs, then what helps afterwards; Docs last.
+  const pricing = { title: "Pricing", href: "/pricing" };
+  const docs = { title: "Docs", href: "/docs/getting-started" };
   const resourcesMenu = {
     label: resources.label,
     columns: resources.groups.map((group) => ({
       label: group.title,
-      links: group.links.map((item) => ({ link: link(item), description: item.description })),
+      links: group.links.map((item) => ({
+        link: link(item),
+        description: item.description,
+      })),
     })),
   };
-  const links = [featuresMenu, newSolutionsMenu, ...primary.map(link), resourcesMenu];
+  const links = [
+    featuresMenu,
+    newSolutionsMenu,
+    link(pricing),
+    resourcesMenu,
+    link(docs),
+  ];
 
   const siteNav = (
     <NavList aria-label="Site">
       {[featuresMenu, newSolutionsMenu].map((group) => (
-        <NavListSubNav key={group.label} title={group.label} className="min-h-11 font-medium">
+        <NavListSubNav
+          key={group.label}
+          title={group.label}
+          className="min-h-11 font-medium"
+        >
           {group.columns.map((column) => (
-            <NavListGroup key={column.label} title={column.label === group.label ? undefined : column.label}>
-              {column.links.map((item, i) => <NavListItem key={i} asChild className="min-h-11">{item.link}</NavListItem>)}
+            <NavListGroup
+              key={column.label}
+              title={column.label === group.label ? undefined : column.label}
+            >
+              {column.links.map((item, i) => (
+                <NavListItem key={i} asChild className="min-h-11">
+                  {item.link}
+                </NavListItem>
+              ))}
             </NavListGroup>
           ))}
         </NavListSubNav>
       ))}
-      {primary.map((item) => <NavListItem key={item.href} asChild className="min-h-11 font-medium">{link(item)}</NavListItem>)}
+      <NavListItem asChild className="min-h-11 font-medium">
+        {link(pricing)}
+      </NavListItem>
       <NavListSubNav title={resources.label} className="min-h-11 font-medium">
         {resources.groups.map((group) => (
           <NavListGroup key={group.title} title={group.title}>
-            {group.links.map((item) => <NavListItem key={item.href} asChild className="min-h-11">{link(item)}</NavListItem>)}
+            {group.links.map((item) => (
+              <NavListItem key={item.href} asChild className="min-h-11">
+                {link(item)}
+              </NavListItem>
+            ))}
           </NavListGroup>
         ))}
       </NavListSubNav>
+      <NavListItem asChild className="min-h-11 font-medium">
+        {link(docs)}
+      </NavListItem>
     </NavList>
   );
 
@@ -186,7 +284,24 @@ export function Shell({ children, features, solutionGroups }: { children: React.
 
   // The manifesto is a deck of its own: the whole window, none of the
   // site's chrome.
-  if (path === "/small-software-manifesto") return children;
+  // Its working copy too (/proposals/manifesto-v3; v2 discarded 2026-10-27).
+  if (
+    path === "/small-software-manifesto" ||
+    path === "/proposals/manifesto-v3" ||
+    path === "/proposals/manifesto-original" ||
+    path === "/proposals/sleep-day" ||
+    path === "/proposals/sleep-day-blocks" ||
+    path === "/proposals/where-it-runs" ||
+    path === "/proposals/where-it-runs-story" ||
+    path === "/proposals/governance" ||
+    path === "/proposals/governance-bar" ||
+    path === "/proposals/governance-teams" ||
+    path === "/proposals/audiences" ||
+    path === "/proposals/closing-orange" ||
+    path === "/proposals/closing-white" ||
+    path === "/proposals/closing-convert"
+  )
+    return children;
 
   return (
     <PageLayout
@@ -210,8 +325,15 @@ export function Shell({ children, features, solutionGroups }: { children: React.
           // of room on its right, the panel keeping its 15rem.
           className="relative z-50 py-4 pr-6 pl-4 @3xl/page-layout:w-66 @3xl/page-layout:overflow-visible"
         >
-          <div className={cn(glass, "flex h-full flex-col overflow-y-auto pb-4")}>
-            <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
+          <div
+            className={cn(glass, "flex h-full flex-col overflow-y-auto pb-4")}
+          >
+            <Stack
+              direction="horizontal"
+              align="center"
+              gap="cozy"
+              padding="normal"
+            >
               <Link href="/" aria-label="shpyrd">
                 <Wordmark />
               </Link>
@@ -266,11 +388,17 @@ export function Shell({ children, features, solutionGroups }: { children: React.
                 {/* The sidebar holds the wordmark, and it is hidden on a narrow
                     screen: without this a reader who arrives on a document has
                     no way to the rest of the site. */}
-                <Link href="/" aria-label="shpyrd" className="@3xl/page-layout:hidden">
+                <Link
+                  href="/"
+                  aria-label="shpyrd"
+                  className="@3xl/page-layout:hidden"
+                >
                   <Wordmark />
                 </Link>
                 <Breadcrumbs className="hidden @xl/site-header:flex">
-                  {here && <BreadcrumbsItem>{here.group.title}</BreadcrumbsItem>}
+                  {here && (
+                    <BreadcrumbsItem>{here.group.title}</BreadcrumbsItem>
+                  )}
                   {here && (
                     <BreadcrumbsItem asChild selected>
                       <Link href={here.link.href}>{here.link.title}</Link>
@@ -293,8 +421,16 @@ export function Shell({ children, features, solutionGroups }: { children: React.
                 variant="ghost"
                 size={stars === null ? "icon" : "default"}
                 asChild
-                aria-label={stars === null ? "shpyrd on GitHub" : `shpyrd on GitHub, ${stars} stars`}
-                className={cn(iconHover, "hidden @xl/site-header:inline-flex", stars !== null && "gap-1 px-2")}
+                aria-label={
+                  stars === null
+                    ? "shpyrd on GitHub"
+                    : `shpyrd on GitHub, ${stars} stars`
+                }
+                className={cn(
+                  iconHover,
+                  "hidden @xl/site-header:inline-flex",
+                  stars !== null && "gap-1 px-2",
+                )}
               >
                 <a href={github}>
                   <GitHubMark />
@@ -305,7 +441,13 @@ export function Shell({ children, features, solutionGroups }: { children: React.
                   )}
                 </a>
               </Button>
-              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord" className={cn(iconHover, "hidden @xl/site-header:inline-flex")}>
+              <Button
+                variant="ghost"
+                size="icon"
+                asChild
+                aria-label="shpyrd on Discord"
+                className={cn(iconHover, "hidden @xl/site-header:inline-flex")}
+              >
                 <a href={discord}>
                   <DiscordMark />
                 </a>
@@ -316,7 +458,15 @@ export function Shell({ children, features, solutionGroups }: { children: React.
                 className={iconHover}
                 aria-label={`Theme: ${theme}`}
                 title={`Theme: ${theme}`}
-                icon={theme === "dark" ? <Moon /> : theme === "light" ? <Sun /> : <SunMoon />}
+                icon={
+                  theme === "dark" ? (
+                    <Moon />
+                  ) : theme === "light" ? (
+                    <Sun />
+                  ) : (
+                    <SunMoon />
+                  )
+                }
                 onClick={() => setTheme(next[theme])}
               />
               <Button variant="outline" asChild className="ml-2">
@@ -325,7 +475,7 @@ export function Shell({ children, features, solutionGroups }: { children: React.
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">
-                <DeployButton />
+                <DeployButton label={site.start.label} />
               </div>
             </>
           }
@@ -354,24 +504,50 @@ export function Shell({ children, features, solutionGroups }: { children: React.
               // The two menus of the header, without Solutions-backup (it goes
               // after Giovani's design review): the features, and the
               // solutions in their three groups.
-              { title: "Features", links: features.map((f) => <Link key={f.slug} href={`/features/${f.slug}`}>{f.name}</Link>) },
+              {
+                title: "Features",
+                links: features.map((f) => (
+                  <Link key={f.slug} href={`/features/${f.slug}`}>
+                    {f.name}
+                  </Link>
+                )),
+              },
               ...solutionGroups.map((g) => ({
                 title: g.name === "Who" ? "Solutions" : g.name,
-                links: g.items.map((p) => <Link key={p.slug} href={`/solutions/${p.slug}`}>{p.name}</Link>),
+                links: g.items.map((p) => (
+                  <Link key={p.slug} href={`/solutions/${p.slug}`}>
+                    {p.name}
+                  </Link>
+                )),
               })),
               {
                 title: "Product",
                 links: [
-                  ...marketing.map((l) => <Link key={l.href} href={l.href}>{l.title}</Link>),
-                  <Link key="/docs/roadmap" href="/docs/roadmap">Roadmap</Link>,
-                  <Link key="/small-software-manifesto" href="/small-software-manifesto">Small Software manifesto</Link>,
+                  ...marketing.map((l) => (
+                    <Link key={l.href} href={l.href}>
+                      {l.title}
+                    </Link>
+                  )),
+                  <Link key="/docs/roadmap" href="/docs/roadmap">
+                    Roadmap
+                  </Link>,
+                  <Link
+                    key="/small-software-manifesto"
+                    href="/small-software-manifesto"
+                  >
+                    Small Software manifesto
+                  </Link>,
                 ],
               },
               {
                 title: "Community",
                 links: [
-                  <a key="gh" href={github}>GitHub</a>,
-                  <a key="dc" href={discord}>Discord</a>,
+                  <a key="gh" href={github}>
+                    GitHub
+                  </a>,
+                  <a key="dc" href={discord}>
+                    Discord
+                  </a>,
                 ],
               },
             ]}
@@ -381,7 +557,11 @@ export function Shell({ children, features, solutionGroups }: { children: React.
               <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 <span>© 2026 shpyrd. All rights reserved.</span>
                 {legal.map((l) => (
-                  <a key={l.href} href={l.href} className="underline-offset-4 transition-colors hover:text-primary">
+                  <a
+                    key={l.href}
+                    href={l.href}
+                    className="underline-offset-4 transition-colors hover:text-primary"
+                  >
                     {l.title}
                   </a>
                 ))}
@@ -390,7 +570,7 @@ export function Shell({ children, features, solutionGroups }: { children: React.
             backToTop
           />
         ) : (
-        <MinimalFooter
+          <MinimalFooter
             as="div"
             // Loose like a document's bar, on every page: a faint line over it,
             // as wide as what is in it, rather than a panel of glass.
@@ -405,7 +585,10 @@ export function Shell({ children, features, solutionGroups }: { children: React.
             // Who it is for (Solutions), then the site's own pages; not
             // Solutions-backup, which goes after the design review.
             links={[
-              ...solutionGroups[0].items.map((p) => ({ title: p.name, href: `/solutions/${p.slug}` })),
+              ...solutionGroups[0].items.map((p) => ({
+                title: p.name,
+                href: `/solutions/${p.slug}`,
+              })),
               ...marketing,
             ].map((l) => (
               <Link key={l.href} href={l.href}>
@@ -414,7 +597,11 @@ export function Shell({ children, features, solutionGroups }: { children: React.
             ))}
             social={[
               { label: "shpyrd on GitHub", href: github, icon: <GitHubMark /> },
-              { label: "shpyrd on Discord", href: discord, icon: <DiscordMark /> },
+              {
+                label: "shpyrd on Discord",
+                href: discord,
+                icon: <DiscordMark />,
+              },
             ]}
             logo={
               <Link href="/" aria-label="shpyrd">
@@ -426,7 +613,11 @@ export function Shell({ children, features, solutionGroups }: { children: React.
               <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 <span>© 2026. shpyrd. All rights reserved.</span>
                 {legal.map((l) => (
-                  <a key={l.href} href={l.href} className="underline-offset-4 transition-colors hover:text-primary">
+                  <a
+                    key={l.href}
+                    href={l.href}
+                    className="underline-offset-4 transition-colors hover:text-primary"
+                  >
                     {l.title}
                   </a>
                 ))}

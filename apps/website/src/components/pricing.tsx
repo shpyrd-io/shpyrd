@@ -154,7 +154,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
             beside the name, the words under it. */}
         <div className="mt-8 grid gap-4 sm:grid-cols-3">
           {counts.items.map((item) => (
-            <article key={item.id} className={cn(glass, "grid content-start gap-2 p-6")}>
+            <article key={item.id} className={cn(glass, "grid content-start gap-2 p-6 shadow-none dark:shadow-none")}>
               <h3 className="flex items-center gap-2 text-base font-semibold text-foreground [&_svg]:size-[18px] [&_svg]:shrink-0 [&_svg]:text-primary">
                 {countIcons[item.id]}
                 {item.title}
@@ -170,7 +170,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
         {/* The example as an invoice: what each part used, line by line,
             then a strong rule, and under it the sums - the usage, and what is
             paid: the usage, or the plan's minimum when the usage is under it. */}
-        <div className={cn(glass, "mx-auto mt-8 w-full max-w-4xl overflow-x-auto p-6 sm:p-8")}>
+        <div className={cn(glass, "mx-auto mt-8 w-full max-w-4xl overflow-x-auto p-6 sm:p-8 shadow-none dark:shadow-none")}>
           <div className="flex items-start justify-between gap-4 border-b pb-5">
             <div className="flex items-center gap-3">
               <PlanTile>

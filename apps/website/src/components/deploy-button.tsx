@@ -51,6 +51,25 @@ const clock = {
 
 export function DeployButton({
   size,
+  label,
+}: {
+  size?: React.ComponentProps<typeof Button>["size"];
+  // A fixed phrase instead of the rolling ones: where the person is deciding
+  // (the home's hero, the header), the button says one thing and stays still.
+  label?: string;
+}) {
+  if (label) {
+    return (
+      <Button asChild size={size}>
+        <a href={signUp}>{label}</a>
+      </Button>
+    );
+  }
+  return <RollingDeployButton size={size} />;
+}
+
+function RollingDeployButton({
+  size,
 }: {
   size?: React.ComponentProps<typeof Button>["size"];
 }) {

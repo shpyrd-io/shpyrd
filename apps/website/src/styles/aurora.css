@@ -96,7 +96,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  filter: blur(7px);
+  filter: blur(6px);
   background: repeating-conic-gradient(
     from calc(200deg + var(--ray-a)) at calc(50% - 120px) -35%,
     transparent 0deg 3deg,
@@ -137,11 +137,13 @@
   50% { --ray-a: 1.5deg; }
   to { --ray-a: 6deg; }
 }
+/* By how much of them shows only: a blur that changes is drawn again each
+   frame, one that stays is drawn once. */
 @keyframes aurora-shimmer {
-  0% { filter: blur(7px); opacity: calc(0.35 * var(--ray-strength)); }
-  40% { filter: blur(5px); opacity: calc(0.6 * var(--ray-strength)); }
-  70% { filter: blur(6px); opacity: calc(0.45 * var(--ray-strength)); }
-  100% { filter: blur(4px); opacity: calc(0.6 * var(--ray-strength)); }
+  0% { opacity: calc(0.35 * var(--ray-strength)); }
+  40% { opacity: calc(0.6 * var(--ray-strength)); }
+  70% { opacity: calc(0.45 * var(--ray-strength)); }
+  100% { opacity: calc(0.6 * var(--ray-strength)); }
 }
 @keyframes aurora-flicker {
   0% { filter: blur(7px) brightness(0.7); }

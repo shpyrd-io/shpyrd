@@ -65,8 +65,11 @@ export function VerticalRoute({
   }, []);
 
   return (
+    // Its steps come in their own way, with the line: the page's
+    // scroll entrance leaves them be (scroll-reveal.tsx).
     <ol
       ref={ref}
+      data-reveal-skip=""
       data-shown={shown || undefined}
       className={cn("group/route relative grid gap-10", className)}
     >

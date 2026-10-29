@@ -1,6 +1,7 @@
 import { pricing } from "@/content/pricing";
 import { Pricing } from "@/components/pricing";
 import { shared } from "@/lib/metadata";
+import { ScrollReveal } from "@/components/scroll-reveal";
 
 export const metadata = {
   title: pricing.title,
@@ -9,5 +10,11 @@ export const metadata = {
 };
 
 export default function Page() {
-  return <Pricing />;
+  // The page's blocks rise in as they come into view, as on the home.
+  return (
+    <>
+      <ScrollReveal />
+      <Pricing />
+    </>
+  );
 }

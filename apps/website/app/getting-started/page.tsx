@@ -13,6 +13,7 @@ import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
 import { pageSections } from "@/lib/page";
 import { signUp } from "@/lib/signup";
+import { ScrollReveal } from "@/components/scroll-reveal";
 
 export const metadata = { title: "Getting Started", description: intro.lead };
 
@@ -25,6 +26,8 @@ const icons: Record<string, React.ReactElement> = {
 export default function GettingStarted() {
   return (
     <>
+      {/* The page's blocks rise in as they come into view, as on the home. */}
+      <ScrollReveal />
       <ContainerCircle />
       <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
         <Hero variant="page" align="center" heading={intro.title} description={intro.lead} />
@@ -36,7 +39,7 @@ export default function GettingStarted() {
             icon: icons[step.id],
             lit: true,
             children: (
-              <div className={cn(glass, "grid gap-6 p-6 pt-[18px] sm:p-8 sm:pt-[18px] lg:grid-cols-2 lg:items-start lg:gap-12")}>
+              <div className={cn(glass, "grid gap-6 p-6 pt-[18px] sm:p-8 sm:pt-[18px] lg:grid-cols-2 lg:items-start lg:gap-12 shadow-none dark:shadow-none")}>
                 <Stack gap="normal">
                   <p className="text-sm leading-5 font-medium text-primary">Step {index + 1}</p>
                   <h2 className="text-2xl font-semibold text-foreground">{step.title}</h2>
@@ -59,7 +62,7 @@ export default function GettingStarted() {
                       src={step.id === "publish" ? "/screenshots/deploy-dialog-crop.png" : "/screenshots/launcher.png"}
                       alt={step.id === "publish" ? "The shpyrd deployment dialog with a repository ready to deploy" : "The shpyrd launcher showing the apps available to a signed-in user"}
                       loading="lazy"
-                      className="w-full rounded-[10px] border border-white/80 shadow-[0_6px_16px_rgb(25_25_40/0.07)] dark:border-white/10 dark:invert dark:hue-rotate-180"
+                      className="w-full rounded-2xl border border-white/80 shadow-[0_6px_16px_rgb(25_25_40/0.07)] dark:border-white/10 dark:invert dark:hue-rotate-180"
                     />
                   )}
                 </div>

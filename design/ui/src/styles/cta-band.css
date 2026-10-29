@@ -1,0 +1,149 @@
+/* CtaBand (src/components/cta-band.tsx): the closing call to action on the
+   brand orange. The band clips what reaches past its top and foot (the
+   yard, larger, runs off both), not its sides: it is the window's width. Its
+   foot reaches 24px further, through a page's bottom padding, to the
+   footer's line. */
+.cta-band {
+  clip-path: inset(0 -100vw -24px);
+}
+.cta-band-ground {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: -24px;
+  width: 100vw;
+  translate: -50% 0;
+  z-index: -1;
+  background: #ff4f00;
+}
+
+/* Within its box: the band and its light no wider than the block, its
+   corners rounded, the yard cut at its edges. */
+.cta-band-contained {
+  clip-path: inset(0 round var(--radius-2xl));
+}
+.cta-band-contained .cta-band-ground {
+  bottom: 0;
+  width: 100%;
+}
+.cta-band-contained .cta-band-hero {
+  padding-inline: 3rem;
+}
+.cta-band-contained .cta-band-aurora {
+  width: 100%;
+  translate: calc(-50% - 50px) 0;
+}
+
+/* The light: white glows that drift and breathe, and white rays that sway
+   and shimmer, screened so they only lighten the orange; faded on every
+   side, gathered under the words. */
+.cta-band-aurora {
+  position: absolute;
+  left: 50%;
+  top: -18%;
+  bottom: -18%;
+  width: 100vw;
+  translate: calc(-50% - 50px) 0;
+  z-index: 1;
+  mix-blend-mode: screen;
+  overflow: hidden;
+  pointer-events: none;
+  --strength: 0.3;
+  --ray-strength: 0.45;
+  mask-image: radial-gradient(ellipse 470px 50% at calc(50% - 400px) 50%, black 40%, transparent 100%);
+}
+.cta-band-aurora .light {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: calc(0.7 * var(--strength));
+  background: radial-gradient(closest-side, #ffffff, transparent);
+  will-change: transform;
+  animation: cta-band-drift 22s ease-in-out infinite alternate;
+}
+.cta-band-aurora .light:nth-child(1) { left: calc(50% - 760px); top: 6%; width: 560px; height: 64%; }
+.cta-band-aurora .light:nth-child(2) { left: calc(50% - 500px); top: 34%; width: 480px; height: 60%; animation-duration: 27s; animation-delay: -9s; }
+.cta-band-aurora .light:nth-child(3) { left: calc(50% - 720px); top: 46%; width: 600px; height: 54%; animation-duration: 25s; animation-delay: -4s; }
+.cta-band-aurora .light:nth-child(4) { left: calc(50% - 150px); top: 30%; width: 420px; height: 50%; opacity: calc(0.3 * var(--strength)); animation-duration: 31s; animation-delay: -15s; }
+
+@property --cta-band-ray {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.cta-band-aurora .rays {
+  position: absolute;
+  inset: 0;
+  mask-image:
+    radial-gradient(ellipse 420px 55% at calc(50% - 400px) 50%, black 15%, transparent 85%),
+    linear-gradient(to bottom, black 20%, transparent 95%);
+  mask-composite: intersect;
+}
+.cta-band-aurora .rays::before,
+.cta-band-aurora .rays::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* A blur that stays is drawn once; the shafts shimmer by how much of them
+     shows. */
+  filter: blur(6px);
+  background: repeating-conic-gradient(
+    from calc(200deg + var(--cta-band-ray)) at calc(50% - 120px) -35%,
+    transparent 0deg 3deg,
+    rgb(255 255 255 / 0.75) 4deg,
+    transparent 5.2deg 9deg,
+    rgb(255 255 255 / 0.6) 10deg,
+    transparent 11deg 16deg
+  );
+  opacity: calc(0.55 * var(--ray-strength));
+  animation: cta-band-sway 10.5s ease-in-out infinite alternate, cta-band-shimmer 3s ease-in-out infinite alternate;
+}
+.cta-band-aurora .rays::after {
+  background: repeating-conic-gradient(
+    from calc(197deg - var(--cta-band-ray)) at calc(50% - 60px) -40%,
+    transparent 0deg 5deg,
+    rgb(255 255 255 / 0.65) 6.2deg,
+    transparent 7.4deg 13deg
+  );
+  opacity: calc(0.4 * var(--ray-strength));
+  animation-duration: 14s, 4.2s;
+  animation-delay: -5s, -1.8s;
+}
+@keyframes cta-band-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(8%, -6%, 0) scale(1.12); }
+  100% { transform: translate3d(-6%, 5%, 0) scale(0.92); }
+}
+@keyframes cta-band-sway {
+  from { --cta-band-ray: -6deg; }
+  50% { --cta-band-ray: 1.5deg; }
+  to { --cta-band-ray: 6deg; }
+}
+@keyframes cta-band-shimmer {
+  0% { opacity: calc(0.35 * var(--ray-strength)); }
+  40% { opacity: calc(0.6 * var(--ray-strength)); }
+  70% { opacity: calc(0.45 * var(--ray-strength)); }
+  100% { opacity: calc(0.6 * var(--ray-strength)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cta-band-aurora .light,
+  .cta-band-aurora .rays::before,
+  .cta-band-aurora .rays::after { animation: none; }
+}
+
+/* The words on orange are white; the main button black, so it stands out
+   from the orange; a second one, outlined or a link, white. */
+.cta-band-hero [data-slot="hero-heading"],
+.cta-band-hero [data-slot="hero-description"],
+.cta-band-hero [data-slot="hero-note"] {
+  color: #ffffff !important;
+}
+.cta-band-hero [data-slot="button"][data-variant="default"] {
+  background: #000000;
+  color: #ffffff;
+  box-shadow: 0 6px 18px -6px rgb(0 0 0 / 0.45);
+}
+.cta-band-hero [data-slot="button"][data-variant="link"],
+.cta-band-hero [data-slot="button"][data-variant="outline"] {
+  color: #ffffff;
+}

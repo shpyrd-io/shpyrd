@@ -115,13 +115,15 @@ function Piece({ sprite, at, rank }: { sprite: keyof typeof sprites; at: Point; 
     zIndex: rank,
   };
   const place = "pointer-events-none absolute top-0 left-0 max-w-none select-none";
+  // Fetched only when the yard comes near the screen, and only in the
+  // theme shown: a picture hidden by the other theme is never fetched.
   return (
     <>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt="" draggable={false} className={cn(place, dark && "dark:hidden")} style={style} />
+      <img src={src} alt="" draggable={false} loading="lazy" decoding="async" className={cn(place, dark && "dark:hidden")} style={style} />
       {dark && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={dark} alt="" draggable={false} className={cn(place, "hidden dark:block")} style={style} />
+        <img src={dark} alt="" draggable={false} loading="lazy" decoding="async" className={cn(place, "hidden dark:block")} style={style} />
       )}
     </>
   );

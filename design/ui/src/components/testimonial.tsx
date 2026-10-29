@@ -36,6 +36,8 @@ function Testimonial({
   name,
   role,
   avatar,
+  logo,
+  company,
   ...props
 }: Omit<React.ComponentProps<"figure">, "children"> & {
   variant?: "feature" | "card";
@@ -44,8 +46,14 @@ function Testimonial({
   name: string;
   // Their role, their company, or both: "Head of Ops, Northwind".
   role?: React.ReactNode;
-  // A picture of them. Without one, none is drawn.
+  // A picture of them. Without one, none is drawn; an empty string keeps its
+  // place with their initials, until the picture comes.
   avatar?: string;
+  // The logo of their company, small and grey beside them. Only for a
+  // company a reader would know.
+  logo?: string;
+  // The company's name, read aloud for the logo.
+  company?: string;
 }) {
   const feature = variant === "feature";
 
@@ -74,12 +82,12 @@ function Testimonial({
         data-slot="testimonial-person"
         className={cn("flex items-center gap-3", feature && "flex-col gap-3")}
       >
-        {avatar && (
+        {avatar !== undefined && (
           <Avatar
             data-slot="testimonial-avatar"
-            src={avatar}
+            src={avatar || undefined}
             alt={name}
-            size={feature ? 48 : 40}
+            size={feature ? 64 : 40}
           />
         )}
         <div className={cn("grid gap-0.5", feature && "justify-items-center")}>
@@ -105,12 +113,24 @@ function Testimonial({
             </span>
           )}
         </div>
+        {logo && (
+          // eslint-disable-next-line @next/next/no-img-element -- a logo of any size, drawn by its height
+          <img
+            data-slot="testimonial-logo"
+            src={logo}
+            alt={company ?? ""}
+            className={cn(
+              "h-5 w-auto opacity-60 grayscale dark:invert",
+              feature ? "mt-1" : "ml-auto",
+            )}
+          />
+        )}
       </figcaption>
     </figure>
   );
 }
 
-// Cards in a row: one across when narrow, two, then four, all as tall as the
+// Cards in a row: one across when narrow, then three, all as tall as the
 // tallest so their people line up along the bottom.
 function TestimonialGrid({ className, children, ...props }: React.ComponentProps<"div">) {
   return (
@@ -119,7 +139,7 @@ function TestimonialGrid({ className, children, ...props }: React.ComponentProps
       className={cn("@container/testimonials", className)}
       {...props}
     >
-      <div className="grid auto-rows-fr gap-4 @xl/testimonials:grid-cols-2 @5xl/testimonials:grid-cols-4">
+      <div className="grid auto-rows-fr gap-4 @3xl/testimonials:grid-cols-3">
         {children}
       </div>
     </div>

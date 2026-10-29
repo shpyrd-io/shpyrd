@@ -1,5 +1,10 @@
 import { Boxes, History, ScrollText, Settings } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@shpyrd/ui/components/tabs";
 import { Section } from "../../section";
 
 export default function Page() {
@@ -10,6 +15,30 @@ export default function Page() {
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="logs">Logs</TabsTrigger>
+          </TabsList>
+          {panels}
+        </Tabs>
+      </Section>
+      <Section title="Pill">
+        {/* A switch between what a page shows: the bar sunk, the open tab
+            lit by a light that slides to it, an orange mark under it. */}
+        <Tabs defaultValue="today">
+          <TabsList variant="pill">
+            <TabsTrigger value="today">Today, each on its own</TabsTrigger>
+            <TabsTrigger value="shpyrd">On shpyrd</TabsTrigger>
+          </TabsList>
+          {panels}
+        </Tabs>
+      </Section>
+      <Section title="Pill, large, with icons">
+        <Tabs defaultValue="cloud">
+          <TabsList variant="pill" size="lg">
+            <TabsTrigger value="cloud" icon={<Boxes />}>
+              shpyrd cloud
+            </TabsTrigger>
+            <TabsTrigger value="own" icon={<Settings />}>
+              Your own cloud
+            </TabsTrigger>
           </TabsList>
           {panels}
         </Tabs>
@@ -79,8 +108,14 @@ export default function Page() {
   );
 }
 
-const panels = ["overview", "processes", "releases", "logs", "settings"].map((name) => (
-  <TabsContent key={name} value={name} className="text-sm text-muted-foreground">
-    The panel of {name}.
-  </TabsContent>
-));
+const panels = ["overview", "processes", "releases", "logs", "settings"].map(
+  (name) => (
+    <TabsContent
+      key={name}
+      value={name}
+      className="text-sm text-muted-foreground"
+    >
+      The panel of {name}.
+    </TabsContent>
+  ),
+);

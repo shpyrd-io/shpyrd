@@ -187,12 +187,12 @@ export const flow = {
   // belongs to. What the agent runs are its steps.
   messages: [
     { step: 0, from: 'person', text: 'Build an app to approve expense claims for the finance team.' },
-    { step: 1, from: 'agent', text: 'Built it: a Next.js app with a Postgres database, 14 files. It runs at http://localhost:3000.' },
+    { step: 1, from: 'agent', text: 'Built it: a Next.js app with a database, 14 files. It runs at http://localhost:3000.' },
     { step: 2, from: 'person', text: 'Put it online for the company.' },
     {
       step: 2,
       from: 'agent',
-      text: 'It’s live at https://acme-expenses.shpyrd.app, behind your company’s sign-in.',
+      text: 'It’s live at https://expenses.yourapp.com, behind your company’s sign-in.',
       runs: ['shpyrd pg create db --project expenses', 'shpyrd deploy'],
     },
     { step: 3, from: 'person', text: 'Share it with the finance team.' },
@@ -215,7 +215,7 @@ export const access = {
     'The same app, three people. The front door decides who reaches it, and ' +
     'tells the app who they are: it reads a header, not a password table.',
   app: 'expenses',
-  url: 'https://acme-expenses.shpyrd.app',
+  url: 'https://expenses.yourapp.com',
   people: [
     {
       id: 'finance',

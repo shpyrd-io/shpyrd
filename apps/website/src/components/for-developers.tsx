@@ -75,4 +75,4 @@ export const deployOutput = `$ shpyrd deploy
 ==> Releasing
     Running: web 3/3 · worker 1/1
 Released v3: Deploy 654f4925638e
-https://shop.acme.shpyrd.app`;
+https://yourapp.com`;

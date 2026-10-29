@@ -44,7 +44,7 @@ export function AgentWindow({
   }, []);
 
   return (
-    <div ref={ref} {...props} className={cn(glass, "mx-auto w-full max-w-2xl rounded-[18px] p-2.5", className)}>
+    <div ref={ref} {...props} className={cn(glass, "mx-auto w-full max-w-2xl rounded-2xl p-2.5", className)}>
       <AppWindow
         title={
           <span className="inline-flex items-center gap-1.5">
@@ -54,7 +54,7 @@ export function AgentWindow({
         }
         detail={detail}
         className={cn(
-          "rounded-[10px] border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
+          "rounded-2xl border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
           "[&_[data-slot=app-window-bar]]:border-foreground/6 [&_[data-slot=app-window-bar]]:bg-transparent [&_[data-slot=app-window-footer]]:border-foreground/6",
         )}
         footer={<Composer text={null} placeholder={`Message ${agent.name}…`} />}
