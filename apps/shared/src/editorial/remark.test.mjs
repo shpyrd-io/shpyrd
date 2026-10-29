@@ -36,8 +36,8 @@ describe("editorial MDX", () => {
   it("preserves URL literals in content records, including query underscores", () => {
     const home = readCopyFile(path.join(root, "site/home.mdx"));
     const text = JSON.stringify(home);
-    expect(text).toContain("post_id=");
-    expect(text).not.toContain("post\\\\_id");
+    expect(text).toContain("utm_source=");
+    expect(text).not.toContain("utm\\\\_source");
     const offer = readCopyFile(path.join(root, "site/offer.mdx"));
     expect(offer.signIn.href).toBe("https://accounts.shpyrd.io/signin");
   });
