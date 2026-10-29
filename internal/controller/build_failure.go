@@ -212,6 +212,12 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	if !started || stepNotStarted(kpackMessage(b)) {
 		msg = notStartedMessage
 	}
+	pod := &corev1.Pod{}
+	if r.Get(ctx, types.NamespacedName{Namespace: b.GetNamespace(), Name: b.GetName() + "-build-pod"}, pod) == nil {
+		if evicted := evictedBuildMessage(pod); evicted != "" {
+			msg = evicted
+		}
+	}
 	// The message quotes the script that ran, from the build's output:
 	// masked like the log (#54).
 	var vars corev1.Secret
@@ -222,6 +228,23 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	b.SetAnnotations(mergeMaps(b.GetAnnotations(), map[string]string{shpyrdv1.AnnotationBuildFailure: msg}))
 	_ = r.Patch(ctx, b, patch) // read again next time when it does not stick
 	return msg
+}
+
+// evictedBuildMessage says why a build stopped when the node evicted its
+// pod to free disk or memory (#207): the platform's fault, with the reason
+// the step's output cannot give. "" for a pod that was not evicted.
+func evictedBuildMessage(pod *corev1.Pod) string {
+	if pod.Status.Reason != "Evicted" {
+		return ""
+	}
+	// The kubelet's words: "The node was low on resource: ephemeral-storage. ..."
+	switch m := pod.Status.Message; {
+	case strings.Contains(m, "ephemeral-storage") || strings.Contains(m, "imagefs") || strings.Contains(m, "nodefs"):
+		return "The build was stopped because the server it ran on ran out of disk space: a fault of the platform, not of the app. Deploying again usually passes."
+	case strings.Contains(m, "memory"):
+		return "The build was stopped because the server it ran on ran out of memory: a fault of the platform, not of the app. Deploying again usually passes."
+	}
+	return "The build was stopped by the server it ran on, to free its resources: a fault of the platform, not of the app. Deploying again usually passes."
 }
 
 // notStartedMessage is what a build says when the platform could not start

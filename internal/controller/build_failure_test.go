@@ -136,6 +136,41 @@ func TestBuildStepThatNeverStarted(t *testing.T) {
 	}
 }
 
+// A build pod the node evicted for want of disk says so (#207), not that
+// the cache of earlier builds could not be read.
+func TestABuildTheNodeEvictedSaysTheNodeRanOutOfDisk(t *testing.T) {
+	ctx := context.Background()
+	b := &unstructured.Unstructured{}
+	b.SetGroupVersionKind(KpackBuildGVK)
+	b.SetNamespace("app-src")
+	b.SetName("src-build-1")
+	_ = unstructured.SetNestedSlice(b.Object, []interface{}{map[string]interface{}{"type": "Succeeded", "status": "False", "message": "Error:  Container restore terminated with error"}}, "status", "conditions")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "src-build-1-build-pod", Namespace: "app-src"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodFailed, Reason: "Evicted",
+			Message: "The node was low on resource: ephemeral-storage. Threshold quantity: 15061044940, available: 14522352Ki. ",
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{Name: "restore", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}},
+			},
+		},
+	}
+	r, _ := newTestReconciler(t, b, pod)
+	r.Kube = kubefake.NewSimpleClientset()
+	got := r.kpackBuildFailure(ctx, b)
+	if !strings.Contains(got, "ran out of disk space") || PlatformWordingFault(got) != "" {
+		t.Errorf("evicted build: %q", got)
+	}
+	pod.Status.Message = "The node was low on resource: memory. "
+	if got := evictedBuildMessage(pod); !strings.Contains(got, "ran out of memory") {
+		t.Errorf("evicted for memory: %q", got)
+	}
+	pod.Status.Reason = ""
+	if got := evictedBuildMessage(pod); got != "" {
+		t.Errorf("a pod that was not evicted: %q", got)
+	}
+}
+
 func TestRefusedCloneNamesTheFix(t *testing.T) {
 	for _, out := range []string{
 		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",

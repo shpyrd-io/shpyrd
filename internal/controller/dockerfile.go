@@ -261,6 +261,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 		return pods.Items[i].CreationTimestamp.After(pods.Items[k].CreationTimestamp.Time)
 	})
 	pod := pods.Items[0]
+	if msg := evictedBuildMessage(&pod); msg != "" {
+		return nil, msg
+	}
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
 			if t.Reason == "OOMKilled" {
