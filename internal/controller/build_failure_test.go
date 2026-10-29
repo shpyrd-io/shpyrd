@@ -195,3 +195,31 @@ Error verifying write access to "10.96.0.50:5000/apps/ws/app": POST https://10.9
 		t.Errorf("message = %q", msg)
 	}
 }
+
+// A version of the language the buildpacks do not have yet (#185) says so,
+// what they have, and where the app asks for it.
+func TestAnUnsupportedLanguageVersionSaysWhatTheBuildpacksHave(t *testing.T) {
+	out := "Paketo Buildpack for Go Distribution 2.10.31\n" +
+		"  Resolving Go version\n" +
+		"    Candidate version sources (in priority order):\n" +
+		"      go.mod -> \">= 1.27\"\n\n" +
+		`failed to satisfy "go" dependency version constraint ">= 1.27": no compatible versions on "io.buildpacks.stacks.jammy" stack. Supported versions are: [1.25.13, 1.25.14, 1.26.7, 1.26.8]` + "\n" +
+		"ERROR: failed to build: exit status 1"
+	msg := describeBuildFailure("build", out)
+	for _, want := range []string{"Go >= 1.27", "1.25.13, 1.25.14, 1.26.7, 1.26.8", "the go line of go.mod", "Dockerfile", buildLogHint} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("lacks %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "jammy") || strings.Contains(msg, "Go Distribution") {
+		t.Errorf("quotes the output: %s", msg)
+	}
+	node := `failed to satisfy "node" dependency version constraint "~26": no compatible versions on "io.buildpacks.stacks.jammy" stack. Supported versions are: [22.21.1, 24.11.1]`
+	if msg := describeBuildFailure("build", node); !strings.Contains(msg, "Node.js ~26") || !strings.Contains(msg, "package.json") {
+		t.Errorf("node: %s", msg)
+	}
+	other := `failed to satisfy "bundler" dependency version constraint "3.9.x": no compatible versions on "io.buildpacks.stacks.jammy" stack`
+	if msg := describeBuildFailure("build", other); !strings.Contains(msg, "bundler 3.9.x") || strings.Contains(msg, "They have") {
+		t.Errorf("unnamed dependency, no list: %s", msg)
+	}
+}

@@ -324,6 +324,18 @@ build:
   stack: full    # base (default) or full
 ```
 
+### Language versions
+
+The version of the language comes from the app's own files, as it would on a laptop: the `go` line of `go.mod`, `engines.node` in `package.json` (or `.nvmrc`), `.python-version`, the `ruby` line of the `Gemfile`, `require.php` in `composer.json`. Without one, the buildpack takes its own default, which is not always the newest version. To choose it in `shpyrd.yaml` instead, set the buildpack's variable in `build.env`, such as `BP_GO_VERSION`, `BP_NODE_VERSION`, `BP_CPYTHON_VERSION` or `BP_MRI_VERSION` (Ruby):
+
+```yaml
+build:
+  env:
+    BP_GO_VERSION: "1.26.*"
+```
+
+The versions on offer are the Paketo buildpacks'. A new version of a language reaches them some days or weeks after its release, and the platform takes up new buildpacks by itself: nothing to install or upgrade. Until then, a build that asks for the new version fails, and the failure names the versions on offer. Ask for one of those, or build with a [Dockerfile](#dockerfile-builds), which brings its own toolchain.
+
 ### System packages (Aptfile)
 
 An `Aptfile` in the repository root lists Ubuntu packages to install into the image, one per line:
