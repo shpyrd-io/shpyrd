@@ -325,7 +325,9 @@ func TestShellCommandMintedByTheAPIGoesThroughTheLauncher(t *testing.T) {
 	f.mu.Lock()
 	cmd := strings.Join(f.command, " ")
 	f.mu.Unlock()
-	if cmd != cnbLauncher+" -- rails console" {
+	// Every probe succeeds here, env's included, so the command also
+	// carries the terminal type.
+	if cmd != "env TERM=xterm "+cnbLauncher+" -- rails console" {
 		t.Errorf("command = %q, want it through the launcher", cmd)
 	}
 }

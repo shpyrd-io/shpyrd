@@ -570,7 +570,9 @@ export const backend: Api = {
   instances: (slug) => request(`${project(slug)}/instances`),
   shellTicket: (slug, instance) =>
     request(
-      `${project(slug)}/shell/ticket?instance=${encodeURIComponent(instance)}`,
+      // term: what xterm.js emulates, so the shell runs with colour and
+      // full-screen programs (vim, top, less) work.
+      `${project(slug)}/shell/ticket?instance=${encodeURIComponent(instance)}&term=xterm-256color`,
       { method: "POST" },
     ),
   // The socket goes where the calls go: the server refuses another

@@ -1,15 +1,32 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 )
+
+// auditTimeout bounds one audit write, now that it no longer ends with the
+// request.
+const auditTimeout = 5 * time.Second
+
+// detached is c with a context of its own for an audit write: the request's
+// values, without its cancellation. A client going away is what cancels the
+// request context, so an entry written through it races the very thing it
+// records — a shell's close on a disconnect was lost that way.
+func detached(c *gin.Context) (*gin.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), auditTimeout)
+	cc := c.Copy()
+	cc.Request = c.Request.WithContext(ctx)
+	return cc, cancel
+}
 
 // audit records a mutation performed through the API. project is "" for
 // cluster-level actions. Failures are logged, never returned: auditing must
@@ -18,6 +35,8 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 	if s.kube == nil || s.kube.Kube == nil {
 		return
 	}
+	c, cancel := detached(c)
+	defer cancel()
 	actor, realm := "anonymous", ""
 	var subject, clientKind string
 	if id, ok := ext.IdentityFrom(c); ok {
@@ -99,6 +118,8 @@ func (s *Server) auditActor(c *gin.Context, actor, action, target, detail string
 	if s.kube == nil || s.kube.Kube == nil {
 		return
 	}
+	c, cancel := detached(c)
+	defer cancel()
 	entry := audit.Entry{Actor: firstNonEmpty(actor, "anonymous"), Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: "workspace"}
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace), entry); err != nil {
 		s.log.Warn("audit: cannot record", "action", action, "error", err)
@@ -116,6 +137,8 @@ func (s *Server) auditFailure(c *gin.Context, action, target, detail string) {
 	if s.kube == nil || s.kube.Kube == nil {
 		return
 	}
+	c, cancel := detached(c)
+	defer cancel()
 	entry := audit.Entry{Actor: "anonymous", Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api"}
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace), entry); err != nil {
 		s.log.Warn("audit: cannot record", "action", action, "error", err)

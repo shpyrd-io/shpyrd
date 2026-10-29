@@ -123,3 +123,27 @@ func TestCollectKeepsStdoutWholeNextToStderr(t *testing.T) {
 		t.Errorf("a failure carries stderr and keeps its exit code: %v", err)
 	}
 }
+
+func TestTermKeepsTerminfoNamesAndRefusesTheRest(t *testing.T) {
+	for in, want := range map[string]string{
+		"xterm-256color":        "xterm-256color",
+		"screen.xterm-new":      "screen.xterm-new",
+		"rxvt-unicode+256":      "rxvt-unicode+256",
+		"":                      DefaultTerm,
+		"xterm; rm -rf /":       DefaultTerm,
+		"$(id)":                 DefaultTerm,
+		strings.Repeat("x", 65): DefaultTerm,
+	} {
+		if got := Term(in); got != want {
+			t.Errorf("Term(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWithTermPutsEnvInFront(t *testing.T) {
+	got := WithTerm("xterm-256color", []string{"/cnb/lifecycle/launcher", "--", "bash"})
+	want := []string{"env", "TERM=xterm-256color", "/cnb/lifecycle/launcher", "--", "bash"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("WithTerm = %q, want %q", got, want)
+	}
+}

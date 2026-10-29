@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -83,6 +84,10 @@ const cnbLauncher = "/cnb/lifecycle/launcher"
 
 // errNoShell is what an image with neither bash nor sh produces.
 var errNoShell = errors.New("no usable shell in the image")
+
+// errServerStopping is what a live session is told when the server stops
+// under it (a control-plane rollout).
+var errServerStopping = errors.New("the server is restarting; reconnect in a moment")
 
 type execStreamFunc func(ctx context.Context, namespace, pod, container string, command []string, stdin io.Reader, stdout io.Writer, sizes <-chan remotecommand.TerminalSize) error
 
@@ -199,6 +204,12 @@ func (s *Server) appShell(c *gin.Context) {
 		// migration runs while a shell is open on the project.
 		slot += "\x00" + t.Instance
 	}
+	if !s.shellLife.enter() {
+		c.Header("Retry-After", "5")
+		abort(c, http.StatusServiceUnavailable, errServerStopping)
+		return
+	}
+	defer s.shellLife.leave()
 	if !s.shells.claim(actor, slot) {
 		abort(c, http.StatusConflict, errors.New("you already have a shell open on this project; close it first"))
 		return
@@ -232,6 +243,19 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 	w := &wsConn{c: conn}
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	// A server shutdown does not cancel the request context: the connection
+	// is hijacked, and http.Server.Shutdown neither tracks nor waits for it.
+	// So the server says so itself (shellLifetime), and stopping is closed
+	// before cancel so the exit path can name the shutdown as the cause.
+	stopping := make(chan struct{})
+	go func() {
+		select {
+		case <-s.shellLife.stopped():
+			close(stopping)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	instance, project, given := t.Instance, t.Project, t.Command
 	container := firstNonEmpty(t.Container, appContainer)
 	closeAction := "shell.close"
@@ -265,6 +289,9 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 		command, err = s.probe(ctx, namespace, pod, container)
 	}
 	if err != nil {
+		if signalled(stopping) {
+			err = errServerStopping
+		}
 		_ = w.control(shellControl{Type: "error", Message: err.Error()})
 		_ = w.close(websocket.CloseInternalServerErr, err.Error())
 		// Audited even though no terminal opened: probing has by now run up to
@@ -278,6 +305,11 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 	shell := strings.Join(given, " ")
 	if len(given) == 0 {
 		shell = command[len(command)-1]
+	}
+	if !t.Attach {
+		// An attached instance's command is fixed in its pod; an exec's is
+		// ours to wrap.
+		command = s.withTerm(ctx, namespace, pod, container, t.Term, command)
 	}
 	_ = w.control(shellControl{Type: "open", Instance: instance, Shell: shell})
 	if !t.Attach { // a run was recorded when its instance was created
@@ -318,18 +350,14 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 	// handler's deferred conn.Close unblocks, or the stdin Write, which the
 	// deferred pr.Close above unblocks.
 	//
-	// closed says the client's side went away (tab closed, network gone), which
-	// cancels the session. Closing stdin is not enough on its own: a foreground
-	// process that ignores stdin and prints nothing — `sleep`, `tail -f`, a
-	// wedged process — would keep the exec stream, the pod's command and the
-	// user's one shell slot alive until the 30-minute reap, though the spec
-	// makes "sessions end cleanly on tab close" a goal.
-	closed := make(chan struct{})
+	// The client's side going away (tab closed, network gone) cancels the
+	// session. Closing stdin is not enough on its own: a foreground process
+	// that ignores stdin and prints nothing — `sleep`, `tail -f`, a wedged
+	// process — would keep the exec stream, the pod's command and the user's
+	// one shell slot alive until the 30-minute reap, though the spec makes
+	// "sessions end cleanly on tab close" a goal.
 	go func() {
-		// Ordered so the exit path below can read closed the moment ctx is
-		// cancelled: close(closed) runs before cancel().
 		defer cancel()
-		defer close(closed)
 		defer pw.Close()
 		defer close(sizes)
 		for {
@@ -370,8 +398,8 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 
 	// The idle timer cancels the session; it is reset by client input only.
 	// idled is closed before cancel so the exit path below can tell an idle
-	// reap from the request context going away under a server shutdown — the
-	// browser is told which one it was, and the trail should agree.
+	// reap from the client going away — the browser is told which one it was,
+	// and the trail should agree.
 	//
 	// The reaper writes nothing itself. Telling the browser why is a write, and a
 	// write waits for wsConn.mu, which a peer that has stopped reading can hold
@@ -451,29 +479,26 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod s
 		// the browser's side go away a moment later, so both can be signalled
 		// and only the first one is the cause.
 		//
-		// A client close is read from the request context, not from the reader
-		// goroutine's closed channel, and the order matters: net/http cancels the
-		// request context from inside the read that hits EOF, so the cancellation
-		// is visible here before ReadMessage has even returned to the reader,
-		// never mind before its deferred close(closed) runs. Polling closed
-		// therefore loses the race against a stream that returns on cancellation
-		// — which is every real one — and attributes an ordinary tab close to a
-		// server shutdown. The request context going away is itself the client
-		// leaving: a real shutdown does not cancel it, which is exactly why the
-		// shutdown branch below is unreachable (see the RFC's implementation
-		// status). closed stays for the case the context cannot speak to: a reader
-		// parked in the stdin Write rather than in a read.
-		detail = "closed: server shutting down"
+		// The idle reaper and the shutdown each say so before they cancel
+		// (idled, stopping). Anything else that cancelled the session is the
+		// client leaving: the request context, which net/http cancels from
+		// inside the read that hits EOF, or the reader goroutine's own cancel.
+		detail = "closed: the client disconnected"
 		switch {
 		case signalled(idled):
 			detail = fmt.Sprintf("closed: idle for %s", idleFor)
 			// Why, before the close: a terminal that vanishes without a word
 			// reads as a bug to the person it happens to.
 			_ = w.control(shellControl{Type: "error", Message: fmt.Sprintf("shell closed after %s idle", idleFor)})
-		case c.Request.Context().Err() != nil, signalled(closed):
-			detail = "closed: the client disconnected"
+		case signalled(stopping):
+			detail = "closed: server shutting down"
+			_ = w.control(shellControl{Type: "error", Message: errServerStopping.Error()})
 		}
 		_ = w.close(websocket.CloseNormalClosure, "closed")
+	case err != nil && w.broken.Load():
+		// The stream failed writing to the socket: the client is gone or
+		// stopped reading, and there is nobody left to tell.
+		detail = "closed: the client disconnected (it stopped reading)"
 	case err == nil:
 		code := 0
 		detail = "exit 0"
@@ -578,8 +603,25 @@ func (s *Server) resolveShell(ctx context.Context, namespace, pod, container str
 	return nil, fmt.Errorf("%w: %v", errNoShell, lastErr)
 }
 
+// withTerm runs command with the client's TERM (kexec.WithTerm) when the
+// image has env(1), and bare otherwise, as before: an image without env
+// still gets its shell, only without colour. The probe is one more
+// throwaway exec, bounded like the shell's.
+func (s *Server) withTerm(ctx context.Context, namespace, pod, container, term string, command []string) []string {
+	ctx, cancel := context.WithTimeout(ctx, s.shellProbe)
+	defer cancel()
+	if _, err := s.execRun(ctx, namespace, pod, container, kexec.EnvProbe); err != nil {
+		return command
+	}
+	return kexec.WithTerm(term, command)
+}
+
 // runKexec is the real probe behind execRun: one throwaway non-TTY exec.
 func (s *Server) runKexec(ctx context.Context, namespace, pod, container string, command []string) (string, error) {
+	if s.kube == nil || s.kube.Config == nil {
+		// No REST config, no exec: a client built on a fake clientset.
+		return "", errors.New("no cluster connection to exec through")
+	}
 	return kexec.Run(ctx, s.kube, namespace, pod, container, command)
 }
 
@@ -615,6 +657,9 @@ func sameOrigin(r *http.Request) bool {
 type wsConn struct {
 	mu sync.Mutex
 	c  *websocket.Conn
+	// broken is set when a terminal write failed: the deadline let go of a
+	// client that stopped reading, or the socket is gone.
+	broken atomic.Bool
 }
 
 // Write sends terminal bytes. It is the exec stream's stdout, so the bytes go
@@ -625,6 +670,7 @@ func (w *wsConn) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	_ = w.c.SetWriteDeadline(time.Now().Add(shellWriteWait))
 	if err := w.c.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		w.broken.Store(true)
 		return 0, err
 	}
 	return len(p), nil
