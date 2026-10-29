@@ -1,0 +1,9 @@
+---
+title: "Dockerfile builds get 4 GiB of memory"
+description: "A Dockerfile build may now use up to 4 GiB of memory, twice the earlier limit, so larger Next.js sites build."
+date: "2026-10-29"
+type: improvement
+draft: false
+---
+
+A Dockerfile build may now use up to 4 GiB of memory while it builds, up from 2 GiB; the 2 CPUs are unchanged. A larger Next.js site, whose compiler holds the whole site in memory, could stall at the old limit instead of finishing. It still runs beside your awake app and does not count against your workspace's ceiling. See [Dockerfile builds](/docs/deploying#dockerfile-builds).
