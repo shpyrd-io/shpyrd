@@ -43,6 +43,26 @@ var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository no
 // image to the registry ("Error verifying write access to ...").
 var registryRefusedWrite = regexp.MustCompile(`(?i)error verifying write access`)
 
+// unsupportedVersion is a Paketo buildpack finding no version of the
+// language that satisfies the app (#185): `failed to satisfy "go"
+// dependency version constraint ">= 1.27": no compatible versions on
+// "io.buildpacks.stacks.jammy" stack. Supported versions are: [1.25.13, ...]`.
+var (
+	unsupportedVersion = regexp.MustCompile(`failed to satisfy "([\w.-]+)" dependency version constraint "([^"]*)": no compatible versions[^\n]*`)
+	supportedVersions  = regexp.MustCompile(`Supported versions are: \[([^\]]*)\]`)
+)
+
+// languageVersions names a Paketo dependency as a person knows it, and where
+// the app asks for its version.
+var languageVersions = map[string][2]string{
+	"go":      {"Go", "the go line of go.mod"},
+	"node":    {"Node.js", "engines.node in package.json, or .nvmrc"},
+	"cpython": {"Python", ".python-version, or the version the project's tool pins"},
+	"python":  {"Python", ".python-version, or the version the project's tool pins"},
+	"ruby":    {"Ruby", "the ruby line of the Gemfile"},
+	"php":     {"PHP", "require.php in composer.json"},
+}
+
 var (
 	ansiEscape     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	paketoHeader   = regexp.MustCompile(`^Paketo Buildpack for (.+?) v?\d+(\.\d+)*$`)
@@ -112,6 +132,13 @@ func describeBuildFailure(step, out string) string {
 			"Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, " +
 			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then build again with `shpyrd redeploy`. " + buildLogHint
 	}
+	if m := unsupportedVersion.FindStringSubmatch(text); m != nil {
+		var have string
+		if v := supportedVersions.FindStringSubmatch(m[0]); v != nil {
+			have = v[1]
+		}
+		return unsupportedVersionMessage(m[1], m[2], have)
+	}
 	for _, re := range missingVariable {
 		if m := re.FindStringSubmatch(text); m != nil {
 			return fmt.Sprintf("%s: the app reads the variable %s while building, and it is not set. Set it as a config var of the project, or attach the resource that provides it, and deploy again; or make the build not depend on it. %s", while, m[1], buildLogHint)
@@ -145,6 +172,24 @@ func describeBuildFailure(step, out string) string {
 		return fmt.Sprintf("The build failed in the %s buildpack. %s", buildpack, buildLogHint)
 	}
 	return "The build failed. " + buildLogHint
+}
+
+// unsupportedVersionMessage says the app asks for a version of its language
+// the platform's buildpacks do not have yet. New versions reach them some
+// days after their release, and the platform takes them up by itself.
+func unsupportedVersionMessage(dependency, constraint, supported string) string {
+	language, where := dependency, ""
+	if l, ok := languageVersions[dependency]; ok {
+		language, where = l[0], " ("+l[1]+")"
+	}
+	have := ""
+	if versions := strings.Fields(strings.ReplaceAll(supported, ",", " ")); len(versions) > 0 {
+		have = " They have " + strings.Join(versions, ", ") + "."
+	}
+	return fmt.Sprintf("The app asks for %s %s, and the platform's buildpacks have no version of it that matches.%s "+
+		"A new version reaches the buildpacks some days or weeks after its release, and the platform takes it up by itself. "+
+		"Until then, ask for a version they have%s, or build with a Dockerfile. %s",
+		language, constraint, have, where, buildLogHint)
 }
 
 // kpackStep is the step kpack names in a Build's failure message
