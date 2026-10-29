@@ -130,8 +130,8 @@ func (a *appClient) execResourceAPI(ctx context.Context, slug, kind, name string
 // runAPI is `shpyrd run` over the API: the server starts the one-off
 // instance; attached, the bridge follows it until it exits and the exit
 // code comes back as the CLI's own.
-func (a *appClient) runAPI(ctx context.Context, slug string, command []string, size string, detach, tty bool, out, stderr io.Writer) error {
-	body, _ := json.Marshal(api.RunRequest{Command: command, Size: size, Detach: detach, TTY: tty})
+func (a *appClient) runAPI(ctx context.Context, slug string, command []string, size string, detach, tty bool, process string, out, stderr io.Writer) error {
+	body, _ := json.Marshal(api.RunRequest{Command: command, Size: size, Detach: detach, TTY: tty, Process: process})
 	raw, err := a.serverRequest(ctx, "POST", "api/projects/"+slug+"/run", body, "application/json")
 	if err != nil {
 		return err
@@ -139,6 +139,9 @@ func (a *appClient) runAPI(ctx context.Context, slug string, command []string, s
 	var res api.RunResult
 	if err := json.Unmarshal(raw, &res); err != nil || res.Name == "" {
 		return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
+	}
+	if res.Note != "" {
+		fmt.Fprintf(stderr, "Starting %s.\n", res.Note)
 	}
 	if detach {
 		fmt.Fprintf(out, "Started %s (follow with `shpyrd logs --process run --project %s`)\n", res.Name, slug)
@@ -301,7 +304,7 @@ func (a *appClient) bridge(ctx context.Context, slug, ticket, instance string, q
 // workspaceURL is the URL of the workspace this client talks to (session
 // mode): SHPYRD_URL or the current login.
 func (a *appClient) workspaceURL() string {
-	if u := os.Getenv("SHPYRD_URL"); u != "" {
+	if u := envWorkspaceURL(); u != "" {
 		return strings.TrimRight(u, "/")
 	}
 	return loadSessions().activeURL()

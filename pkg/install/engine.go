@@ -410,7 +410,14 @@ func (e *Engine) applyComponent(ctx context.Context, c *Component) error {
 		}
 	}
 
-	for _, w := range c.Wait {
+	primary, waits := e.componentWaits(ctx, c)
+	if primary {
+		e.rep.Step(c.Name, "waiting for the primary of cluster "+ControlPlaneCluster)
+		if err := e.waitControlPlanePrimary(ctx, c.Namespace); err != nil {
+			return err
+		}
+	}
+	for _, w := range waits {
 		e.rep.Step(c.Name, "waiting for "+w.String())
 		if err := e.applier.waitFor(ctx, w, c.Namespace); err != nil {
 			return err
@@ -449,8 +456,37 @@ func (e *Engine) componentValues(c *Component) (map[string]interface{}, error) {
 		if err := prometheusStorage(vals, e.vars[VarMonitoringSize], e.vars[VarStorageClass]); err != nil {
 			return nil, fmt.Errorf("%s: %w", c.Name, err)
 		}
+		thanosSidecar(vals, e.vars[VarGatewayBucket] != "", e.vars[VarDomain])
 	}
 	return vals, nil
+}
+
+// thanosSidecar gives Prometheus the Thanos sidecar that uploads its blocks
+// to the gateway's metrics bucket (storage plan step 7): history survives a
+// restart and a disk, and the local retention stays a few days. The
+// external label names the cluster so blocks from two clusters in one
+// bucket read apart. Without the gateway nothing is added.
+func thanosSidecar(vals map[string]interface{}, gateway bool, domain string) {
+	if !gateway {
+		return
+	}
+	spec := table(table(vals, "prometheus"), "prometheusSpec")
+	spec["thanos"] = map[string]interface{}{
+		"objectStorageConfig": map[string]interface{}{
+			"existingSecret": map[string]interface{}{"name": ThanosObjstoreSecret, "key": "objstore.yml"},
+		},
+	}
+	labels := table(spec, "externalLabels")
+	labels["cluster"] = firstNonEmptyString(domain, "shpyrd")
+}
+
+func firstNonEmptyString(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // MonitoringComponent runs Prometheus (kube-prometheus-stack).
@@ -515,7 +551,39 @@ func (e *Engine) renderComponent(c *Component) ([]*unstructured.Unstructured, er
 	if c.Name == ServerComponent && e.vars[VarSourcesBucket] != "" {
 		return sourcesInBucket(objs, e.vars[VarSourcesSecret])
 	}
+	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
+		// The control plane on CloudNativePG: the cluster beside the
+		// StatefulSet until the data moved, the cluster alone after (the
+		// StatefulSet stays behind at zero replicas, unmanaged, until it is
+		// removed by hand).
+		if e.controlPlaneMovedNow(context.Background(), c.Namespace) {
+			objs = nil
+		}
+		objs = append(objs, controlPlaneObjects(e.vars, c.Namespace)...)
+	}
 	return objs, nil
+}
+
+// componentWaits are what a component waits for, at the apply and in the
+// status: its declared waits, or, for the control-plane database on
+// CloudNativePG, the cluster's primary (said by the flag; a replica still
+// joining holds nothing the install needs) and the StatefulSet until the
+// data moved.
+func (e *Engine) componentWaits(ctx context.Context, c *Component) (primary bool, waits []WaitSpec) {
+	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
+		return true, controlPlaneWaits(c.Namespace, e.controlPlaneMovedNow(ctx, c.Namespace))
+	}
+	return false, c.Wait
+}
+
+// controlPlaneMovedNow reads the control-plane Secret's word on where the
+// data is.
+func (e *Engine) controlPlaneMovedNow(ctx context.Context, namespace string) bool {
+	if e.kube == nil || e.kube.Kube == nil {
+		return false
+	}
+	sec, err := e.kube.Kube.CoreV1().Secrets(namespace).Get(ctx, ControlPlaneDBSecretName, metav1.GetOptions{})
+	return err == nil && controlPlaneMoved(sec.Data)
 }
 
 func (e *Engine) ensureNamespace(ctx context.Context, name string) error {
@@ -649,8 +717,13 @@ func (e *Engine) Status(ctx context.Context) ([]ComponentStatus, error) {
 				st.Ready = false
 				st.Detail = "not installed"
 			}
+			primary, waits := e.componentWaits(ctx, c)
+			if st.Ready && primary && !e.controlPlaneClusterReady(ctx, c.Namespace) {
+				st.Ready = false
+				st.Detail = "cluster " + ControlPlaneCluster + " has no ready instance"
+			}
 			if st.Ready {
-				for _, w := range c.Wait {
+				for _, w := range waits {
 					wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 					err := e.applier.waitFor(wctx, w, c.Namespace)
 					cancel()

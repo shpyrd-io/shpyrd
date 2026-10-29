@@ -53,8 +53,10 @@ var hooks = map[string]Hook{
 	"sources-signing-key":          sourcesSigningHook,
 	"object-gateway-credentials":   gatewayCredentialsHook,
 	"backup-target":                backupTargetHook,
+	"thanos-objstore":              thanosObjstoreHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
 	"registry-s3":                  registryS3Hook,
+	"registry-http-secret":         registryHTTPSecretHook,
 	"autoscaler-credentials":       autoscalerCredentialsHook,
 	"image-pull-secret":            imagePullSecretHook,
 	"dns-credentials":              dnsCredentialsHook,
@@ -448,6 +450,18 @@ func dnsCredentialsHook(ctx context.Context, e *Engine, c *Component) error {
 
 // applyOpaqueSecret writes an Opaque Secret with server-side apply.
 func (e *Engine) applyOpaqueSecret(ctx context.Context, namespace, name string, data map[string]string) error {
+	return e.applySecret(ctx, namespace, name, "Opaque", data)
+}
+
+// randomHex is a fresh secret of n bytes, hex-encoded.
+func randomHex(n int) string {
+	raw := make([]byte, n)
+	_, _ = rand.Read(raw)
+	return hex.EncodeToString(raw)
+}
+
+// applySecret applies a Secret of a type with string data.
+func (e *Engine) applySecret(ctx context.Context, namespace, name, secretType string, data map[string]string) error {
 	enc := map[string]interface{}{}
 	for k, v := range data {
 		enc[k] = base64.StdEncoding.EncodeToString([]byte(v))
@@ -455,7 +469,7 @@ func (e *Engine) applyOpaqueSecret(ctx context.Context, namespace, name string, 
 	secret := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"type":       "Opaque",
+		"type":       secretType,
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": namespace,
@@ -612,6 +626,40 @@ func backupTargetHook(ctx context.Context, e *Engine, c *Component) error {
 	return nil
 }
 
+// ThanosObjstoreSecret is the Secret, in the monitoring namespace, the
+// Thanos sidecar reads its object store from (key objstore.yml): the
+// gateway's metrics bucket, written by the hook from the credential the
+// gateway hook made (storage plan step 7). Without the gateway the hook
+// writes nothing and the values leave the sidecar out.
+const ThanosObjstoreSecret = "thanos-objstore"
+
+func thanosObjstoreHook(ctx context.Context, e *Engine, c *Component) error {
+	if e.vars[VarGatewayBucket] == "" {
+		e.rep.Step(c.Name, "no object gateway: metrics stay on Prometheus's own disk")
+		return nil
+	}
+	cred, err := e.kube.Kube.CoreV1().Secrets(e.SystemNamespace()).Get(ctx, MetricsSecret, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the metrics bucket's credential (Secret %s/%s, from the object-gateway component): %w", e.SystemNamespace(), MetricsSecret, err)
+	}
+	endpoint := strings.TrimPrefix(strings.TrimPrefix(string(cred.Data["endpoint"]), "http://"), "https://")
+	objstore := fmt.Sprintf(`type: S3
+config:
+  bucket: %q
+  endpoint: %q
+  region: %q
+  access_key: %q
+  secret_key: %q
+  insecure: true
+  bucket_lookup_type: path
+`, string(cred.Data["bucket"]), endpoint, string(cred.Data["region"]), string(cred.Data["AWS_ACCESS_KEY_ID"]), string(cred.Data["AWS_SECRET_ACCESS_KEY"]))
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, ThanosObjstoreSecret, map[string]string{"objstore.yml": objstore}); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, fmt.Sprintf("Prometheus uploads its blocks to the gateway bucket %s, kept %d days", MetricsBucket, MetricsRetentionDays))
+	return nil
+}
+
 // The control-plane database (RFC-0033): Secret control-plane-db holds the
 // password of the in-cluster PostgreSQL and the URL the server dials. With
 // SHPYRD_DATABASE_URL set (a managed database) the URL is that one and the
@@ -622,6 +670,9 @@ const ControlPlaneDBSecretName = "control-plane-db"
 func controlPlaneDBHook(ctx context.Context, e *Engine, c *Component) error {
 	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
 	existing, err := secrets.Get(ctx, ControlPlaneDBSecretName, metav1.GetOptions{})
+	if controlPlaneOnCNPG(e.vars) {
+		return e.controlPlaneHookCNPG(ctx, c, existing, err == nil)
+	}
 	if external := e.vars[VarDatabaseURL]; external != "" {
 		if err == nil && string(existing.Data["url"]) == external {
 			e.rep.Step(c.Name, "control-plane database: the configured SHPYRD_DATABASE_URL")
@@ -689,6 +740,26 @@ func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
 		return err
 	}
 	e.rep.Step(c.Name, fmt.Sprintf("registry will store images in OCI Object Storage bucket %s", bucket))
+	return nil
+}
+
+// registryHTTPSecretHook generates the registry's upload-signing secret on
+// first install and keeps it afterwards. Without one each replica makes up
+// its own at start, and an upload that moves between replicas fails with
+// "blob upload invalid - invalid secret".
+func registryHTTPSecretHook(ctx context.Context, e *Engine, c *Component) error {
+	existing, err := e.kube.Kube.CoreV1().Secrets(c.Namespace).Get(ctx, RegistryHTTPSecretName, metav1.GetOptions{})
+	if err == nil && len(existing.Data["secret"]) > 0 {
+		e.rep.Step(c.Name, "keeping existing registry HTTP secret")
+		return nil
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("registry HTTP secret: %w", err)
+	}
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, RegistryHTTPSecretName, map[string]string{"secret": randomHex(32)}); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, "generated the registry's shared HTTP secret")
 	return nil
 }
 

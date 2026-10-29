@@ -767,7 +767,7 @@ func (s *Server) customError(c *gin.Context) bool {
 				s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended; its apps are not available.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
 				return true
 			}
-			s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
+			s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
 			return true
 		}
 		return false

@@ -27,6 +27,22 @@ import (
 // buildLogHint closes every message: where the rest is.
 const buildLogHint = "The build's log has the full output."
 
+// hostKeyChangedMarker is the line a Dockerfile build's fetch prints when
+// ssh refused the git host's key while cloning with a deploy key. git's own
+// output is the same as for a clone with no credential at all (host key
+// verification failed, could not read from remote repository), so only the
+// marker tells the two apart.
+const hostKeyChangedMarker = "shpyrd: the git host's SSH host key does not match the one recorded with the deploy key"
+
+// refusedClone is git (or kpack's git) refused access to a repository.
+// kpack's go-git says SSH_AUTH_SOCK when no Secret matched an ssh URL, and
+// "unable to authenticate" when the host refused the key.
+var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository not found|Permission denied \(publickey\)|authentication required|Authentication failed|could not read from remote repository|SSH agent requested but SSH_AUTH_SOCK|ssh: unable to authenticate`)
+
+// registryRefusedWrite is kpack's prepare step finding it may not write the
+// image to the registry ("Error verifying write access to ...").
+var registryRefusedWrite = regexp.MustCompile(`(?i)error verifying write access`)
+
 var (
 	ansiEscape     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	paketoHeader   = regexp.MustCompile(`^Paketo Buildpack for (.+?) v?\d+(\.\d+)*$`)
@@ -80,6 +96,21 @@ func describeBuildFailure(step, out string) string {
 	while := "The build failed"
 	if script != "" {
 		while = fmt.Sprintf("The build failed while running `%s`", script)
+	}
+	if step == "prepare" && registryRefusedWrite.MatchString(text) {
+		// kpack checks it may write the image before fetching the source;
+		// the registry refusing (read-only, unreachable, out of space) is
+		// the platform's, not the app's or its repository's.
+		return "The build could not save its image to the platform's registry, before the app's own code ran: a fault of the platform, not of the app. Deploying again later usually passes. " + buildLogHint
+	}
+	if step == "prepare" && strings.Contains(text, hostKeyChangedMarker) {
+		return "The build could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. " +
+			"If the host changed its key, make a new deploy key with `shpyrd git-auth deploy-key` and add it to the repository. " + buildLogHint
+	}
+	if step == "prepare" && refusedClone.MatchString(text) {
+		return "The build could not read the repository: it is private, or does not exist under that name. " +
+			"Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, " +
+			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then build again with `shpyrd redeploy`. " + buildLogHint
 	}
 	for _, re := range missingVariable {
 		if m := re.FindStringSubmatch(text); m != nil {

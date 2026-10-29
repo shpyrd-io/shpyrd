@@ -104,10 +104,11 @@ homebrew_casks:
       email: release@shpyrd.io
     commit_msg_template: "shpyrd {{ .Tag }}"
     # The binary is not notarized; casks let brew clear the quarantine flag.
+    # Homebrew's declarative steps (its postflight_steps stanza; GoReleaser
+    # 2.19 deprecates the Ruby hook): run, not system_command, and the
+    # staged path as a template.
     hooks:
       post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/shpyrd"]
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/shpyrd-ctl"]
-          end
+        install_steps: |
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/shpyrd"]
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/shpyrd-ctl"]

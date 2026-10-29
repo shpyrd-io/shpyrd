@@ -62,7 +62,7 @@ jobs:
           go=false ui=false
           while IFS= read -r f; do
             case "$f" in
-              "" | apps/website/* | design/brand/* | content/* | rfcs/* | docs/*) ;;
+              "" | apps/website/* | design/brand/* | content/* | docs/*) ;;
               apps/* | design/ui/* | design/pages/* | package.json | package-lock.json | .nvmrc) ui=true ;;
               */*) go=true ;;
               *.md) ;;
@@ -326,9 +326,19 @@ jobs:
           # server, always on; the project keeps a Service and a Secret named
           # after the database, so DATABASE_URL has its usual shape.
           ./bin/shpyrd pg create shared --type shared --project hello-world --context kind-ci
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          # The CLI stops waiting after five minutes and leaves the rest to
+          # `pg list`; a slow runner is not a failure, so wait for the
+          # database itself, up to ten more minutes.
+          for i in $(seq 1 120); do
+            PHASE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.status.phase}')
+            case "$PHASE" in Ready|Failed) break;; esac
+            sleep 5
+          done
           ./bin/shpyrd pg list --project hello-world --context kind-ci
           kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,database,databaserole,job
-          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.status.phase} {.status.message}{"\n"}'
+          [ "$PHASE" = "Ready" ]
           URI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
           echo "$URI" | grep 'sslmode=require&connect_timeout=10' >/dev/null
           # The tenant's own credentials open its database; from inside the
@@ -524,6 +534,12 @@ jobs:
           kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=convert --all-containers --tail=60 2>/dev/null || true
           kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=dump --all-containers --tail=20 2>/dev/null || true
           kubectl --context kind-ci -n cnpg-system logs deployment/cnpg-cloudnative-pg --tail=80 2>/dev/null | grep -v "level=debug" || true
+          # The instances of the shared servers: what the instance manager
+          # waited on when a database never came up.
+          kubectl --context kind-ci -n shpyrd-shared-postgres describe pod -l cnpg.io/podRole=instance 2>/dev/null | grep -A40 "^Containers:" | grep -E "^  [a-z]|State|Reason|Ready|Started" || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs -l cnpg.io/podRole=instance --all-containers --tail=80 2>/dev/null || true
+          # kpack's builder: why it was not up to date when `cluster status` said so.
+          kubectl --context kind-ci get clusterbuilder shpyrd -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason} {.message}{"\n"}{end}' 2>/dev/null || true
 
   ci:
     name: CI

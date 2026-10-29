@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -42,9 +42,6 @@ export function Tokens() {
     <Card>
       <CardHeader>
         <CardTitle>API tokens</CardTitle>
-        <CardDescription>
-          For CI, scripts and integrations. Store the value in <InlineCode>SHPYRD_TOKEN</InlineCode> or pass it to <InlineCode>shpyrd login --token</InlineCode>. A token has at most the roles you have when you make it.
-        </CardDescription>
         <CardAction>
           <NewToken onDone={refresh} />
         </CardAction>

@@ -44,6 +44,13 @@ func newLayoutServer(t *testing.T) (*Server, store.Store) {
 	if _, err := st.PutWorkspaceHost(ctx, "acme", store.WorkspaceHost{Host: "acme.shpyrd.app", Kind: store.HostMoved, ExpiresAt: &exp}); err != nil {
 		t.Fatal(err)
 	}
+	return layoutServerOn(t, st), st
+}
+
+// layoutServerOn is a replica of the shared-layout server on st: two of
+// them on one store are two replicas behind the front door.
+func layoutServerOn(t *testing.T, st store.Store) *Server {
+	t.Helper()
 	scheme, err := kube.Scheme()
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +76,70 @@ func newLayoutServer(t *testing.T) (*Server, store.Store) {
 		t.Fatal(err)
 	}
 	s.authz.TTL = 1
-	return s, st
+	return s
+}
+
+// Two replicas of the server behind the front door: the login starts on
+// one, the shared callback and the callback that completes it land on the
+// other, as a load balancer may send them. The login is in the store, not
+// in the memory of the replica that started it ("login expired or unknown"
+// on every other attempt when it was).
+func TestLayoutSignInAcrossReplicas(t *testing.T) {
+	issuer := newFakeIssuer(t)
+	a, st := newLayoutServer(t)
+	b := layoutServerOn(t, st)
+	for _, s := range []*Server{a, b} {
+		if err := s.rp.AddOIDC(context.Background(), ext.OIDCProvider{ID: "test", Label: "Test login", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Realm: ext.RealmPlatform}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(s *Server, host, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "https://"+host+path, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	for _, route := range []struct {
+		name                 string
+		start, relay, finish *Server
+	}{
+		{"relay and callback on the other replica", a, b, b},
+		{"relay on the other, callback back on the first", a, b, a},
+		{"relay on the first, callback on the other", b, b, a},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			rec := get(route.start, "acme.shpyrd.cloud", "/api/auth/login?provider=test&next=/projects")
+			authURL, _ := url.Parse(rec.Header().Get("Location"))
+			if rec.Code != http.StatusFound || authURL.Query().Get("redirect_uri") != "https://shpyrd.cloud/api/auth/callback" {
+				t.Fatalf("login -> %d %s", rec.Code, rec.Header().Get("Location"))
+			}
+			resp, err := http.DefaultTransport.RoundTrip(mustRequest(t, "GET", authURL.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			back, _ := url.Parse(resp.Header.Get("Location"))
+			relayed := get(route.relay, "shpyrd.cloud", back.RequestURI())
+			next, _ := url.Parse(relayed.Header().Get("Location"))
+			if relayed.Code != http.StatusFound || next.Host != "acme.shpyrd.cloud" || next.Path != "/api/auth/callback" {
+				t.Fatalf("relay -> %d %s", relayed.Code, relayed.Header().Get("Location"))
+			}
+			done := get(route.finish, "acme.shpyrd.cloud", next.RequestURI())
+			if done.Code != http.StatusFound || done.Header().Get("Location") != "/projects" || cookieValue(done, sessionCookie) == "" {
+				t.Fatalf("callback -> %d %s", done.Code, done.Header().Get("Location"))
+			}
+			// Used once, whichever replica is asked again.
+			for _, s := range []*Server{a, b} {
+				if rec := get(s, "acme.shpyrd.cloud", next.RequestURI()); cookieValue(rec, sessionCookie) != "" || !strings.Contains(rec.Header().Get("Location"), "login_error=") {
+					t.Errorf("a used login completed again: %d %s", rec.Code, rec.Header().Get("Location"))
+				}
+				if rec := get(s, "shpyrd.cloud", back.RequestURI()); rec.Code == http.StatusFound {
+					t.Errorf("a used state was relayed again: %s", rec.Header().Get("Location"))
+				}
+			}
+		})
+	}
 }
 
 func TestLayoutAppHosts(t *testing.T) {
@@ -98,6 +168,10 @@ func TestLayoutAppHosts(t *testing.T) {
 	}
 	if rec := at(t, s, "older.shpyrd.app", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"appHost":{"prefix":"","suffix":".older.shpyrd.app"}`) {
 		t.Errorf("config at older: %s", rec.Body.String())
+	}
+	// So does the CLI, from the workspace's own view (#242).
+	if rec := at(t, s, "acme.shpyrd.cloud", "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"appHost":{"prefix":"acme-","suffix":".shpyrd.app"}`) {
+		t.Errorf("workspace at acme: %s", rec.Body.String())
 	}
 }
 

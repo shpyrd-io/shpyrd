@@ -17,6 +17,14 @@ import type {
   DomainStatus,
   Drain,
   Exposure,
+  GitHooks,
+  GitHubAccounts,
+  GitHubBranches,
+  GitHubConnections,
+  GitHubLink,
+  GitHubRepositories,
+  ProjectGitAuth,
+  RegistryToken,
   Identity,
   Link,
   Instance,
@@ -26,6 +34,7 @@ import type {
   LoginMethods,
   Member,
   Metrics,
+  MetricsQuery,
   NewLoginMethod,
   NewToken,
   Person,
@@ -64,6 +73,25 @@ export type NewProject = {
 // until the signal aborts.
 export type LogQuery = { process?: string; tail?: number; follow?: boolean };
 
+// One process's change: a size, an instance count, or the web process's
+// sleep (RFC-0075): a quiet period with its wake mode, "off" (awake
+// whatever the workspace's default) or "default" (the workspace's).
+export type ProcessChange = {
+  size?: string;
+  replicas?: number;
+  sleep?: { after: string; resuming?: "page" | "wait" };
+  // Bounds for the web process (RFC-0047), or off for a fixed count.
+  autoscale?: AutoscaleChange;
+};
+
+export type AutoscaleChange = {
+  off?: boolean;
+  min?: number;
+  max?: number;
+  cpu?: number;
+  concurrency?: number;
+};
+
 export type Api = {
   projectArchiveStatus: (slug: string) => Promise<ProjectArchiveStatus>;
   backupProject: (slug: string, options?: { files?: boolean }) => Promise<string[]>;
@@ -96,7 +124,17 @@ export type Api = {
     logo?: string;
     color?: string;
     mcpName?: string;
+    // The reference of an application of the workspace's own, "" for
+    // the platform's (RFC-0084).
+    ui?: string;
   }) => Promise<WorkspaceInfo>;
+  // The application the door serves is loaded again on the next request.
+  reloadWorkspaceUI: () => Promise<WorkspaceInfo>;
+  // The workspace's read credentials for registries, one per host;
+  // values are written, never returned.
+  registryTokens: () => Promise<RegistryToken[]>;
+  setRegistryToken: (host: string, body: { username: string; token: string }) => Promise<RegistryToken>;
+  unsetRegistryToken: (host: string) => Promise<void>;
   people: () => Promise<Person[]>;
   setPersonRole: (email: string, role: WorkspaceRole) => Promise<void>;
   setPersonStatus: (email: string, status: Person["status"]) => Promise<void>;
@@ -146,8 +184,37 @@ export type Api = {
       featured?: boolean;
       icon?: string;
       iconColor?: string;
+      // Whether a push to the project's branch deploys.
+      autoDeploy?: boolean;
+      // The commits a push deploys: only those that change these globs,
+      // and only once their other checks pass (the GitHub App's).
+      watchPaths?: string[];
+      waitForChecks?: boolean;
     },
   ) => Promise<Project>;
+  // The project's webhook for deploy on push: its URL and secret.
+  projectGitHooks: (slug: string) => Promise<GitHooks>;
+  // What the project's builds clone with: a GitHub App, a deploy key, a token.
+  projectGitAuth: (slug: string) => Promise<ProjectGitAuth>;
+  // The workspace's GitHub (RFC-0054): its connections; Connect sends the
+  // browser to GitHub's authorize page, which says who the person is so the
+  // server lists the installations they own; the install page is for a new
+  // account. Both carry the same single-use state.
+  github: () => Promise<GitHubConnections>;
+  connectGitHub: () => Promise<{ installURL: string; authorizeURL: string }>;
+  disconnectGitHub: (id: number) => Promise<void>;
+  // The person's own GitHub account (RFC-0054): null when none is linked.
+  // linkGitHub answers GitHub's authorize page for a popup; an empty one
+  // means linked already (the Mock links at once).
+  githubMe: () => Promise<GitHubLink | null>;
+  linkGitHub: (returnTo: string) => Promise<{ authorizeURL: string }>;
+  unlinkGitHub: () => Promise<void>;
+  // What the person reads through the workspace's GitHub: a 409 with the
+  // code "github_link_required" while they have no link. A list the server
+  // cut says so in `truncated`.
+  githubAccounts: () => Promise<GitHubAccounts>;
+  githubRepositories: (installation?: number) => Promise<GitHubRepositories>;
+  githubBranches: (fullName: string) => Promise<GitHubBranches>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
   removeProjectIcon: (slug: string) => Promise<Project>;
@@ -160,13 +227,21 @@ export type Api = {
     slug: string,
     action?: "restart" | "rebuild",
   ) => Promise<{ action: string; message: string }>;
-  rollback: (slug: string, release: number) => Promise<void>;
+  // force rolls back, or applies the changes, while a release is still
+  // rolling out (#127): the rollout in progress is cancelled by it.
+  rollback: (slug: string, release: number, force?: boolean) => Promise<void>;
   applyProcesses: (
     slug: string,
-    changes: Record<string, { size?: string; replicas?: number }>,
+    changes: Record<string, ProcessChange>,
+    force?: boolean,
   ) => Promise<Project>;
   setExposure: (slug: string, exposure: Exposure) => Promise<Project>;
   setAccess: (slug: string, access: Access) => Promise<Project>;
+  // The page in front of the app, up or down, and what it says.
+  setMaintenance: (
+    slug: string,
+    body: { enabled: boolean; message?: string },
+  ) => Promise<Project>;
   // A link that opens the app as a team would, or as nobody.
   preview: (
     slug: string,
@@ -206,6 +281,14 @@ export type Api = {
   // A new key for a bucket (storage plan step 5): the apps attached to it
   // restart with it.
   rotateBucket: (slug: string, name: string) => Promise<{ note?: string }>;
+  // When a dedicated database hibernates (RFC-0075): a quiet period of its
+  // own, "off", or "default" (the workspace's). The apps bound to it are
+  // re-released once when the policy appears or disappears.
+  sleepPostgres: (
+    slug: string,
+    name: string,
+    after: string,
+  ) => Promise<{ name: string }>;
   convertPostgres: (
     slug: string,
     name: string,
@@ -277,7 +360,7 @@ export type Api = {
     signal: AbortSignal,
     onLine: (line: LogLine) => void,
   ) => Promise<void>;
-  metrics: (slug: string, range: string) => Promise<Metrics>;
+  metrics: (slug: string, query: MetricsQuery) => Promise<Metrics>;
   // A shell into an instance: the instances, a ticket for one, and the
   // socket the ticket opens. The Mock has no socket: it answers null and
   // the screen makes a shell up.

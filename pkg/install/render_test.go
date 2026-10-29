@@ -2,6 +2,7 @@ package install
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +139,61 @@ func TestRegistryRendersTLS(t *testing.T) {
 	for _, o := range objs {
 		if o.GetKind() == "DaemonSet" && !strings.Contains(mustYAML(t, o), "10.96.0.50:5000") {
 			t.Error("registry-nodes must carry the registry host")
+		}
+	}
+}
+
+// On a bucket the registry runs two replicas; both, and the single one on a
+// claim, read the upload-signing secret from the Secret the registry's hook
+// makes, so an upload may move between replicas.
+func TestRegistryReplicasShareTheHTTPSecret(t *testing.T) {
+	for _, bucket := range []string{"", "images"} {
+		vars := map[string]string{VarDomain: "example.test"}
+		if bucket != "" {
+			vars[VarRegistryBucket], vars[VarRegistryRegion], vars[VarRegistryEndpoint] = bucket, "region-1", "https://objects.example.com"
+		}
+		eng, err := New(nil, Options{Profile: "local", Vars: vars, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := eng.components["registry"]
+		if !slices.Contains(c.Hooks, "registry-http-secret") {
+			t.Fatalf("registry hooks %v do not make the HTTP secret", c.Hooks)
+		}
+		objs, err := eng.renderComponent(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, o := range objs {
+			if o.GetKind() != "Deployment" || o.GetName() != "registry" {
+				continue
+			}
+			found = true
+			replicas, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "replicas")
+			if want := map[bool]string{true: "2", false: "1"}[bucket != ""]; fmt.Sprint(replicas) != want {
+				t.Errorf("bucket %q: %v replicas, want %s", bucket, replicas, want)
+			}
+			containers, _, _ := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+			env := map[string]string{}
+			for _, raw := range containers {
+				vars, _, _ := unstructured.NestedSlice(raw.(map[string]interface{}), "env")
+				for _, v := range vars {
+					v := v.(map[string]interface{})
+					ref, _, _ := unstructured.NestedString(v, "valueFrom", "secretKeyRef", "name")
+					key, _, _ := unstructured.NestedString(v, "valueFrom", "secretKeyRef", "key")
+					env[v["name"].(string)] = ref + "/" + key
+				}
+			}
+			if env["REGISTRY_HTTP_SECRET"] != RegistryHTTPSecretName+"/secret" {
+				t.Errorf("bucket %q: the registry does not read the shared HTTP secret: %v", bucket, env)
+			}
+			if env["AWS_ACCESS_KEY_ID"] != "registry-s3/AWS_ACCESS_KEY_ID" {
+				t.Errorf("bucket %q: the S3 credentials were lost: %v", bucket, env)
+			}
+		}
+		if !found {
+			t.Fatalf("bucket %q: no registry Deployment", bucket)
 		}
 	}
 }
@@ -1102,5 +1158,37 @@ func TestWALArchiveAlertsReadTheArchiveQueueAndSkipNeverFailed(t *testing.T) {
 	}
 	if e := exprs["DatabaseWALArchiveFailing"]; !strings.Contains(e, "seconds_since_last_failure >= 0") {
 		t.Errorf("failing reads %q, want a database that never failed (-1) left out", e)
+	}
+}
+
+// Dockerfile builds and release steps run under priority classes of their
+// own, outside the workspace's compute quota (#243, #60): the shpyrd
+// component installs them, so a server-only roll brings them along. They
+// never preempt.
+func TestTheServerInstallsTheStepPriorityClasses(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "local", Vars: map[string]string{VarDomain: "example.test"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := eng.renderComponent(eng.components["shpyrd"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, o := range objs {
+		if o.GetKind() != "PriorityClass" {
+			continue
+		}
+		policy, _, _ := unstructured.NestedString(o.Object, "preemptionPolicy")
+		global, _, _ := unstructured.NestedBool(o.Object, "globalDefault")
+		if policy != "Never" || global {
+			t.Errorf("%s: preemptionPolicy=%q globalDefault=%v", o.GetName(), policy, global)
+		}
+		found[o.GetName()] = true
+	}
+	for _, name := range []string{"shpyrd-build", "shpyrd-release"} {
+		if !found[name] {
+			t.Errorf("the shpyrd component has no %s PriorityClass", name)
+		}
 	}
 }

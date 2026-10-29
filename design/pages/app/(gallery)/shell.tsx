@@ -33,13 +33,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <NavListItem asChild icon={<LayoutGrid />} aria-current={path === "/" ? "page" : undefined}>
         <Link href="/">Overview</Link>
       </NavListItem>
-      <NavListGroup title="Pages">
-        {Object.entries(pages).map(([slug, page]) => (
-          <NavListItem key={slug} asChild aria-current={slug === name ? "page" : undefined}>
-            <Link href={`/${slug}`}>{page.title}</Link>
-          </NavListItem>
-        ))}
-      </NavListGroup>
+      {([["Pages", undefined], ["Sign-in (Dex)", "dex"]] as const).map(([title, group]) => (
+        <NavListGroup key={title} title={title}>
+          {Object.entries(pages)
+            .filter(([, page]) => page.group === group)
+            .map(([slug, page]) => (
+              <NavListItem key={slug} asChild aria-current={slug === name ? "page" : undefined}>
+                <Link href={`/${slug}`}>{page.title}</Link>
+              </NavListItem>
+            ))}
+        </NavListGroup>
+      ))}
     </NavList>
   );
 

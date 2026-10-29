@@ -20,20 +20,28 @@ function headers(init?: HeadersInit): Headers {
 async function handle(res: Response): Promise<Response> {
   if (res.ok) return res;
   let message = `${res.status} ${res.statusText}`;
+  let code: string | undefined;
   try {
     const body = await res.json();
     if (body?.error) message = body.error;
+    if (typeof body?.code === "string") code = body.code;
   } catch {
     // not json
   }
-  throw new ApiError(res.status, message);
+  throw new ApiError(res.status, message, code);
+}
+
+// The answer and the headers it came with, for a call whose headers say
+// something the body does not.
+export async function requestWithHeaders<T>(path: string, init: RequestInit = {}): Promise<{ data: T; headers: Headers }> {
+  const res = await handle(await fetch(path, { ...init, headers: headers(init.headers) }));
+  if (res.status === 204) return { data: undefined as T, headers: res.headers };
+  const text = await res.text();
+  return { data: (text ? JSON.parse(text) : undefined) as T, headers: res.headers };
 }
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await handle(await fetch(path, { ...init, headers: headers(init.headers) }));
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  return (await requestWithHeaders<T>(path, init)).data;
 }
 
 // A text answer, like the output of a build: every line of it.

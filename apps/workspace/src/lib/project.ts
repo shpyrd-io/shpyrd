@@ -6,6 +6,8 @@ import type { ProjectSummary } from "@/api/types";
 // answers, whether it is locked, and the ink it keeps.
 
 export function phaseOf(p: ProjectSummary): Phase {
+  // The page in front of it is a choice, said before whatever runs behind.
+  if (p.maintenance?.enabled) return "maintenance";
   const processes = Object.values(p.processes ?? {});
   if (processes.some((s) => s.sleep?.state === "sleeping")) return "sleeping";
   switch (p.phase) {
@@ -23,6 +25,7 @@ export const phaseWords: Record<Phase, string> = {
   deploying: "Deploying",
   failed: "Failed",
   sleeping: "Asleep",
+  maintenance: "Maintenance",
 };
 
 export function toneOf(slug: string): Tone {
@@ -51,7 +54,7 @@ export function addressOf(p: { url?: string; domain?: string }): string | undefi
 // the teams that have access, by name. People given access one by one
 // are not listed. A worker opens nothing: only its teams are named.
 export function badgesOf(p: Pick<ProjectSummary, "url" | "access" | "teams">): string[] | undefined {
-  if (p.url && (p.access === "public" || p.access === "identified")) return ["Anyone"];
+  if (p.url && p.access === "public") return ["Anyone"];
   const teams = p.teams ?? [];
   if (teams.includes("everyone")) return ["Everyone"];
   return teams.length ? teams.map((t) => t.charAt(0).toUpperCase() + t.slice(1)) : undefined;

@@ -53,8 +53,17 @@ func TestConnectorStore(t *testing.T) {
 	if err != nil || existed {
 		t.Fatalf("add google: %v %v", existed, err)
 	}
+	// The operator's switch-account annotation is read back, and an edit
+	// from the dashboard keeps it.
+	u.SetAnnotations(map[string]string{AnnotationSwitchAccount: "https://accounts.example/switch-account"})
+	if _, err := dyn.Resource(ConnectorGVR).Namespace("shpyrd-system").Update(ctx, u, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	if existed, err = s.Add(ctx, ConnectorSpec{Type: "github", ClientID: "gh2", ClientSecret: "ghs2"}); err != nil || !existed {
 		t.Fatalf("replace: existed=%v err=%v", existed, err)
+	}
+	if all, _ := s.List(ctx); len(all) == 0 || all[0].ID != "github" || all[0].SwitchAccountURL != "https://accounts.example/switch-account" {
+		t.Errorf("the switch-account page after an edit = %+v", all)
 	}
 	list, err := s.List(ctx)
 	if err != nil || len(list) != 2 {

@@ -10,7 +10,7 @@ CLI and one dashboard on top of Kubernetes.
 [![A project's metrics in the shpyrd dashboard: response time, requests, failures, CPU and memory, with each release marked](https://shpyrd.io/screenshots/metrics.png)](https://shpyrd.io/docs/tour#metrics)
 
 Status: beta. It runs on a local kind cluster and on Oracle Cloud (OKE); the
-design record and roadmap live in [rfcs/](rfcs/README.md). Website: https://shpyrd.io
+roadmap is the repository's [open issues](https://github.com/shpyrd-io/shpyrd/issues). Website: https://shpyrd.io
 
 ## Quick start (local)
 
@@ -48,7 +48,7 @@ Everything is reachable under a wildcard domain that resolves to your machine
 - `https://shpyrd.127.0.0.1.nip.io` dashboard
 - `localhost:30050` registry (in-cluster address `10.96.0.50:5000`)
 
-Names and ports adapt to the machine (RFC-0057). When a Caddy already serves
+Names and ports adapt to the machine. When a Caddy already serves
 443, `cluster create` offers to make it the front door: kind takes high ports,
 Caddy proxies `*.shpyrd.test` to it with certificates from its own trusted CA,
 and URLs carry no port (`https://shpyrd.shpyrd.test`). `*.shpyrd.test` resolves
@@ -105,8 +105,7 @@ shpyrd volumes create data --size 5Gi    # persistent disk; mount with processes
 A project is a namespace with its resources; today that is one app resource
 (`kubectl get apps -A`) that the controller in `shpyrd-server` turns into kpack
 builds or rootless BuildKit Jobs, Deployments, Services and Ingresses with
-certificates. Databases, caches and volumes join as further resource types
-(see rfcs/0002).
+certificates. Databases, caches and volumes join as further resource types.
 
 Dockerfile builds (`build.strategy: dockerfile` in `shpyrd.yaml`, detected
 automatically for local deploys) support multi-stage targets, build args
@@ -157,7 +156,7 @@ is asked to sign in or told which team the app is available to. The app receives
 who they are on every request (`X-Shpyrd-User`, `X-Shpyrd-Teams`, `X-Shpyrd-Roles`
 and a signed JWT verifiable at `/.well-known/jwks.json`) and needs no sign-in code
 of its own. `shpyrd access set public` makes a site anyone can open; `Open as` on the
-project page shows builders the app the way a team sees it (RFC-0033).
+project page shows builders the app the way a team sees it.
 
 ## Platform backups
 
@@ -170,7 +169,7 @@ the platform at it). `shpyrd cluster backup` runs one now, `shpyrd cluster backu
 lists them, `shpyrd cluster backup key` prints the passphrase to keep elsewhere,
 and `shpyrd cluster restore --from s3://… --passphrase-file …` brings the state
 back into a new cluster (or one project into the same cluster with `--project`).
-Volume and database contents are not in the archive (RFC-0037).
+Volume and database contents are not in the archive.
 
 ## Dashboard
 
@@ -192,12 +191,12 @@ the installed components and the available extensions.
 ## Extensions and sign-in
 
 Optional capabilities are **extensions** compiled into shpyrd and switched on
-per cluster (`shpyrd extensions list|enable|disable`; rfcs/0002). Enabling
+per cluster (`shpyrd extensions list|enable|disable`). Enabling
 installs the extension's component with the same runlevel installer and
 restarts the server with it; disabling removes the component and is refused
 while resources of the extension exist.
 
-The first extension is `auth-local` (rfcs/0007): a bundled [Dex](https://dexidp.io)
+The first extension is `auth-local`: a bundled [Dex](https://dexidp.io)
 issuer at `https://auth.<domain>` with local email/password accounts. The server
 is an OpenID Connect relying party (authorization code with PKCE, session
 cookie, CSRF protection), so any OIDC provider can follow as configuration.
@@ -219,8 +218,8 @@ Wrong tokens are audited and throttled per client.
 
 ## Teams, roles and security
 
-Users belong to **teams**; projects grant **roles** to users or teams
-(rfcs/0008): `viewer` sees everything and changes nothing, `developer` deploys,
+Users belong to **teams**; projects grant **roles** to users or teams:
+`viewer` sees everything and changes nothing, `developer` deploys,
 rolls back, scales, edits config vars and opens shells, `admin` also manages
 members and resources and can destroy the project. Two platform roles exist:
 `platform-admin` (everything, including the cluster page, extensions, teams and
@@ -242,7 +241,7 @@ Until the first team or member exists every signed-in user is a platform admin,
 so a fresh cluster stays usable; the dashboard says so. The admin token is
 always a platform admin.
 
-For CI and scripts, people create **API tokens** (rfcs/0031) in the dashboard
+For CI and scripts, people create **API tokens** in the dashboard
 (Workspace → API tokens) or with `shpyrd tokens create ci --project shop --role
 developer --expires 90d`. A token carries at most the role its owner holds
 when it is used (a demoted or suspended owner's tokens follow), expires when
@@ -283,15 +282,15 @@ resources win over both; a change is a "Global config change" release in every
 project (the card says how many before it applies). Values are write-only.
 `shpyrd secrets list` and the Config tab show globals as "provided by cluster"
 and mark project vars that override one. A project opts out in `shpyrd.yaml`
-with `globals: false` or `globals: {exclude: [OPENAI_API_KEY]}` (RFC-0016).
+with `globals: false` or `globals: {exclude: [OPENAI_API_KEY]}`.
 
 ## Logs: agent and drains
 
 The `logs-agent` extension runs Vector on every node: it reads container logs,
 labels every line with `project`, `process` and `instance` (`web.1`), parses
-JSON lines (`level`, `msg`), and forwards them to **log drains** (RFC-0022a,
-RFC-0023). Each node keeps at most 20 MiB of logs per container. A drain is
-an HTTPS receiver (JSON, one object per line, custom headers for API keys) or
+JSON lines (`level`, `msg`), and forwards them to **log drains**. Each node
+keeps at most 20 MiB of logs per container. A drain is an HTTPS receiver
+(JSON, one object per line, custom headers for API keys) or
 a syslog receiver (RFC 5424 over TCP, `syslog+tls://` for TLS), per project or
 for the whole cluster:
 
@@ -303,9 +302,9 @@ shpyrd drains list --project shop        # delivery status and last delivery
 ```
 
 The project page and the Cluster page have a Log drains card with the same
-form. Header values are stored in the cluster and never shown again. Log
-storage with a time range (`--since`) is RFC-0022b, a drain to Loki plus a
-query API, still to come.
+form. Header values are stored in the cluster and never shown again. The
+platform keeps no log history (`--since`, time ranges): a cluster drain to a
+store of your own, a Loki or a SIEM, is how logs are kept.
 
 The API behind the dashboard (`/api/...`) requires the token; only `/api/healthz`,
 `/api/config` and content-addressed source archives are public.
@@ -322,7 +321,7 @@ pkg/kind              kind cluster provisioning
 pkg/localca           development root CA
 pkg/configvars        config vars (names + metadata, values are write-only)
 pkg/ext               extension interfaces; pkg/ext/all the registry; pkg/ext/authlocal the first extension
-pkg/authz             roles and actions (RFC-0008); pkg/audit the audit trail
+pkg/authz             roles and actions; pkg/audit the audit trail
 pkg/api               HTTP API, OIDC relying party and sessions, the applications served by host
 deploy/               components and profiles embedded in the binary (incl. extension components such as dex)
 design/               the identity: design/ui the component library and its gallery (@shpyrd/ui), design/brand the mark
@@ -330,7 +329,6 @@ apps/                 the applications (Next, static files): apps/console, apps/
 apps/website/         shpyrd.io: the site and the docs (Next + design/ui)
 content/              the documentation and the texts of the site
 examples/             sample projects: shop (Go, web + worker, Postgres + Redis), blog (Node, volume), api (Python Dockerfile), hello, hello-docker
-rfcs/                 design documents
 ```
 
 ## Developing
@@ -395,7 +393,7 @@ sign-off (`git commit -s`).
 ## License
 
 [MPL-2.0](LICENSE): the platform, the CLI, the dashboard, the site, the
-examples and the RFCs.
+examples and the documentation.
 
 The enterprise features are the one exception: [`ee/`](ee) is governed by
 [`ee/LICENSE`](ee/LICENSE). Its source is public, and running it in production

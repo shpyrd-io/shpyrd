@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
@@ -85,6 +86,9 @@ type Config struct {
 	// Projects is the store's project registry (RFC-0076): the controller
 	// mirrors every App into it and marks deletions. Nil: no store (tests).
 	Projects store.Projects
+	// GitHub is the GitHub App (RFC-0054): builds of github.com
+	// repositories clone with its tokens first. Nil: never.
+	GitHub *GitHubApp
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
@@ -169,10 +173,11 @@ type Config struct {
 // namespace when the registry needs credentials.
 const BuildServiceAccount = "shpyrd-builder"
 
-// buildServiceAccountName is what kpack Images run as: the credentialed
-// account when the registry needs one, else the namespace default.
-func (c Config) buildServiceAccountName() string {
-	if c.RegistrySecret != "" {
+// buildServiceAccountName is what builds run as: the credentialed account
+// when the registry or the repository needs credentials, else the
+// namespace default.
+func (c Config) buildServiceAccountName(git gitauth.Build) string {
+	if c.RegistrySecret != "" || git.Secret != nil {
 		return BuildServiceAccount
 	}
 	return "default"
@@ -571,7 +576,7 @@ func kpackImageKey(app *shpyrdv1.App) *unstructured.Unstructured {
 }
 
 // desiredKpackImage renders the kpack Image that builds the App's source.
-func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+func (c Config) desiredKpackImage(app *shpyrdv1.App, git gitauth.Build) (*unstructured.Unstructured, error) {
 	tag, err := c.imageTag(app)
 	if err != nil {
 		return nil, err
@@ -583,13 +588,14 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 	source := map[string]interface{}{}
 	switch {
 	case app.Spec.Source.Git != nil:
-		git := map[string]interface{}{"url": app.Spec.Source.Git.URL}
-		rev := app.Spec.Source.Git.Revision
-		if rev == "" {
-			rev = "main"
+		url := app.Spec.Source.Git.URL
+		if git.CloneURL != "" {
+			url = git.CloneURL
 		}
-		git["revision"] = rev
-		source["git"] = git
+		// A branch builds the commit the source watcher pinned, so kpack
+		// does not poll it (RFC-0018); a commit builds as given.
+		gitSrc := map[string]interface{}{"url": url, "revision": app.BuildRevision()}
+		source["git"] = gitSrc
 	case app.Spec.Source.Blob != nil:
 		source["blob"] = map[string]interface{}{"url": c.sourceURL(app.Spec.Source.Blob.URL)}
 	}
@@ -599,7 +605,7 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 
 	spec := map[string]interface{}{
 		"tag":                      tag,
-		"serviceAccountName":       c.buildServiceAccountName(),
+		"serviceAccountName":       c.buildServiceAccountName(git),
 		"builder":                  map[string]interface{}{"name": builder, "kind": "ClusterBuilder"},
 		"source":                   source,
 		"failedBuildHistoryLimit":  int64(5),
@@ -862,7 +868,10 @@ func (c Config) mutateService(app *shpyrdv1.App, p namedProcess, s *corev1.Servi
 // mutateIngress renders the app's Ingress. sleepActive routes the web host
 // through the KEDA interceptor ("web-sleep", RFC-0075) instead of the
 // process Service; the edge's auth_request flow is unchanged either way.
-func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, sleepActive bool) {
+// mutateIngress renders the web Ingress. interceptor says the backend is
+// the KEDA interceptor (sleep or autoscaling is on, scaling.go); sleeping
+// says the app may be asleep, so a stale access decision is kept shorter.
+func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, interceptor, sleeping bool) {
 	ing.Labels = mergeMaps(ing.Labels, processLabels(app, "web"))
 	ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
@@ -895,7 +904,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		for k, v := range c.edgeAnnotations(app) {
 			ing.Annotations[k] = v
 		}
-		if sleepActive {
+		if sleeping {
 			// A sleeping app's first request must not be served a stale
 			// decision for long: 5 s instead of 20 s (RFC-0075).
 			ing.Annotations["nginx.ingress.kubernetes.io/auth-cache-duration"] = "200 5s, 401 5s, 403 5s"
@@ -903,8 +912,8 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 	}
 	ing.Spec.TLS = c.ingressTLS(app)
 	backend := workloadName(app, "web")
-	if sleepActive {
-		backend = webSleepServiceName
+	if interceptor {
+		backend = webInterceptorService
 	}
 	pathType := networkingv1.PathTypePrefix
 	rules := make([]networkingv1.IngressRule, 0, len(hosts))

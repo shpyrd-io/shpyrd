@@ -29,13 +29,13 @@ A project's name, description and icon are set from the pencil next to its name 
 
 ## A project
 
-A project's header has its name and slug, its phase, the network badge (**public internet** or **local network**; developers and admins click it to switch front doors where private networking is on), a lock badge when visitors sign in, and the actions: **Open**, **Deploy** (from Git, with buildpacks or a Dockerfile; its menu also has **Redeploy the current release**, or **Build the same source again** after a failed build, and **Rebuild from the source**) and the trash icon to destroy the project (you type its slug to confirm).
+A project's header has its name and slug, its phase (**Maintenance** while its page is up), the network badge (**public internet** or **local network**; developers and admins click it to switch front doors where private networking is on), a lock badge when visitors sign in, and the actions: **Open**, **Deploy** (from Git, with buildpacks or a Dockerfile; its menu also has **Redeploy the current release**, or **Build the same source again** after a failed build, and **Rebuild from the source**) and the trash icon to destroy the project (you type its slug to confirm).
 
-Under the header, only while something is happening: the build's output as it prints; the release command's output, with **Run it again** when it failed; the rollout per process ("web 1/3 on the new release, 3 serving"); or why the build failed or the release is not healthy.
+Under the header, only while something is happening: the build's output as it prints; the release command's output, with **Run it again** when it failed; the rollout per process ("web 1/3 on the new release, 3 serving"); why the build failed or the release is not healthy; or that the maintenance page is up, since when and by whom, with **Serve the app again**.
 
 The pages are in a list at the side:
 
-- **Overview**: the **Summary** (source, build strategy, current release and build, each process' size and count) and the latest **Activity**.
+- **Overview**: the **Summary** (source, build strategy, current release and build, each process' size and count), **Maintenance** (developers and admins: the switch that puts a page in front of the app, and what it says; see [Maintenance mode](/docs/deploying#maintenance-mode)) and the latest **Activity**.
 - Run
   - **Releases**: the releases (what changed, build number, **Rollback**) and the **Builds** (status, strategy, source, duration; open one to read its output, live while building).
   - **Backups** (admins): back the project up to a file and restore it.
@@ -44,7 +44,7 @@ The pages are in a list at the side:
   - **Shell** (developers and admins): a shell in a running instance.
 - Configure
   - **Config**: **Config vars**, by name; set, replace, remove, or **Set from a .env**. Values are never shown. Variables of attached resources are listed read-only. **Plain environment** shows what every process sees besides them.
-  - **Resources**: **Processes** (size and number of instances of each, applied together in one release) and **Beside the application** (databases, caches, buckets and volumes: create, resize, snapshots, a bucket's key).
+  - **Resources**: **Processes** (size and number of instances of each, applied together in one release; the web row says when the app sleeps and a **Sleep** button sets it) and **Beside the application** (databases, caches, buckets and volumes: create, resize, snapshots, a bucket's key, when a dedicated database sleeps).
   - **Domains**: the project's own domains, with the exact DNS record to create and each one's DNS and certificate state. See [Domains and exposure](/docs/domains).
   - **Drains**: the project's log drains and their delivery status.
 - Access
@@ -64,11 +64,13 @@ Modelled on what Heroku, Fly and Render show for an application:
 | Throughput | requests per second at the ingress, stacked by response class (2xx, 3xx, 4xx, 5xx) |
 | Response time | p50, p95 and p99 latency at the ingress |
 | Instances | running instances per process type (step chart) |
-| CPU | usage as a percentage of each process' allocation, averaged over its instances; 100% means every instance saturating its CPU |
-| Memory | working set as a percentage of each process' allocation |
-| Network | instance traffic in and out |
+| CPU | usage by process, in cores against a line at what the process was given, or as a share of it |
+| Memory | working set by process, in bytes against the same line, or as a share of it; every out-of-memory kill is marked |
+| Network | traffic in and out |
 
-Orange dashed lines mark releases; a red line marks 100%. Ranges: last hour, 6 hours, 24 hours, 7 days. 100% is the process' instance size (its allocation); shared sizes can read above 100% while bursting.
+Dashed lines mark releases. Ranges: last 15 minutes, hour, 6 hours, 24 hours, 7 days. What a process was given is its instance size times its instances; shared sizes can read above it while bursting.
+
+The controls above the charts narrow them: one process or every process; by process or by instance (`web.1`, `web.2`…), which only CPU, memory and network can do, since throughput and latency are measured at the edge; for instances, each one, their sum, the average or the busiest; cores and bytes, or a share of the size; and whether the instances replaced during the range are shown, as `replaced 1`, `replaced 2`… The CLI takes the same choices ([`shpyrd metrics`](/docs/cli#metrics)).
 
 ## Access
 
@@ -89,9 +91,22 @@ Every project, team and person belongs to the workspace. Its pages are in a list
   - **Config vars** (owners and admins): config vars every project receives.
   - **Log drains** (owners and admins): drains for every project's lines.
   - **Domains** (owners): the workspace's address and its custom domains. See [Domains and exposure](/docs/domains#the-workspace-s-own-names).
+  - **Application** (owners and admins): what answers at the workspace's address, the platform's own workspace application or one of the workspace's own, and the **Registry credentials** it is pulled with. See [Your own workspace application](#your-own-workspace-application).
   - **MCP** (with the MCP server): the name and address assistants use.
 
 See [People, teams, roles and security](/docs/access).
+
+### Your own workspace application
+
+The workspace application (the launcher, a project's pages, the workspace's pages) is a static build the server serves at the workspace's address. A workspace may serve a build of its own instead: a fork of the platform's `apps/workspace`, built with `next build` and published to a registry of yours, GHCR, Docker Hub or any other, as an artifact (`oras push ghcr.io/acme/workspace-ui:2.3.1 out/`) or as an image (`FROM scratch` + `COPY out/ /`). It talks to the same API, from the same origin, with the same session; it gains nothing the platform's own does not have, and every call is checked by the server as before. The platform's own registry is not involved.
+
+Under **Workspace › Application**, an administrator pastes the reference, `oci://ghcr.io/acme/workspace-ui:2.3.1` or `@sha256:…`, and the door serves it from the next request. A tag is settled to the digest it points at at that moment, so what the door serves never changes until someone sets it again; publishing a new version changes nothing by itself. The page says how the application is doing on the server answering: serving, with the name and version its `shpyrd-app.json` declares; not served, with the reason; or not allowed on this server. Whenever the application cannot be served, the platform's own answers, so nobody is locked out, and **Back to the platform's own** is always there. **Load again** reloads it on the next request.
+
+A private repository needs a read-only credential for its registry host, one per host, under **Registry credentials**: a GitHub token with `read:packages` for `ghcr.io`, an access token on Docker Hub. Values are written, never shown. Setting a reference whose registry refuses the pull, or whose package is not one (no `index.html` at the root, over 64 MB or 4000 files), is refused there and then with the registry's words.
+
+The package may carry a `shpyrd-app.json` at its root: `{"name": "Acme", "version": "2.3.1", "origins": ["https://cdn.acme.test"]}`. The origins are the only places beyond the server its pages may load scripts from, connect to or show images from; without the file, none.
+
+The operator chooses which sources a server accepts with `SHPYRD_UI_SOURCES`: `oci` by default; `oci,dir` where the server runs for development, so `dir:/path/to/out` serves a build straight from its folder; `off` keeps the references but serves the platform's own everywhere. The CLI: `shpyrd workspace ui set|clear|reload` and `shpyrd registry-auth set|unset|list`. The example to start from is [shpyrd-example-workspace-app](https://github.com/shpyrd-io/shpyrd-example-workspace-app).
 
 ## The console
 

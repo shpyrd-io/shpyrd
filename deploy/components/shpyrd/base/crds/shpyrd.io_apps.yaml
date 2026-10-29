@@ -539,6 +539,36 @@ spec:
                   `shpyrd deploy --local-build` and by rollbacks; cleared by the next
                   source deploy.
                 type: string
+              maintenance:
+                description: |-
+                  Maintenance puts a page in front of the app (RFC-0020): while
+                  Enabled, every HTTP request at its hosts receives a 503 and the
+                  maintenance page, programs a JSON answer with Retry-After. The
+                  processes keep running, and releases, scaling, shells and one-off
+                  commands go on underneath: the team works through the console, as
+                  nobody is let through the page. Nil or disabled serves the app.
+                properties:
+                  by:
+                    type: string
+                  enabled:
+                    description: Enabled puts the maintenance page in front of the
+                      app.
+                    type: boolean
+                  message:
+                    description: |-
+                      Message is shown on the page under the project's name, plain text;
+                      empty shows the page's own words.
+                    maxLength: 500
+                    type: string
+                  since:
+                    description: |-
+                      Since is when the mode was turned on, and By who turned it on, as
+                      the API records them; the header, the list and the CLI say so.
+                    format: date-time
+                    type: string
+                required:
+                - enabled
+                type: object
               processes:
                 additionalProperties:
                   properties:
@@ -547,6 +577,42 @@ spec:
                       items:
                         type: string
                       type: array
+                    autoscale:
+                      description: |-
+                        Autoscale lets the instance count follow the load between a minimum
+                        and a maximum (web only, RFC-0047); Replicas is then the count the
+                        process had before, kept for when autoscaling is turned off.
+                      properties:
+                        concurrency:
+                          description: |-
+                            Concurrency is the number of requests an instance may have in flight
+                            before another is added. Default DefaultAutoscaleConcurrency.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        cpu:
+                          description: |-
+                            CPU is the CPU an instance may use before another is added, in
+                            percent of the size's CPU (its ceiling; a shared size's guaranteed
+                            share is a part of it). Default DefaultAutoscaleCPU.
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                        max:
+                          description: Max is the most, min or more.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        min:
+                          description: Min is the fewest instances, 1 or more.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                      required:
+                      - max
+                      - min
+                      type: object
                     command:
                       description: |-
                         Command overrides the buildpacks launcher (/cnb/process/<type>).
@@ -754,16 +820,38 @@ spec:
                     - url
                     type: object
                   git:
-                    description: GitSource builds from a Git repository; kpack polls
-                      branches for changes.
+                    description: |-
+                      GitSource builds from a Git repository. A branch or tag is watched: the
+                      source watcher pins its latest commit and builds use that commit
+                      (RFC-0018). A commit is built as given.
                     properties:
-                      revision:
+                      autoDeploy:
                         description: |-
-                          Revision is a branch, tag or commit. Defaults to the default branch
-                          as resolved by kpack ("main" when unset).
+                          AutoDeploy deploys every new commit of the branch; false records
+                          them without deploying. Unset means true.
+                        type: boolean
+                      revision:
+                        description: Revision is a branch, tag or commit. Defaults
+                          to "main".
                         type: string
                       url:
                         type: string
+                      waitForChecks:
+                        description: |-
+                          WaitForChecks holds a commit until its other checks and statuses on
+                          GitHub pass. GitHub App only (RFC-0054).
+                        type: boolean
+                      watchPaths:
+                        description: |-
+                          WatchPaths are gitignore-style globs from the repository root: a
+                          commit deploys only when a file it changes matches. The last pattern
+                          that matches a file decides it; a leading ! excludes. GitHub App only
+                          (RFC-0054).
+                        items:
+                          maxLength: 200
+                          type: string
+                        maxItems: 20
+                        type: array
                     required:
                     - url
                     type: object
@@ -873,6 +961,33 @@ spec:
                   - host
                   type: object
                 type: array
+              fallback:
+                description: |-
+                  Fallback says a process runs its previous release again because the
+                  one asked for cannot be scheduled (#127): a Recreate rollout (a
+                  single-instance volume) had stopped the running instance before the
+                  new one proved impossible to place. It holds for the generation it
+                  was set on; a change to the spec (a resize, a rollback) clears it.
+                properties:
+                  generation:
+                    description: Generation of the spec the fallback was decided for.
+                    format: int64
+                    type: integer
+                  message:
+                    description: Message says why the requested release cannot start.
+                    type: string
+                  process:
+                    description: Process is the process type running its previous
+                      release.
+                    type: string
+                  release:
+                    description: Release is the number of the release running again.
+                    type: integer
+                required:
+                - generation
+                - process
+                - release
+                type: object
               image:
                 description: Image currently deployed (digest reference).
                 type: string
@@ -925,6 +1040,44 @@ spec:
                 additionalProperties:
                   description: ProcessStatus is the rollout state of one process type.
                   properties:
+                    autoscale:
+                      description: |-
+                        Autoscale is how the count follows the load when bounds are set
+                        (RFC-0047); absent otherwise. Desired is then the count the scaler
+                        asks for now.
+                      properties:
+                        concurrency:
+                          format: int32
+                          type: integer
+                        cpu:
+                          description: |-
+                            CPU and Concurrency are the targets in force: percent of the size's
+                            CPU, requests in flight per instance.
+                          format: int32
+                          type: integer
+                        max:
+                          format: int32
+                          type: integer
+                        message:
+                          description: |-
+                            Message explains an unavailable state, or what is missing from an
+                            active one (CPU is not measured without the Metrics Server).
+                          type: string
+                        min:
+                          description: Min and Max are the bounds in force.
+                          format: int32
+                          type: integer
+                        state:
+                          description: |-
+                            State is "active", or "unavailable" when the bounds are set but the
+                            cluster cannot follow them (Message says why).
+                          type: string
+                      required:
+                      - concurrency
+                      - cpu
+                      - max
+                      - min
+                      type: object
                     cpu:
                       description: CPU and Memory are the allocation in effect (requests),
                         for display.
@@ -959,6 +1112,15 @@ spec:
                         Sleep is the scale-to-zero state of the web process when a sleep
                         policy is set (RFC-0075); absent otherwise.
                       properties:
+                        after:
+                          description: |-
+                            After and Resuming are the policy as it applies (#120): the quiet
+                            period and the wake mode, empty when nothing puts the process to
+                            sleep. Source says where it comes from: "project" for a policy of
+                            the project's own, "off" for an explicit off (awake whatever the
+                            workspace's default), "workspace" otherwise (the workspace's
+                            default, or none when it sets none).
+                          type: string
                         lastActivityAt:
                           description: LastActivityAt is when the last request arrived.
                           format: date-time
@@ -974,6 +1136,10 @@ spec:
                           type: integer
                         message:
                           description: Message explains an unavailable state.
+                          type: string
+                        resuming:
+                          type: string
+                        source:
                           type: string
                         state:
                           description: |-
@@ -1089,6 +1255,60 @@ spec:
                 description: Runtime is the runtime detected in the current image's
                   buildpack metadata.
                 type: string
+              source:
+                description: |-
+                  Source is what the source watcher knows of the branch a git source
+                  follows, and the commit pinned for it (RFC-0018).
+                properties:
+                  author:
+                    type: string
+                  checkedAt:
+                    format: date-time
+                    type: string
+                  commit:
+                    description: 'Commit is the commit pinned for the branch: what
+                      is built and runs.'
+                    type: string
+                  error:
+                    description: Error says why the branch could not be read, in words.
+                    type: string
+                  held:
+                    description: |-
+                      Held is a commit waiting for its other checks on GitHub, since
+                      HeldSince (RFC-0054).
+                    type: string
+                  heldSince:
+                    format: date-time
+                    type: string
+                  lastWebhookAt:
+                    format: date-time
+                    type: string
+                  latest:
+                    description: Latest is the newest commit seen on the branch.
+                    type: string
+                  latestAt:
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message and Author describe Latest when a push said
+                      them.
+                    type: string
+                  notDeployed:
+                    description: |-
+                      NotDeployed is the last commit the watcher decided not to deploy:
+                      nothing changed in the watch paths, CI failed, or CI did not finish.
+                      NotDeployedReason says which, in words.
+                    type: string
+                  notDeployedReason:
+                    type: string
+                  skipped:
+                    description: Skipped is a commit whose message asked not to deploy
+                      it.
+                    type: string
+                  via:
+                    description: 'Via is how Latest was learnt: push, poll or deploy.'
+                    type: string
+                type: object
               staleImages:
                 description: |-
                   StaleImages are images of releases that left the history and that no

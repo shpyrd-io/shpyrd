@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { TextLogView } from "@shpyrd/ui/components/log-view";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
@@ -34,8 +35,8 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
   }, [chosen, list]);
   const output = useStream<string>(open ? (signal, push) => api.streamBuild(project.slug, open.name, follow, signal, push) : null, [project.slug, open?.name, follow]);
   const rollback = useMutation({
-    mutationFn: (n: number) => api.rollback(project.slug, n),
-    onSuccess: (_, n) => {
+    mutationFn: ({ n, force }: { n: number; force?: boolean }) => api.rollback(project.slug, n, force),
+    onSuccess: (_, { n }) => {
       queries.invalidateQueries({ queryKey: ["project", project.slug] });
       toast.success(`Rolling back to v${n}`, { description: "Its build and its config vars, as they were." });
     },
@@ -46,7 +47,6 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
       <Card>
         <CardHeader>
           <CardTitle>Releases</CardTitle>
-          <CardDescription>A release is a build and its config. Deploys make new builds; config changes and rollbacks reuse them.</CardDescription>
         </CardHeader>
         <CardContent>
           {releases.length === 0 ? (
@@ -85,9 +85,24 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
                       {ago(r.createdAt)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="xs" disabled={i === 0 || !perms.deploy || rollback.isPending || busy(project)} onClick={() => rollback.mutate(r.number)}>
-                        Rollback
-                      </Button>
+                      {busy(project) ? (
+                        // The way back is never locked (#127): over a rollout in progress it asks first.
+                        <ConfirmDialog
+                          trigger={
+                            <Button variant="outline" size="xs" disabled={i === 0 || !perms.deploy || rollback.isPending}>
+                              Rollback
+                            </Button>
+                          }
+                          title={`Roll back to v${r.number} now?`}
+                          description={`A release is still rolling out (${project.status.message || project.status.phase}). Rolling back cancels it: v${r.number} rolls out in its place.`}
+                          action="Roll back"
+                          onConfirm={() => rollback.mutate({ n: r.number, force: true })}
+                        />
+                      ) : (
+                        <Button variant="outline" size="xs" disabled={i === 0 || !perms.deploy || rollback.isPending} onClick={() => rollback.mutate({ n: r.number })}>
+                          Rollback
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -99,7 +114,6 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
       <Card>
         <CardHeader>
           <CardTitle>Builds</CardTitle>
-          <CardDescription>Each deploy builds an image from the source. Open one to read what it printed; one going on is followed as it prints.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           {builds.isLoading ? (

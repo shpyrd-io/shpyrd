@@ -5,9 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   Camera,
+  Gauge,
   KeyRound,
   Link2,
   Minus,
+  MoonStar,
   Plus,
   Trash2,
   Undo2,
@@ -24,7 +26,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@shpyrd/ui/components/card";
@@ -56,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@shpyrd/ui/components/select";
+import { Slider } from "@shpyrd/ui/components/slider";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import {
@@ -66,13 +68,16 @@ import {
   TableHeader,
   TableRow,
 } from "@shpyrd/ui/components/table";
-import { api } from "@/api/api";
+import { api, type AutoscaleChange } from "@/api/api";
 import type {
+  AutoscaleSpec,
+  AutoscaleStatus,
   InstanceSize,
   Project,
   PublicConfig,
   ResourceInfo,
   SizeCatalog,
+  SleepStatus,
   SnapshotInfo,
   VolumeInfo,
 } from "@/api/types";
@@ -141,8 +146,29 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
   );
   const dirty = Object.keys(changes).length > 0;
   const waiting = busy(project);
+  const sleep = useMutation({
+    mutationFn: (policy: { after: string; resuming?: "page" | "wait" }) =>
+      api.applyProcesses(project.slug, { web: { sleep: policy } }),
+    onSuccess: (_, policy) => {
+      queries.invalidateQueries({ queryKey: ["project", project.slug] });
+      toast.success(sleepSetWords("web", policy));
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  // The bounds the web process follows its load between (RFC-0047), set
+  // on their own like sleep: they are not a release.
+  const autoscale = useMutation({
+    mutationFn: (bounds: AutoscaleChange) =>
+      api.applyProcesses(project.slug, { web: { autoscale: bounds } }),
+    onSuccess: (_, bounds) => {
+      queries.invalidateQueries({ queryKey: ["project", project.slug] });
+      setDraft({});
+      toast.success(autoscaleSetWords("web", bounds));
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const apply = useMutation({
-    mutationFn: () => api.applyProcesses(project.slug, changes),
+    mutationFn: (force?: boolean) => api.applyProcesses(project.slug, changes, force),
     onSuccess: () => {
       queries.invalidateQueries({ queryKey: ["project", project.slug] });
       setDraft({});
@@ -158,10 +184,6 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Processes</CardTitle>
-        <CardDescription>
-          The size and how many instances of each. Changes are applied together:
-          one release, one rollout.
-        </CardDescription>
         {perms.resource && dirty && (
           <CardAction>
             <Stack direction="horizontal" gap="condensed">
@@ -173,16 +195,29 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
               >
                 Cancel
               </Button>
-              <Button
-                size="sm"
-                disabled={apply.isPending || waiting}
-                title={
-                  waiting ? "Wait for the current release to finish" : undefined
-                }
-                onClick={() => apply.mutate()}
-              >
-                Apply {Object.keys(changes).length}
-              </Button>
+              {waiting ? (
+                // The way back is never locked (#127): over a rollout in
+                // progress the change asks first, then cancels it.
+                <ConfirmDialog
+                  trigger={
+                    <Button size="sm" disabled={apply.isPending}>
+                      Apply {Object.keys(changes).length}
+                    </Button>
+                  }
+                  title="Apply over the rollout in progress?"
+                  description={`A release is still rolling out (${project.status.message || project.status.phase}). Applying these changes cancels it: a new release rolls out with them.`}
+                  action="Apply anyway"
+                  onConfirm={() => apply.mutate(true)}
+                />
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={apply.isPending}
+                  onClick={() => apply.mutate(false)}
+                >
+                  Apply {Object.keys(changes).length}
+                </Button>
+              )}
             </Stack>
           </CardAction>
         )}
@@ -208,6 +243,7 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
               const changed =
                 is.size !== was.size || is.replicas !== was.replicas;
               const pinned = st?.pinned;
+              const bounds = spec?.autoscale;
               return (
                 <TableRow
                   key={name}
@@ -261,46 +297,71 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
                   </TableCell>
                   <TableCell>
                     <Stack direction="horizontal" align="center" gap="tight">
-                      <Button
-                        variant="outline"
-                        size="icon-xs"
-                        icon={<Minus />}
-                        aria-label="One less"
-                        disabled={
-                          !perms.resource || waiting || is.replicas <= 0
-                        }
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            [name]: { ...is, replicas: is.replicas - 1 },
-                          })
-                        }
-                      />
-                      <span
-                        className={`w-6 text-center font-mono text-xs ${is.replicas !== was.replicas ? "text-primary" : ""}`}
-                      >
-                        {is.replicas}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="icon-xs"
-                        icon={<Plus />}
-                        aria-label="One more"
-                        disabled={
-                          !perms.resource ||
-                          waiting ||
-                          (!!pinned && is.replicas >= 1)
-                        }
-                        title={
-                          pinned ? `${pinned}: one instance only` : undefined
-                        }
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            [name]: { ...is, replicas: is.replicas + 1 },
-                          })
-                        }
-                      />
+                      {bounds ? (
+                        // The count follows the load: the bounds are the
+                        // setting, the dialog changes them.
+                        <span
+                          className="font-mono text-xs"
+                          title={`follows its load between ${bounds.min} and ${bounds.max} instances`}
+                        >
+                          {bounds.min}–{bounds.max}{" "}
+                          <span className="font-sans text-[10px] text-muted-foreground">
+                            auto
+                          </span>
+                        </span>
+                      ) : (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="icon-xs"
+                            icon={<Minus />}
+                            aria-label="One less"
+                            disabled={
+                              !perms.resource || waiting || is.replicas <= 0
+                            }
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                [name]: { ...is, replicas: is.replicas - 1 },
+                              })
+                            }
+                          />
+                          <span
+                            className={`w-6 text-center font-mono text-xs ${is.replicas !== was.replicas ? "text-primary" : ""}`}
+                          >
+                            {is.replicas}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="icon-xs"
+                            icon={<Plus />}
+                            aria-label="One more"
+                            disabled={
+                              !perms.resource ||
+                              waiting ||
+                              (!!pinned && is.replicas >= 1)
+                            }
+                            title={
+                              pinned ? `${pinned}: one instance only` : undefined
+                            }
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                [name]: { ...is, replicas: is.replicas + 1 },
+                              })
+                            }
+                          />
+                        </>
+                      )}
+                      {name === "web" && perms.resource && !pinned && (
+                        <AutoscaleDialog
+                          what={project.slug}
+                          current={bounds}
+                          count={is.replicas}
+                          busy={autoscale.isPending}
+                          onSave={(change) => autoscale.mutate(change)}
+                        />
+                      )}
                     </Stack>
                   </TableCell>
                   <TableCell>
@@ -333,6 +394,32 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
                     {st?.sleep?.state === "unavailable" && st.sleep.message && (
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         {st.sleep.message}
+                      </div>
+                    )}
+                    {name === "web" && st?.sleep && (
+                      <Stack
+                        direction="horizontal"
+                        align="center"
+                        gap="tight"
+                        className="mt-1"
+                      >
+                        <span className="text-[11px] text-muted-foreground">
+                          {sleepWords(st.sleep)}
+                        </span>
+                        {perms.resource && (
+                          <SleepDialog
+                            what={project.slug}
+                            current={st.sleep}
+                            modes
+                            busy={sleep.isPending}
+                            onSave={(policy) => sleep.mutate(policy)}
+                          />
+                        )}
+                      </Stack>
+                    )}
+                    {name === "web" && st?.autoscale && (
+                      <div className="mt-1 w-64 text-[11px] whitespace-normal text-muted-foreground">
+                        {autoscaleWords(st.autoscale)}
                       </div>
                     )}
                   </TableCell>
@@ -415,9 +502,380 @@ export function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
     d.backups &&
       `backups ${d.backups}${d.lastBackup ? `, last ${ago(d.lastBackup)}` : ", none yet"}`,
     d.restoredFrom && `restored from ${d.restoredFrom}`,
+    r.kind === "Postgres" &&
+      d.sleepSource &&
+      (d.sleepAfter || d.sleepSource === "off") &&
+      sleepWords(sleepOf(d)),
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+// A database's sleep read-back, from its details (#120).
+export function sleepOf(d: Record<string, string>): SleepStatus {
+  return {
+    state: (d.sleepState || "awake") as SleepStatus["state"],
+    after: d.sleepAfter,
+    source: d.sleepSource as SleepStatus["source"],
+    message: d.sleepMessage,
+  };
+}
+
+// What a sleep policy says in a few words: the three states of #135 read
+// apart, with the wake mode when it has one.
+export function sleepWords(st: SleepStatus) {
+  const mode = st.resuming ? ` (${st.resuming} mode)` : "";
+  const now =
+    st.state === "sleeping"
+      ? "; asleep now"
+      : st.state === "suspended"
+        ? "; suspended now"
+        : "";
+  if (st.source === "off") return "never sleeps, whatever the workspace's default";
+  if (st.source === "project") return `sleeps after ${st.after}${mode}, its own policy${now}`;
+  if (st.after) return `sleeps after ${st.after}${mode}, the workspace's default${now}`;
+  return "does not sleep: the workspace's default sets none";
+}
+
+// What the toast says once a policy is set.
+function sleepSetWords(
+  what: string,
+  policy: { after: string; resuming?: "page" | "wait" },
+) {
+  const after = policy.after.toLowerCase();
+  if (after === "off") return `${what} never sleeps now, whatever the workspace's default.`;
+  if (after === "default" || after === "")
+    return `${what} follows the workspace's default again.`;
+  return `${what} sleeps after ${after}${policy.resuming ? ` (${policy.resuming} mode)` : ""}.`;
+}
+
+// The quiet periods a policy may name.
+const quietPeriods = ["5m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"];
+
+// What the bounds do, in a few words: the targets in force, then what the
+// cluster cannot do about them.
+export function autoscaleWords(st: AutoscaleStatus) {
+  const bounds = `follows its load between ${st.min} and ${st.max}: another instance past ${st.cpu}% CPU or ${st.concurrency} requests in flight`;
+  if (st.state === "unavailable") return `${bounds}; not now: ${st.message ?? "the cluster cannot follow the bounds"}`;
+  if (st.message) return `${bounds}; ${st.message}`;
+  return bounds;
+}
+
+// A typed number, or what stands in for one that is not a number yet.
+const num = (v: string, fallback: number) => {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+};
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// What the toast says once the bounds are set.
+function autoscaleSetWords(what: string, change: AutoscaleChange) {
+  if (change.off) return `${what} keeps a fixed count again.`;
+  return `${what} follows its load between ${change.min} and ${change.max} instances.`;
+}
+
+// The bounds of the web process (RFC-0047): a fixed count, or a minimum
+// and a maximum it follows its load between, with the targets that add an
+// instance when the defaults will not do.
+export function AutoscaleDialog({
+  what,
+  current,
+  count,
+  busy = false,
+  onSave,
+}: {
+  what: string;
+  current?: AutoscaleSpec;
+  count: number;
+  busy?: boolean;
+  onSave: (change: AutoscaleChange) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"fixed" | "auto">(current ? "auto" : "fixed");
+  // The workspace's ceiling on instances is how far the line goes; a
+  // maximum typed past it stretches the line, and the API says no.
+  const workspace = useQuery({
+    queryKey: ["workspace"],
+    queryFn: api.workspace,
+    staleTime: 60_000,
+    enabled: open,
+  });
+  const ceiling = workspace.data?.limits?.instances;
+  const [min, setMin] = useState(String(current?.min ?? Math.max(1, count)));
+  const [max, setMax] = useState(String(current?.max ?? Math.max(2, count * 2)));
+  const [cpu, setCpu] = useState(String(current?.cpu ?? 70));
+  const [concurrency, setConcurrency] = useState(String(current?.concurrency ?? 20));
+  const reset = () => {
+    setMode(current ? "auto" : "fixed");
+    setMin(String(current?.min ?? Math.max(1, count)));
+    setMax(String(current?.max ?? Math.max(2, count * 2)));
+    setCpu(String(current?.cpu ?? 70));
+    setConcurrency(String(current?.concurrency ?? 20));
+  };
+  const n = (v: string) => Number.parseInt(v, 10);
+  // How far the line goes: the ceiling, or 100 without one, stretched to
+  // a bound typed past it so the thumb is never off the line.
+  const span = Math.max(2, ceiling ?? 100, num(min, 1), num(max, 1));
+  const valid =
+    mode === "fixed" ||
+    (n(min) >= 1 && n(max) >= n(min) && n(max) <= 100 && n(cpu) >= 1 && n(cpu) <= 100 && n(concurrency) >= 1);
+  const change: AutoscaleChange =
+    mode === "fixed"
+      ? { off: true }
+      : {
+          min: n(min),
+          max: n(max),
+          ...(n(cpu) !== 70 ? { cpu: n(cpu) } : {}),
+          ...(n(concurrency) !== 20 ? { concurrency: n(concurrency) } : {}),
+        };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) reset();
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs" icon={<Gauge />} title="How many instances">
+          Autoscale
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>How many instances {what} runs</DialogTitle>
+          <DialogDescription>
+            A fixed count, or a count that follows the load: another instance
+            when one passes the CPU target or carries more requests than the
+            target, one fewer when the load has been lower for five minutes,
+            always within the bounds. A sleep policy still takes it to zero.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid) return;
+            onSave(change);
+            setOpen(false);
+          }}
+        >
+          <Field label="Instances">
+            <Select value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed">A fixed count</SelectItem>
+                <SelectItem value="auto">Follow the load, between two bounds</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {mode === "auto" && (
+            <>
+              <Field
+                label="Bounds"
+                hint={`shpyrd scale sets the minimum. The maximum counts against the workspace's instances${ceiling ? ` (${ceiling})` : ""}.`}
+              >
+                <div role="group" className="grid grid-cols-[5rem_1fr_5rem] items-center gap-x-3 gap-y-1">
+                  <Input type="number" min={1} max={100} value={min} onChange={(e) => setMin(e.target.value)} aria-label="Minimum instances" />
+                  <Slider
+                    min={1}
+                    max={span}
+                    value={[clamp(num(min, 1), 1, span), clamp(num(max, 1), 1, span)]}
+                    onValueChange={([lo, hi]) => {
+                      setMin(String(lo));
+                      setMax(String(hi));
+                    }}
+                    thumbLabels={["At least", "At most"]}
+                  />
+                  <Input type="number" min={1} max={100} value={max} onChange={(e) => setMax(e.target.value)} aria-label="Maximum instances" />
+                  <span aria-hidden className="text-xs text-muted-foreground">
+                    at least
+                  </span>
+                  <span />
+                  <span aria-hidden className="text-right text-xs text-muted-foreground">
+                    at most
+                  </span>
+                </div>
+              </Field>
+              <Field label="CPU target" hint="Percent of the size's CPU an instance may use before another is added (70).">
+                <div role="group" className="flex items-center gap-3">
+                  <Slider
+                    className="flex-1"
+                    min={1}
+                    max={100}
+                    value={[clamp(num(cpu, 70), 1, 100)]}
+                    onValueChange={([v]) => setCpu(String(v))}
+                    aria-label="CPU target slider"
+                  />
+                  <Input type="number" min={1} max={100} value={cpu} onChange={(e) => setCpu(e.target.value)} suffix="%" className="w-24" aria-label="CPU target" />
+                </div>
+              </Field>
+              <Field label="Requests in flight" hint="Per instance, before another is added (20).">
+                <div role="group" className="flex items-center gap-3">
+                  <Slider
+                    className="flex-1"
+                    min={1}
+                    max={Math.max(100, num(concurrency, 20))}
+                    value={[clamp(num(concurrency, 20), 1, Math.max(100, num(concurrency, 20)))]}
+                    onValueChange={([v]) => setConcurrency(String(v))}
+                    aria-label="Requests in flight slider"
+                  />
+                  <Input type="number" min={1} value={concurrency} onChange={(e) => setConcurrency(e.target.value)} className="w-24" aria-label="Requests in flight per instance" />
+                </div>
+              </Field>
+            </>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={busy || !valid}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// The sleep of a web process or a dedicated database (#132): the three
+// states of #135, a quiet period of its own with its wake mode for a web
+// process, off, or the workspace's default.
+export function SleepDialog({
+  what,
+  current,
+  modes = false,
+  busy = false,
+  onSave,
+}: {
+  what: string;
+  current: SleepStatus;
+  modes?: boolean;
+  busy?: boolean;
+  onSave: (policy: { after: string; resuming?: "page" | "wait" }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const initial = current.source ?? "workspace";
+  const [choice, setChoice] = useState<"workspace" | "project" | "off">(initial);
+  const [after, setAfter] = useState(
+    current.source === "project" && current.after ? current.after : "30m",
+  );
+  const [resuming, setResuming] = useState<"page" | "wait">(
+    current.resuming === "page" ? "page" : "wait",
+  );
+  const reset = () => {
+    setChoice(initial);
+    setAfter(current.source === "project" && current.after ? current.after : "30m");
+    setResuming(current.resuming === "page" ? "page" : "wait");
+  };
+  const policy =
+    choice === "off"
+      ? { after: "off" }
+      : choice === "workspace"
+        ? { after: "default" }
+        : { after, ...(modes ? { resuming } : {}) };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) reset();
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs" icon={<MoonStar />} title="When it sleeps">
+          Sleep
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>When {what} sleeps</DialogTitle>
+          <DialogDescription>
+            Now it {sleepWords(current)}.{" "}
+            {modes
+              ? "A sleeping app scales to zero after the quiet period and wakes on the first request."
+              : "A sleeping database stops after the quiet period without client connections and wakes on the first one; its volume and data stay."}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave(policy);
+            setOpen(false);
+          }}
+        >
+          <Field label="Policy">
+            <Select
+              value={choice}
+              onValueChange={(v) => setChoice(v as typeof choice)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="workspace">The workspace&apos;s default</SelectItem>
+                <SelectItem value="project">A quiet period of its own</SelectItem>
+                <SelectItem value="off">Never sleeps</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {choice === "project" && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Quiet period">
+                <Select value={after} onValueChange={setAfter}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {quietPeriods.map((q) => (
+                      <SelectItem key={q} value={q}>
+                        {q}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              {modes && (
+                <Field
+                  label="Waking"
+                  hint="An app with a disk wakes behind the page: the disk takes a moment to reattach."
+                >
+                  <Select
+                    value={resuming}
+                    onValueChange={(v) => setResuming(v as "page" | "wait")}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="page">A waking page</SelectItem>
+                      <SelectItem value="wait">Hold the request</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={busy}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // A shared database's cap: what it holds over what it may, a thin bar
@@ -509,6 +967,18 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
     onSuccess: told("Detached"),
     onError: failed,
   });
+  const sleepDatabase = useMutation({
+    mutationFn: ({ r, after }: { r: ResourceInfo; after: string }) =>
+      api.sleepPostgres(project.slug, r.name, after),
+    onSuccess: (_, { r, after }) => {
+      toast.success(sleepSetWords(r.name, { after }), {
+        description:
+          "The apps attached to it are re-released once when the policy appears or disappears.",
+      });
+      refresh();
+    },
+    onError: failed,
+  });
   const rotate = useMutation({
     mutationFn: (r: ResourceInfo) => api.rotateBucket(project.slug, r.name),
     onSuccess: (answer) =>
@@ -526,11 +996,6 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Beside the application</CardTitle>
-        <CardDescription>
-          Databases, caches and volumes of the project. An attached database or
-          cache puts its connection details in the config vars, read-only, and
-          releases the app.
-        </CardDescription>
         {perms.resource && (
           <CardAction>
             <AddResource project={project} onDone={refresh} />
@@ -680,6 +1145,19 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                                   onDone={refresh}
                                 />
                               )}
+                              {r.kind === "Postgres" &&
+                                settled &&
+                                kindOf(r) === "dedicated" &&
+                                r.details?.sleepSource && (
+                                  <SleepDialog
+                                    what={r.name}
+                                    current={sleepOf(r.details)}
+                                    busy={sleepDatabase.isPending}
+                                    onSave={({ after }) =>
+                                      sleepDatabase.mutate({ r, after })
+                                    }
+                                  />
+                                )}
                               {r.kind === "Postgres" && settled && (
                                 <ConvertDialog
                                   slug={project.slug}
@@ -804,7 +1282,7 @@ function AddResource({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem disabled={!disks} onClick={() => setVolume(true)}>
-            A volume{" "}
+            Volume{" "}
             {!disks && (
               <span className="text-xs text-muted-foreground">
                 not included in the free workspace
@@ -815,7 +1293,7 @@ function AddResource({
             disabled={!has("object-storage")}
             onClick={() => setBucket(true)}
           >
-            A bucket{" "}
+            S3 Compatible Storage{" "}
             {!has("object-storage") && (
               <span className="text-xs text-muted-foreground">
                 needs the object-storage extension
@@ -826,7 +1304,7 @@ function AddResource({
             disabled={!has("postgres")}
             onClick={() => setKind("Postgres")}
           >
-            A Postgres database{" "}
+            Postgres{" "}
             {!has("postgres") && (
               <span className="text-xs text-muted-foreground">
                 needs the postgres extension
@@ -837,7 +1315,7 @@ function AddResource({
             disabled={!has("redis")}
             onClick={() => setKind("Redis")}
           >
-            A Redis or Valkey store{" "}
+            Redis{" "}
             {!has("redis") && (
               <span className="text-xs text-muted-foreground">
                 needs the redis extension

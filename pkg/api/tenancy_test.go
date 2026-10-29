@@ -501,6 +501,10 @@ func TestPerHostSignIn(t *testing.T) {
 	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/?login_error=") || sid != "" {
 		t.Errorf("stranger at a listed-only workspace = %d %s (must land on acme's login page, no session)", rec.Code, rec.Header().Get("Location"))
 	}
+	// The page keeps where they were going, for signing in as another account.
+	if !strings.HasSuffix(rec.Header().Get("Location"), "&next="+url.QueryEscape("/projects")) {
+		t.Errorf("refused sign-in lost its destination: %s", rec.Header().Get("Location"))
+	}
 	// A suspended workspace cannot be signed into at all.
 	if rec := get("closed.shpyrd.test", "/api/auth/login?provider=test"); rec.Code != http.StatusForbidden {
 		t.Errorf("login at a suspended workspace = %d %s", rec.Code, rec.Body.String())

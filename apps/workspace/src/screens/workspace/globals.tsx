@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Input } from "@shpyrd/ui/components/input";
@@ -44,9 +44,6 @@ export function Globals() {
     <Card>
       <CardHeader>
         <CardTitle>Config vars</CardTitle>
-        <CardDescription>
-          Injected into every process of every project of the workspace, {projects} {projects === 1 ? "project" : "projects"} today. A project's own var of the same name wins, and what an attached resource provides wins over both. Values are never shown; a change is a release in each project.
-        </CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">

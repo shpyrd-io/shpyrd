@@ -125,7 +125,7 @@ func (s *Server) relaySignIn() gin.HandlerFunc {
 			s.edgePage(c, http.StatusNotFound, "Nothing here", "There is nothing at this address.", nil)
 			return
 		}
-		host := s.rp.pendingHost(c.Query("state"))
+		host := s.rp.pendingHost(c.Request.Context(), c.Query("state"))
 		if host == "" {
 			s.edgePage(c, http.StatusBadRequest, "Sign-in expired", "Go back to your workspace and sign in again.", nil)
 			return

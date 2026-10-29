@@ -39,7 +39,7 @@ Projects without a `web` process (workers, agents, schedulers) work the same way
 
 ## Processes
 
-A **process type** is a way of running the build: `web` serves HTTP and receives `PORT`; anything else (`worker`, `scheduler`, `agent`) runs the command of the same name that the buildpacks recorded in the image. Each process type becomes a Deployment with its own **instance** count (`shpyrd scale web=3 worker=1`) and **instance size** (`shpyrd resize web=shared-m`): a named cpu/memory allocation from the cluster catalog.
+A **process type** is a way of running the build: `web` serves HTTP and receives `PORT`; anything else (`worker`, `scheduler`, `agent`) runs the command of the same name that the buildpacks recorded in the image. Each process type becomes a Deployment with its own **instance** count (`shpyrd scale web=3 worker=1`, or bounds the web process follows its load between, `shpyrd autoscale shop --min 2 --max 10`) and **instance size** (`shpyrd resize web=shared-m`): a named cpu/memory allocation from the cluster catalog.
 
 Two size kinds exist:
 

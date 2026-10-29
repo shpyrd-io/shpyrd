@@ -417,6 +417,15 @@ func (r *PostgresReconciler) reconcileDedicated(ctx context.Context, pg *shpyrdv
 		}
 	}
 
+	// The database and its extensions (pgvector), declared to the operator.
+	if _, err := r.ensureDedicatedDatabase(ctx, pg); err != nil {
+		if !strings.Contains(err.Error(), "no matches for kind") {
+			return ctrl.Result{}, fmt.Errorf("declare the database: %w", err)
+		}
+		// An operator older than the Database kind (CloudNativePG 1.26):
+		// the database works, without pgvector.
+		log.FromContext(ctx).Info("no Database kind on this cluster: pgvector not installed (CloudNativePG 1.26 or later has it)", "postgres", pg.Name)
+	}
 	// Sleep: shpyrd-owned Service and hibernation management (RFC-0075).
 	if err := r.reconcilePostgresSleep(ctx, pg); err != nil {
 		// Non-fatal: log and continue; the database still functions.
@@ -424,7 +433,9 @@ func (r *PostgresReconciler) reconcileDedicated(ctx context.Context, pg *shpyrdv
 	}
 	// Status from the CNPG cluster and its application Secret.
 	r.backupStatus(ctx, pg, current)
-	pg.Status.Endpoint = fmt.Sprintf("%s-rw.%s.svc:%d", pg.Name, pg.Namespace, PostgresPort)
+	// The endpoint is the host apps get (RFC-0075): the sleep-aware Service
+	// when a policy applies, CNPG's "-rw" otherwise.
+	pg.Status.Endpoint = fmt.Sprintf("%s.%s.svc:%d", r.sleepHost(ctx, pg), pg.Namespace, PostgresPort)
 	pg.Status.CredentialsSecret = PostgresSecretName(pg.Name)
 	ready, _, _ := unstructured.NestedInt64(current.Object, "status", "readyInstances")
 	phase, _, _ := unstructured.NestedString(current.Object, "status", "phase")
@@ -731,7 +742,7 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		"storage":               cnpgStorage(storage, storageClass),
 		"resources":             map[string]interface{}{"requests": toMap(res.Requests), "limits": toMap(res.Limits)},
 		"bootstrap":             map[string]interface{}{"initdb": dedicatedInitdb(pg)},
-		"enableSuperuserAccess": convertingTo(pg) == shpyrdv1.PostgresTypeShared, // the conversion's Job pauses the owner as the superuser
+		"enableSuperuserAccess": converting(pg), // the conversion's Job pauses the owner as the superuser, and counts the rows as it
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},

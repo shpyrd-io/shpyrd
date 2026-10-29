@@ -14,8 +14,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// AnnotationTLSChecksum on the registry's pod template carries a digest of
-// the certificate it was started with.
+// AnnotationTLSChecksum carries a digest of the certificate the registry
+// runs with: on the Deployment from the first pass, and on its pod template
+// once a renewal has restarted it.
 const AnnotationTLSChecksum = "shpyrd.io/tls-checksum"
 
 // RegistryRotation restarts the in-cluster registry when cert-manager
@@ -77,10 +78,26 @@ func (r *RegistryRotation) Check(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	have := dep.Spec.Template.Annotations[AnnotationTLSChecksum]
+	if have == "" {
+		have = dep.Annotations[AnnotationTLSChecksum]
+	}
 	if have == want {
 		return false, nil
 	}
 	patch := client.MergeFrom(dep.DeepCopy())
+	if dep.Annotations == nil {
+		dep.Annotations = map[string]string{}
+	}
+	dep.Annotations[AnnotationTLSChecksum] = want
+	if have == "" {
+		// The first pass records the certificate the registry started
+		// with, on the Deployment itself: a pod template annotation is a
+		// rollout, and a fresh install must not restart its registry (in
+		// CI that restart raced kpack's builder, which reports a reconcile
+		// against a registry in flight as not up to date).
+		return false, r.Client.Patch(ctx, dep, patch)
+	}
+	// A renewed certificate: the pod template change is the restart.
 	if dep.Spec.Template.Annotations == nil {
 		dep.Spec.Template.Annotations = map[string]string{}
 	}
@@ -88,7 +105,5 @@ func (r *RegistryRotation) Check(ctx context.Context) (bool, error) {
 	if err := r.Client.Patch(ctx, dep, patch); err != nil {
 		return false, err
 	}
-	// The first run stamps the running certificate; a stamp change on a
-	// later run is the restart that matters, and both are one patch.
-	return have != "", nil
+	return true, nil
 }

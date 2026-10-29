@@ -2,6 +2,12 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 const testDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -170,12 +177,12 @@ func TestDockerfileGitFetchAndProcesses(t *testing.T) {
 	app := dockerfileApp()
 	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/o/r.git", Revision: "v1.2"}, SubPath: "services/api"}
 	app.Spec.Processes = map[string]shpyrdv1.Process{"web": {}, "worker": {}}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 
 	got := runReconcile(t, r, app)
 	job := getJob(t, c, "app-dk", "dk-build-1")
 	fetch := job.Spec.Template.Spec.InitContainers[0].Command[2]
-	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='v1.2'") {
+	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='"+testCommit+"'") {
 		t.Errorf("git fetch script: %s", fetch)
 	}
 	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--local context=/workspace/src/services/api") {
@@ -240,7 +247,7 @@ func TestBuildKeyAndFailureSummary(t *testing.T) {
 // both.
 func TestBuildJobDeclaresRequestsInEveryContainer(t *testing.T) {
 	r, _ := newTestReconciler(t)
-	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k")
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k", gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +325,7 @@ func TestDockerfileSupersededBuilds(t *testing.T) {
 			ctx := context.Background()
 			app := dockerfileApp()
 			r, c := newTestReconciler(t, app)
-			if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+			if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 				t.Fatal(err)
 			}
 			old := getJob(t, c, app.Namespace, "dk-build-1")
@@ -338,7 +345,7 @@ func TestDockerfileSupersededBuilds(t *testing.T) {
 			}
 			app.Spec.Source.Blob.SHA256 = "new-source"
 			for pass := 0; pass < 2; pass++ {
-				got, err := r.reconcileDockerfileBuild(ctx, app)
+				got, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -370,7 +377,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 	app := dockerfileApp()
 	r, c := newTestReconciler(t, app)
 	for n := 1; n <= 2; n++ {
-		job, err := r.Config.desiredBuildJob(app, n, buildKey(app))
+		job, err := r.Config.desiredBuildJob(app, n, buildKey(app), gitauth.Build{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -381,7 +388,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+	if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := getJob(t, c, app.Namespace, "dk-build-1").Annotations[shpyrdv1.AnnotationBuildFailure]; got != "The build did not finish within 30 minutes." {
@@ -393,7 +400,7 @@ func TestStopBuildDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	ctx := context.Background()
 	app := dockerfileApp()
 	r, c := newTestReconciler(t, app)
-	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+	if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 		t.Fatal(err)
 	}
 	stale := getJob(t, c, app.Namespace, "dk-build-1")
@@ -404,5 +411,164 @@ func TestStopBuildDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	got := getJob(t, c, app.Namespace, stale.Name)
 	if ptr.Deref(got.Spec.Suspend, false) || got.Annotations[shpyrdv1.AnnotationBuildFailure] != "" {
 		t.Fatalf("completed build was stopped: %+v", got)
+	}
+}
+
+// githubAppBuild is the App's credential for url, as the controller makes
+// it: a token Secret, marked as the App's.
+func githubAppBuild(t *testing.T, url, token string) gitauth.Build {
+	t.Helper()
+	tok := &corev1.Secret{Data: map[string][]byte{gitauth.KeyToken: []byte(token), gitauth.KeyUsername: []byte("x-access-token")}}
+	b, err := gitauth.Resolve(url, "dk", "app-dk", nil, tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Kind = gitauth.KindGitHubApp
+	return b
+}
+
+func TestFetchScriptOfTheGitHubAppWritesNetrc(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	script := Config{}.fetchScript(app, githubAppBuild(t, app.Spec.Source.Git.URL, "ghs_s3cret"))
+	if !strings.Contains(script, ".netrc") || !strings.Contains(script, "machine %s login %s password %s") || !strings.Contains(script, gitAuthDir+"/password") {
+		t.Errorf("the App's token is not given to git:\n%s", script)
+	}
+	if strings.Contains(script, "ghs_s3cret") {
+		t.Errorf("the token is inlined:\n%s", script)
+	}
+}
+
+// TestFetchScriptClonesThroughTheGitHubApp runs the fetch script with git
+// against a git host that answers only the App's token.
+func TestFetchScriptClonesThroughTheGitHubApp(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	out, err := exec.Command(gitBin, "--exec-path").Output()
+	if err != nil {
+		t.Skip("no git exec path")
+	}
+	backend := filepath.Join(strings.TrimSpace(string(out)), "git-http-backend")
+	if _, err := os.Stat(backend); err != nil {
+		t.Skip("no git-http-backend")
+	}
+	root := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+		"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@a", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@a")
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(gitBin, args...)
+		cmd.Dir, cmd.Env = dir, env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	work := filepath.Join(root, "work")
+	run(root, "init", "--quiet", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(work, "add", "Dockerfile")
+	run(work, "commit", "--quiet", "-m", "first")
+	run(root, "clone", "--quiet", "--bare", work, filepath.Join(root, "srv", "acme", "dk.git"))
+
+	git := &cgi.Handler{Path: backend, Env: []string{"GIT_PROJECT_ROOT=" + filepath.Join(root, "srv"), "GIT_HTTP_EXPORT_ALL=1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if u, p, ok := req.BasicAuth(); !ok || u != "x-access-token" || p != "ghs_s3cret" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		git.ServeHTTP(w, req)
+	}))
+	defer srv.Close()
+
+	app := dockerfileGitApp(srv.URL + "/acme/dk.git")
+	delete(app.Annotations, shpyrdv1.AnnotationGitCommit) // not pinned: clone the branch
+	b := githubAppBuild(t, app.Spec.Source.Git.URL, "ghs_s3cret")
+	script := Config{}.fetchScript(app, b)
+
+	// The script's fixed paths, moved under the test's directory.
+	tmp, auth, ws := filepath.Join(root, "tmp"), filepath.Join(root, "git-auth"), filepath.Join(root, "workspace")
+	for _, d := range []string{tmp, auth, ws} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for k, v := range b.Secret.Data {
+		if err := os.WriteFile(filepath.Join(auth, k), v, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script = strings.ReplaceAll(script, "/tmp", tmp)
+	script = strings.ReplaceAll(script, gitAuthDir, auth)
+	script = strings.ReplaceAll(script, workspaceDir, ws)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fetch: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "src", "Dockerfile")); err != nil {
+		t.Errorf("not cloned: %v", err)
+	}
+}
+
+// A Dockerfile build runs outside the workspace's ceiling (#243), under the
+// build priority class the compute quota leaves out, and every container of
+// it has a hard memory and CPU ceiling of its own instead.
+func TestABuildIsOutsideTheCeilingAndBoundedByItsOwnLimits(t *testing.T) {
+	r, _ := newTestReconciler(t)
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k", gitauth.Build{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := job.Spec.Template.Spec
+	if pod.PriorityClassName != BuildPriorityClass {
+		t.Errorf("priority class = %q, want %q", pod.PriorityClassName, BuildPriorityClass)
+	}
+	for _, c := range append(append([]corev1.Container{}, pod.InitContainers...), pod.Containers...) {
+		mem, cpu := c.Resources.Limits[corev1.ResourceMemory], c.Resources.Limits[corev1.ResourceCPU]
+		if mem.IsZero() || cpu.IsZero() {
+			t.Errorf("%s has no hard ceiling: %v", c.Name, c.Resources.Limits)
+		}
+		if req := c.Resources.Requests[corev1.ResourceMemory]; req.Cmp(mem) > 0 {
+			t.Errorf("%s asks for more memory (%s) than its limit (%s)", c.Name, req.String(), mem.String())
+		}
+	}
+	if got := pod.Containers[0].Resources.Limits[corev1.ResourceMemory]; got.Cmp(resource.MustParse(buildMemoryLimit)) != 0 {
+		t.Errorf("build memory limit = %s, want %s", got.String(), buildMemoryLimit)
+	}
+}
+
+// A build past its memory ceiling says so, and names the ceiling.
+func TestABuildOutOfMemorySaysSo(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1", Namespace: "app-dk"}}
+	for _, tc := range []struct {
+		init bool
+		want string
+	}{
+		{false, "The build ran out of memory while building the image: a build may use up to " + buildMemoryLimit},
+		{true, "The build ran out of memory while fetching the source: a build may use up to " + buildFetchMemoryLimit},
+	} {
+		oom := corev1.ContainerStatus{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled", Message: "killed"}}}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1-oom", Namespace: "app-dk", Labels: map[string]string{shpyrdv1.LabelBuild: job.Name}}}
+		if tc.init {
+			oom.Name = fetchContainer
+			pod.Status.InitContainerStatuses = []corev1.ContainerStatus{oom}
+		} else {
+			oom.Name = buildContainer
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{oom}
+		}
+		_ = c.Delete(ctx, pod)
+		if err := c.Create(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if _, msg := r.buildOutcome(ctx, job); !strings.HasPrefix(msg, tc.want) {
+			t.Errorf("init=%v: message = %q, want %q", tc.init, msg, tc.want)
+		}
 	}
 }

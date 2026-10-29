@@ -489,7 +489,9 @@ func TestSharedPostgresKeepsMoreCopiesWhenAsked(t *testing.T) {
 
 // A shared server gets its own backups once the platform's bucket answers:
 // the plugin's ObjectStore, a daily schedule, and the plugin on the
-// Cluster, put on a server rendered before the bucket was ready.
+// Cluster, put on a server rendered before the bucket was ready only once
+// its instances are up (put on earlier, the instance manager waits for a
+// sidecar its pod does not have and never starts PostgreSQL).
 func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 	ctx := context.Background()
 	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
@@ -533,9 +535,27 @@ func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 		t.Errorf("schedule = %s for %s", cron, target)
 	}
 	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 0 {
+		t.Errorf("no plugin while the server's instances are still coming: %v", plugins)
+	}
+	_ = unstructured.SetNestedField(server.Object, int64(1), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 0 {
+		t.Errorf("no plugin with one instance of two up: %v", plugins)
+	}
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
 	plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins")
 	if len(plugins) != 1 {
-		t.Fatalf("plugins = %v", plugins)
+		t.Fatalf("plugins once the server is up = %v", plugins)
 	}
 	plugin, _ := plugins[0].(map[string]interface{})
 	object, _, _ := unstructured.NestedString(plugin, "parameters", "barmanObjectName")
@@ -1333,8 +1353,18 @@ func TestConvertSharedToDedicated(t *testing.T) {
 		t.Errorf("no copy before the extensions are applied: %v", jobs)
 	}
 	markApplied(t, c, ext)
+	spin(t, r, key, 2)
+	if jobs := convertJobs(t, c); len(jobs) != 0 {
+		t.Errorf("no copy before the new cluster's superuser credentials are there (they count the rows): %v", jobs)
+	}
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	values, secrets := convertJobEnv(t, c, key)
+	if secrets["TARGET_SUPERUSER"] != "convert-"+hash || secrets["TARGET_SUPERPASSWORD"] != "convert-"+hash {
+		t.Errorf("the target's superuser for the count: %v", secrets)
+	}
 	if values["SOURCE_HOST"] != "pg-shared-1-rw" || values["SOURCE_DATABASE"] != "db_"+hash || secrets["SOURCE_USER"] != "pg-shared-1-dump" ||
 		values["PGHOST"] != "db-rw.p-shop.svc.cluster.local" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
 		!strings.HasPrefix(values["SHPYRD_CONVERT_KEY"], "db_"+hash+"/") || !strings.HasSuffix(values["SHPYRD_CONVERT_KEY"], ".converted.dump") ||
@@ -1409,6 +1439,10 @@ func TestConvertToDedicatedFailsBack(t *testing.T) {
 	}
 	spin(t, r, key, 2)
 	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	// The new cluster's superuser, whose count verifies the copy.
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	finishJob(t, c, key, false)
 	spin(t, r, key, 4)
@@ -1504,7 +1538,7 @@ func TestConvertDedicatedToShared(t *testing.T) {
 	}
 	values, secrets := convertJobEnv(t, c, key)
 	if values["SOURCE_HOST"] != "db-rw.app-shop.svc.cluster.local" || values["SOURCE_DATABASE"] != "app" || secrets["SOURCE_USER"] != "convert-"+hash ||
-		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
+		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash || secrets["TARGET_SUPERUSER"] != "pg-shared-1-superuser" ||
 		!strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "vector") || !strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "pgcrypto") ||
 		values["SHPYRD_CONVERT_CAP"] != "1073741824" || values["SHPYRD_CONVERT_FENCE_ROLE"] != "app" {
 		t.Errorf("job env = %v secrets %v", values, secrets)
@@ -1573,6 +1607,10 @@ func TestConvertBackTakesANewHashAndJob(t *testing.T) {
 	}
 	spin(t, r, key, 2)
 	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	// The new cluster's superuser, whose count verifies the copy.
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	firstJob := convertJob(t, c, key).Name
 	if !strings.HasPrefix(firstJob, "convert-"+first+"-") {
@@ -1616,7 +1654,7 @@ func TestConvertBackTakesANewHashAndJob(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); client.IgnoreAlreadyExists(err) != nil {
 		t.Fatal(err)
 	}
 	spin(t, r, key, 4)

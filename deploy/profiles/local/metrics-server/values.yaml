@@ -1,0 +1,4 @@
+# Local (kind) profile: the kubelets' serving certificates are self-signed
+# and name no IP, so the Metrics Server would refuse them.
+args:
+  - --kubelet-insecure-tls

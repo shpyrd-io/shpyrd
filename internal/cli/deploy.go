@@ -24,15 +24,21 @@ import (
 
 func newDeployCmd(g *globalFlags) *cobra.Command {
 	var (
-		appName     string
-		gitURL      string
-		gitRef      string
-		subPath     string
-		image       string
-		noWait      bool
-		workingTree bool
-		dockerfile  string
-		save        bool
+		appName      string
+		gitURL       string
+		gitRef       string
+		subPath      string
+		image        string
+		noWait       bool
+		workingTree  bool
+		dockerfile   string
+		save         bool
+		autoDeploy   bool
+		noAutoDeploy bool
+		watchPaths   []string
+		noWatchPaths bool
+		waitForCI    bool
+		noWaitForCI  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -47,7 +53,8 @@ at https://<app>.<domain>.
 
   shpyrd deploy --project myapp               archive the committed tree and build in-cluster
   shpyrd deploy --working-tree                archive the directory as is, uncommitted changes included
-  shpyrd deploy --git https://github.com/o/r  build from a Git URL; new commits rebuild automatically (buildpacks)
+  shpyrd deploy --git https://github.com/o/r  build from a Git URL; every push to the branch deploys (--no-auto-deploy records them only)
+  shpyrd deploy --git ... --watch-path 'services/api/**' --wait-for-ci   deploy only API changes, once CI passes (GitHub App)
   shpyrd deploy --git ... --dockerfile Dockerfile   build the repository's Dockerfile
   shpyrd deploy --image ghcr.io/o/r:tag       run a prebuilt image (no build)
 
@@ -63,6 +70,18 @@ ones into the file.
 
 The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if gitURL == "" && (autoDeploy || noAutoDeploy) {
+				return errors.New("--auto-deploy and --no-auto-deploy go with --git")
+			}
+			if autoDeploy && noAutoDeploy {
+				return errors.New("--auto-deploy and --no-auto-deploy contradict each other")
+			}
+			if gitURL == "" && (len(watchPaths) > 0 || noWatchPaths || waitForCI || noWaitForCI) {
+				return errors.New("--watch-path, --no-watch-paths, --wait-for-ci and --no-wait-for-ci go with --git")
+			}
+			if _, _, err := gitSourceSettings(watchPaths, noWatchPaths, waitForCI, noWaitForCI); err != nil {
+				return err
+			}
 			ctx := signalContext()
 			out := g.progress(cmd)
 			name, err := resolveAppName(appName)
@@ -194,9 +213,13 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				req.Image = image
 				req.Note = "Deploy image " + image
 			case gitURL != "":
-				ref := firstNonEmpty(gitRef, "main")
-				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, ref, name)
-				req.Git = &shpyrdv1.GitSource{URL: gitURL, Revision: ref}
+				src, err := gitDeploySource(gitURL, gitRef, autoDeploy, noAutoDeploy)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, src.Revision, name)
+				req.Git = src
+				req.WatchPaths, req.WaitForChecks, _ = gitSourceSettings(watchPaths, noWatchPaths, waitForCI, noWaitForCI)
 			default:
 				archive, ref, err := archiveSource(out, workingTree, workspaceRoot)
 				workspacePackage := ""
@@ -247,6 +270,9 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			if err := json.Unmarshal(raw, &after); err != nil {
 				return fmt.Errorf("deploy: %w", err)
 			}
+			if after.SourceNote != "" {
+				fmt.Fprintf(out, "    %s\n", after.SourceNote)
+			}
 			if noWait {
 				return g.print(cmd, map[string]any{"project": name, "waited": false}, func(w io.Writer) {
 					fmt.Fprintln(w, "Deploy requested. Follow with `shpyrd projects info", name+"`.")
@@ -257,20 +283,26 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			// A build happens only when what is built changed: the same
 			// archive with new processes or mounts is released as it is.
 			sourceChanged := before.Status.LatestBuild == "" || !sameSource(before.Spec.Source, after.Spec.Source) || (before.Spec.Build == nil) != (after.Spec.Build == nil) || (before.Spec.Build != nil && after.Spec.Build != nil && !reflect.DeepEqual(*before.Spec.Build, *after.Spec.Build))
+			// A failure the project showed before this deploy is the
+			// previous release's until the project moves on (#241); with
+			// nothing new to release, it is still the answer.
+			var stale *staleFailure
 			switch {
 			case after.Spec.Source != nil && after.Spec.PinnedImage == "" && req.Image == "" && sourceChanged:
+				stale = staleFailureOf(before)
 				fmt.Fprintln(out, "==> Building")
 				if err := ac.followBuildAPI(ctx, name, before.Status.LatestBuild, 3*time.Minute); err != nil {
 					return err // the platform's message says what failed
 				}
 			case specChanged:
+				stale = staleFailureOf(before)
 				fmt.Fprintln(out, "    source unchanged since the last build; releasing the configuration change")
 			default:
 				fmt.Fprintln(out, "    no changes since the last deploy")
 			}
 
 			fmt.Fprintln(out, "==> Releasing")
-			final, err := ac.waitRunningAPI(ctx, name, after.Status.Generation, 10*time.Minute)
+			final, err := ac.waitRunningAPI(ctx, name, after.Status.Generation, 10*time.Minute, stale)
 			if err != nil {
 				return err
 			}
@@ -308,7 +340,39 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "build with this Dockerfile (path relative to the deployed directory) instead of buildpacks")
 	cmd.Flags().Lookup("dockerfile").NoOptDefVal = "auto"
 	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile or workspace detection inferred into shpyrd.yaml")
+	cmd.Flags().BoolVar(&autoDeploy, "auto-deploy", false, "with --git: deploy every push to the branch (the default; switches it back on)")
+	cmd.Flags().BoolVar(&noAutoDeploy, "no-auto-deploy", false, "with --git: record pushes to the branch without deploying them")
+	cmd.Flags().StringArrayVar(&watchPaths, "watch-path", nil, "with --git: deploy only commits that change a file matching this glob, from the repository root (repeatable; ! excludes, the last match wins; GitHub App only)")
+	cmd.Flags().BoolVar(&noWatchPaths, "no-watch-paths", false, "with --git: remove the watch paths, so every commit deploys")
+	cmd.Flags().BoolVar(&waitForCI, "wait-for-ci", false, "with --git: deploy a commit only once its other checks on GitHub pass (GitHub App only)")
+	cmd.Flags().BoolVar(&noWaitForCI, "no-wait-for-ci", false, "with --git: deploy commits without waiting for CI")
 	return cmd
+}
+
+// gitSourceSettings is what --watch-path, --no-watch-paths, --wait-for-ci
+// and --no-wait-for-ci ask of the server; nil leaves the project's setting.
+func gitSourceSettings(paths []string, noPaths, wait, noWait bool) (*[]string, *bool, error) {
+	if len(paths) > 0 && noPaths {
+		return nil, nil, errors.New("--watch-path and --no-watch-paths contradict each other")
+	}
+	if wait && noWait {
+		return nil, nil, errors.New("--wait-for-ci and --no-wait-for-ci contradict each other")
+	}
+	var watch *[]string
+	switch {
+	case noPaths:
+		none := []string{}
+		watch = &none
+	case len(paths) > 0:
+		given := append([]string(nil), paths...)
+		watch = &given
+	}
+	var waitFor *bool
+	if wait || noWait {
+		v := wait
+		waitFor = &v
+	}
+	return watch, waitFor, nil
 }
 
 // detectDockerfile picks the dockerfile strategy for local deploys when the
@@ -479,4 +543,18 @@ func sameSource(a, b *shpyrdv1.Source) bool {
 		return a.Git.URL == b.Git.URL && a.Git.Revision == b.Git.Revision
 	}
 	return false
+}
+
+// gitDeploySource is the source `deploy --git` sends. Without a flag
+// auto-deploy is left out, and the server keeps the project's setting.
+func gitDeploySource(url, ref string, on, off bool) (*shpyrdv1.GitSource, error) {
+	if on && off {
+		return nil, errors.New("--auto-deploy and --no-auto-deploy contradict each other")
+	}
+	src := &shpyrdv1.GitSource{URL: url, Revision: firstNonEmpty(ref, "main")}
+	if on || off {
+		v := on
+		src.AutoDeploy = &v
+	}
+	return src, nil
 }

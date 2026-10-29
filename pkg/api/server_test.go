@@ -47,6 +47,13 @@ func sampleApp(name string, phase string, releases ...shpyrdv1.Release) *shpyrdv
 
 func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeObjs ...interface{}) (*Server, client.Client) {
 	t.Helper()
+	return newTestServerPublic(t, PublicConfig{Domain: "example.test"}, prom, crObjs, kubeObjs...)
+}
+
+// newTestServerPublic is newTestServer with the public configuration
+// given before construction, as the resolver of doors reads it then.
+func newTestServerPublic(t *testing.T, pub PublicConfig, prom *PromClient, crObjs []client.Object, kubeObjs ...interface{}) (*Server, client.Client) {
+	t.Helper()
 	scheme, err := kube.Scheme()
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +65,23 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 	}
 	cs := kubefake.NewSimpleClientset(toRuntime(runtimeObjs)...)
 	k := &kube.Client{Kube: cs, Namespace: "shpyrd-system"}
-	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
+	return newTestServerOnPublic(t, pub, principalFixtureStore(), cr, prom, k)
+}
+
+// newTestServerOn is a replica of the test server on st: two of them on one
+// store are two replicas of the server behind the front door.
+func newTestServerOn(t *testing.T, st store.Store, cr client.Client, prom *PromClient, k *kube.Client) (*Server, client.Client) {
+	t.Helper()
+	return newTestServerOnPublic(t, PublicConfig{Domain: "example.test"}, st, cr, prom, k)
+}
+
+// newTestServerOnPublic is newTestServerOn with the public configuration given.
+func newTestServerOnPublic(t *testing.T, pub PublicConfig, st store.Store, cr client.Client, prom *PromClient, k *kube.Client) (*Server, client.Client) {
+	t.Helper()
+	if k == nil {
+		k = &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
+	}
+	s, err := newServer(k, Options{Token: testToken, Store: st, Apps: cr, Prometheus: prom, Public: pub}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,6 +725,11 @@ func TestVolumesAPIAndScaleRefusal(t *testing.T) {
 	}
 	if rec := do(t, s, "POST", "/api/projects/demo/processes", `{"processes":{"web":{"replicas":2}}}`, true); rec.Code != http.StatusBadRequest {
 		t.Errorf("batch scale: %d %s", rec.Code, rec.Body.String())
+	}
+	// Bounds too: the maximum is what the process may come to (RFC-0047).
+	s.autoscaleAvailable = func() bool { return true }
+	if rec := do(t, s, "POST", "/api/projects/demo/processes", `{"processes":{"web":{"autoscale":{"min":1,"max":3}}}}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "which one instance at a time can use") {
+		t.Errorf("bounds on a pinned process: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := do(t, s, "POST", "/api/projects/demo/scale", `{"process":"web","replicas":1}`, true); rec.Code != http.StatusOK {
 		t.Errorf("scale to 1: %d %s", rec.Code, rec.Body.String())

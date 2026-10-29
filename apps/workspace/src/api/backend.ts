@@ -1,13 +1,18 @@
 import { parseLogLine } from "@shpyrd/shared/logs";
 import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
-import { json, request, stream } from "@shpyrd/shared/api/http";
+import { ApiError } from "@shpyrd/shared/api/error";
+import { json, request, requestWithHeaders, stream } from "@shpyrd/shared/api/http";
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
 import type {
   APIToken,
   AuditEntry,
   DomainStatus,
+  GitHubBranches,
+  GitHubRepositories,
+  MetricChart,
   Metrics,
+  MetricsQuery,
   Project,
   ProjectSummary,
   Series,
@@ -38,12 +43,14 @@ type Chart = {
   series: ChartSeries[];
   error?: string;
   note?: string;
+  instanceCapable?: boolean;
 };
 export type MetricsAnswer = {
   range: string;
   step: number;
   charts: Chart[];
   releases: { number: number; time: number; label: string }[];
+  ooms?: { time: number; process: string; instance?: string; limit: number; size?: string; release?: number }[];
 };
 
 // What the server answers for one project: the phase, the address and
@@ -79,6 +86,7 @@ export function toProject(d: DetailAnswer): Project {
     release: releases.at(-1)?.number ?? 0,
     access: d.spec.access ?? "public",
     exposure: d.spec.exposure,
+    maintenance: d.spec.maintenance?.enabled ? d.spec.maintenance : undefined,
   };
 }
 
@@ -115,16 +123,38 @@ export function toLogLine(record: LogRecord): LogLine {
 
 const tones: Record<string, Series["tone"]> = { web: "orange", worker: "blue" };
 
-function chartOf(answer: MetricsAnswer, id: string): Series[] {
+// A chart as the page reads it. A chart whose query failed keeps its
+// error and draws nothing; one the server did not answer at all is empty.
+function chartOf(answer: MetricsAnswer, id: string): MetricChart {
   const chart = answer.charts.find((c) => c.id === id);
-  if (!chart || chart.error) return [];
-  return chart.series.map((s) => ({
-    name: s.name,
-    points: s.points,
-    reference: s.reference,
-    burst: s.burst,
-    tone: tones[s.name],
-  }));
+  if (!chart) return { series: [], unit: "", instanceCapable: false };
+  return {
+    unit: chart.unit,
+    error: chart.error,
+    note: chart.note,
+    instanceCapable: chart.instanceCapable ?? false,
+    series: chart.error
+      ? []
+      : chart.series.map((s) => ({
+          name: s.name,
+          points: s.points,
+          reference: s.reference,
+          burst: s.burst,
+          tone: tones[s.name],
+        })),
+  };
+}
+
+// The address of the metrics: only what differs from the server's own
+// defaults is written, so the plain view asks the question it always did.
+export function metricsPath(slug: string, query: MetricsQuery): string {
+  const params = new URLSearchParams({ range: query.range });
+  if (query.process) params.set("process", query.process);
+  if (query.by === "instance") params.set("by", "instance");
+  if (query.agg && query.agg !== "none") params.set("agg", query.agg);
+  if (query.mode) params.set("mode", query.mode);
+  if (query.replaced) params.set("replaced", "true");
+  return `${project(slug)}/metrics?${params}`;
 }
 
 export function toMetrics(answer: MetricsAnswer): Metrics {
@@ -143,6 +173,14 @@ export function toMetrics(answer: MetricsAnswer): Metrics {
     network: chartOf(answer, "network"),
     instances: chartOf(answer, "instances"),
     releases: answer.releases.map((r) => ({ time: r.time, label: r.label })),
+    ooms: (answer.ooms ?? []).map((k) => ({
+      time: k.time,
+      process: k.process,
+      instance: k.instance,
+      limit: k.limit,
+      size: k.size,
+      release: k.release,
+    })),
   };
 }
 
@@ -181,6 +219,10 @@ export const backend: Api = {
   putProjectCaps: (caps) =>
     request("/api/workspace/project-caps", json("PUT", { projectCaps: caps })),
   updateWorkspace: (body) => request("/api/workspace", json("PATCH", body)),
+  reloadWorkspaceUI: () => request("/api/workspace/ui/reload", { method: "POST" }),
+  registryTokens: () => request("/api/workspace/registry-auth"),
+  setRegistryToken: (host, body) => request(`/api/workspace/registry-auth/${encodeURIComponent(host)}`, json("PUT", body)),
+  unsetRegistryToken: (host) => request(`/api/workspace/registry-auth/${encodeURIComponent(host)}`, { method: "DELETE" }),
   people: () => request("/api/workspace/people"),
   setPersonRole: (email, role) =>
     request(
@@ -277,6 +319,37 @@ export const backend: Api = {
     ),
   updateProject: async (slug, body) =>
     toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
+  projectGitHooks: (slug) => request(`${project(slug)}/git-hooks`),
+  projectGitAuth: (slug) => request(`${project(slug)}/git-auth`),
+  github: () => request("/api/workspace/github"),
+  connectGitHub: () => request("/api/workspace/github/connect", json("POST", {})),
+  disconnectGitHub: (id) => request(`/api/workspace/github/installations/${id}`, gone),
+  githubMe: async () => {
+    try {
+      return await request("/api/me/github");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+  linkGitHub: (returnTo) => request("/api/me/github/link", json("POST", { return: returnTo })),
+  unlinkGitHub: () => request("/api/me/github", gone),
+  githubAccounts: () => request("/api/workspace/github/accounts"),
+  githubRepositories: async (installation) => {
+    const { data, headers } = await requestWithHeaders<GitHubRepositories>(
+      `/api/workspace/github/repositories${installation ? `?installation=${installation}` : ""}`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
+  },
+  githubBranches: async (fullName) => {
+    const [owner, repo] = fullName.split("/");
+    const { data, headers } = await requestWithHeaders<GitHubBranches>(
+      `/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
+  },
   setProjectIcon: async (slug, dataUrl) =>
     toProject(
       await request<DetailAnswer>(
@@ -296,13 +369,16 @@ export const backend: Api = {
       `${project(slug)}/redeploy`,
       json("POST", action ? { action } : {}),
     ),
-  rollback: async (slug, release) => {
-    await request(`${project(slug)}/rollback`, json("POST", { release }));
+  rollback: async (slug, release, force) => {
+    await request(
+      `${project(slug)}/rollback`,
+      json("POST", force ? { release, force } : { release }),
+    );
   },
-  applyProcesses: async (slug, changes) => {
+  applyProcesses: async (slug, changes, force) => {
     await request(
       `${project(slug)}/processes`,
-      json("POST", { processes: changes }),
+      json("POST", force ? { processes: changes, force } : { processes: changes }),
     );
     return backend.project(slug);
   },
@@ -312,6 +388,10 @@ export const backend: Api = {
   },
   setAccess: async (slug, access) => {
     await request(`${project(slug)}/access`, json("PUT", { access }));
+    return backend.project(slug);
+  },
+  setMaintenance: async (slug, body) => {
+    await request(`${project(slug)}/maintenance`, json("PUT", body));
     return backend.project(slug);
   },
   preview: (slug, body) =>
@@ -364,6 +444,11 @@ export const backend: Api = {
     request(
       `/api/projects/${encodeURIComponent(slug)}/resources/objectbucket/${encodeURIComponent(name)}/rotate`,
       { method: "POST" },
+    ),
+  sleepPostgres: (slug, name, after) =>
+    request(
+      `${project(slug)}/resources/postgres/${encodeURIComponent(name)}/sleep`,
+      json("PATCH", { sleep: { after } }),
     ),
   convertPostgres: (slug, name, body) =>
     request(
@@ -480,12 +565,8 @@ export const backend: Api = {
   },
   // In total mode the CPU is in cores and the memory in bytes, with the
   // allocation of each process beside them.
-  metrics: async (slug, range) =>
-    toMetrics(
-      await request<MetricsAnswer>(
-        `${project(slug)}/metrics?range=${encodeURIComponent(range)}&mode=total`,
-      ),
-    ),
+  metrics: async (slug, query) =>
+    toMetrics(await request<MetricsAnswer>(metricsPath(slug, query))),
   instances: (slug) => request(`${project(slug)}/instances`),
   shellTicket: (slug, instance) =>
     request(

@@ -15,11 +15,16 @@ import type {
   DomainClaim,
   DomainStatus,
   Drain,
+  GitHubAccounts,
+  GitHubConnections,
+  GitHubLink,
+  GitHubRepository,
   Identity,
   Invitation,
   LoginMethods,
   Member,
   Person,
+  RegistryToken,
   Project,
   ProjectSummary,
   PublicConfig,
@@ -30,6 +35,7 @@ import type {
   VolumeInfo,
   WorkspaceDomain,
   WorkspaceInfo,
+  SleepStatus,
 } from "./types";
 import { buildOutput, liveLine, logsOf, metricsOf } from "@/lib/samples";
 import audit from "../../mock/audit.json";
@@ -77,11 +83,16 @@ type Things = {
   domainClaims: DomainClaim[];
   sizes: SizeCatalog;
   globals: Globals;
+  github: GitHubConnections;
+  githubLink: GitHubLink | null;
+  githubRepositories: GitHubRepository[];
+  githubBranches: Record<string, string[]>;
+  registryTokens: RegistryToken[];
 };
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "5";
+const shape = "7";
 const projectsOf = collection<Project>(
   `projects${shape}`,
   projects as Project[],
@@ -121,6 +132,20 @@ const empty = (): ProjectThings => ({
   members: [],
   allow: [],
 });
+
+// The read-back of a sleep policy as the server writes it (#120): the
+// project's own, an explicit off, or the workspace's default (15m, page
+// mode, in the Mock's workspace).
+function sleepReadBack(
+  own: { after?: string; resuming?: "page" | "wait" | "" } | undefined,
+  was: { state?: string } | undefined,
+): SleepStatus {
+  const state = (was?.state as "awake" | "sleeping" | undefined) ?? "awake";
+  if (own?.after === "off") return { state: "awake", source: "off" };
+  if (own?.after)
+    return { state, after: own.after, resuming: own.resuming || "wait", source: "project" };
+  return { state, after: "15m", resuming: "page", source: "workspace" };
+}
 
 async function ofProject(slug: string): Promise<[Things, ProjectThings]> {
   const all = await thingsOf.get();
@@ -286,6 +311,64 @@ const admitDisk = async (
   }
 };
 
+// The server's check of watch paths (pkg/gitauth/watchpaths.go), in its
+// words: at most 20 patterns of up to 200 characters, each one readable.
+function watchPathsError(paths: string[]): string | undefined {
+  if (paths.length > 20)
+    return `a project takes at most 20 watch paths; there are ${paths.length}`;
+  for (const p of paths) {
+    // Characters, as the server counts them, not UTF-16 units.
+    const chars = [...p];
+    if (chars.length > 200)
+      return `a watch path is at most 200 characters; ${JSON.stringify(chars.slice(0, 40).join(""))}… is longer`;
+    const raw = p.replace(/^!/, "").replace(/^\//, "");
+    if (raw === "") return `the watch path ${JSON.stringify(p)} names no file or folder`;
+    const parts = raw.endsWith("/") ? raw.slice(0, -1).split("/") : raw.split("/");
+    if (parts.some((s) => s === ""))
+      return `the watch path ${JSON.stringify(p)} has an empty part (//)`;
+    if (parts.some((s) => s !== "**" && s.includes("**")))
+      return `in the watch path ${JSON.stringify(p)}, ** stands alone between slashes, as in services/**/api`;
+    if (parts.some(unreadable))
+      return `the watch path ${JSON.stringify(p)} is not a pattern shpyrd can read: check its [ ] and \\`;
+  }
+}
+
+// A part path.Match refuses (a port of Go's matchChunk and getEsc, which
+// check the whole pattern even when nothing is matched): a trailing \, or
+// a class whose elements start with - or ], run out, or are not closed.
+function unreadable(part: string): boolean {
+  const chars = [...part];
+  let i = 0;
+  // One class element: a character, escaped or not; Go needs more after it.
+  const esc = (): boolean => {
+    if (i >= chars.length || chars[i] === "-" || chars[i] === "]") return false;
+    if (chars[i] === "\\" && ++i >= chars.length) return false;
+    i++;
+    return i < chars.length;
+  };
+  while (i < chars.length) {
+    if (chars[i] === "\\") {
+      if (++i >= chars.length) return true;
+      i++;
+    } else if (chars[i] === "[") {
+      i++;
+      if (chars[i] === "^") i++;
+      for (let n = 0; ; n++) {
+        if (chars[i] === "]" && n > 0) {
+          i++;
+          break;
+        }
+        if (!esc()) return true;
+        if (chars[i] === "-") {
+          i++;
+          if (!esc()) return true;
+        }
+      }
+    } else i++;
+  }
+  return false;
+}
+
 export const mock: Api = {
   ...mockProjectArchives("workspace"),
   config: async () => {
@@ -388,11 +471,41 @@ export const mock: Api = {
   },
   updateWorkspace: async (body) => {
     const current = await workspaceOf.get();
-    const { logo, color, ...rest } = body;
+    const { logo, color, ui, ...rest } = body;
     const branding = { ...current.branding };
     if (logo !== undefined) branding.logoUrl = logo || undefined;
     if (color !== undefined) branding.color = color || undefined;
-    return workspaceOf.set({ ...current, ...rest, branding, updatedAt: now() });
+    // An application of the workspace's own (RFC-0084): the Mock
+    // settles a tag to a made-up digest and reports it serving.
+    let chosen = current.ui;
+    if (ui !== undefined) {
+      if (!ui.trim()) chosen = undefined;
+      else {
+        const ref = ui.trim();
+        if (!/^oci:\/\/[^/]+\/.+/.test(ref) && !ref.startsWith("dir:/"))
+          throw new ApiError(400, "unknown source: oci://host/repository@sha256:... or dir:/path");
+        const settled = ref.includes("@sha256:") ? ref : `${ref.replace(/:[^/:]+$/, "")}@sha256:${"0".repeat(64)}`;
+        chosen = { ref: settled, setBy: "ana@acme.test", setAt: now(), status: { state: "serving", at: now(), name: "Acme", version: "2.3.1" } };
+      }
+    }
+    return workspaceOf.set({ ...current, ...rest, branding, ui: chosen, updatedAt: now() });
+  },
+  reloadWorkspaceUI: async () => {
+    await wait();
+    return currentWorkspace();
+  },
+  registryTokens: async () => (await thingsOf.get()).registryTokens,
+  setRegistryToken: async (host, body) => {
+    const all = await thingsOf.get();
+    const token: RegistryToken = { host, username: body.username, updatedBy: "ana@acme.test", updatedAt: now() };
+    all.registryTokens = [...all.registryTokens.filter((t) => t.host !== host), token].sort((a, b) => a.host.localeCompare(b.host));
+    await thingsOf.set(all);
+    return token;
+  },
+  unsetRegistryToken: async (host) => {
+    const all = await thingsOf.get();
+    all.registryTokens = all.registryTokens.filter((t) => t.host !== host);
+    await thingsOf.set(all);
   },
   people: async () => (await thingsOf.get()).people,
   setPersonRole: async (email, role) => {
@@ -687,7 +800,115 @@ export const mock: Api = {
     if (body.featured !== undefined) p.featured = body.featured;
     if (body.icon !== undefined) p.icon = body.icon || undefined;
     if (body.iconColor !== undefined) p.iconColor = body.iconColor || undefined;
+    if (body.autoDeploy !== undefined) {
+      const git = p.spec.source?.git;
+      if (!git)
+        throw new ApiError(
+          400,
+          "the project does not deploy from a git repository: auto-deploy follows a git branch",
+        );
+      git.autoDeploy = body.autoDeploy;
+    }
+    if (body.watchPaths !== undefined || body.waitForChecks !== undefined) {
+      const git = p.spec.source?.git;
+      if (!git)
+        throw new ApiError(
+          400,
+          "the project does not deploy from a git repository: watch paths and wait for CI follow a git branch",
+        );
+      if (body.watchPaths !== undefined) {
+        const paths = body.watchPaths.map((l) => l.trim()).filter(Boolean);
+        const bad = watchPathsError(paths);
+        if (bad) throw new ApiError(422, bad);
+        git.watchPaths = paths.length ? paths : undefined;
+      }
+      if (body.waitForChecks !== undefined)
+        git.waitForChecks = body.waitForChecks || undefined;
+    }
     return projectsOf.set(p);
+  },
+  projectGitHooks: async (slug) => {
+    await projectsOf.find(slug);
+    return {
+      url: `https://acme.shpyrd.app/api/hooks/git/${slug}/5e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f6138`,
+      secret: "9a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f36",
+    };
+  },
+  projectGitAuth: async (slug) => {
+    const url = (await projectsOf.find(slug)).spec.source?.git?.url;
+    // The fixtures' URLs come with and without the scheme.
+    const owner = url?.match(/^(?:https:\/\/)?github\.com\/([^/]+)\//i)?.[1]?.toLowerCase();
+    return owner === "acme" ? { url, using: "github-app", githubAccount: "acme" } : { url, using: "none" };
+  },
+  github: async () => (await thingsOf.get()).github,
+  // GitHub would ask where to install, then send the browser back to the
+  // Git page: the Mock connects acme-labs and sends it there at once.
+  connectGitHub: async () => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    if (!all.github.installations.some((i) => i.id === 77)) {
+      all.github.installations.push({
+        id: 77,
+        account: "acme-labs",
+        type: "Organization",
+        connectedBy: "you@acme.test",
+        createdAt: now(),
+        suspended: false,
+        manageURL: "https://github.com/organizations/acme-labs/settings/installations/77",
+      });
+      await thingsOf.set(all);
+    }
+    return { installURL: "/workspace/git", authorizeURL: "/workspace/git" };
+  },
+  disconnectGitHub: async (id) => {
+    const all = await thingsOf.get();
+    all.github.installations = all.github.installations.filter((i) => i.id !== id);
+    await thingsOf.set(all);
+  },
+  githubMe: async () => (await thingsOf.get()).githubLink,
+  // GitHub would ask the person to authorize the App in a popup: the Mock
+  // links Ana at once.
+  linkGitHub: async () => {
+    const all = await thingsOf.get();
+    all.githubLink = { login: "ana-souza", linkedAt: now() };
+    await thingsOf.set(all);
+    return { authorizeURL: "" };
+  },
+  unlinkGitHub: async () => {
+    const all = await thingsOf.get();
+    all.githubLink = null;
+    await thingsOf.set(all);
+  },
+  githubAccounts: async () => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    const connected = all.github.installations.length;
+    if (connected > 0 && !all.githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
+    const accounts: GitHubAccounts["accounts"] = all.github.installations.map((i) => ({
+      installation: i.id,
+      account: i.account,
+      type: i.type,
+      suspended: i.suspended,
+      manageURL: i.manageURL,
+    }));
+    return { accounts, connected };
+  },
+  githubRepositories: async (installation) => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    if (!all.github.installations.length) return [];
+    if (!all.githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
+    const live = new Set(all.github.installations.map((i) => i.id));
+    return all.githubRepositories.filter((r) => live.has(r.installation) && (installation === undefined || r.installation === installation));
+  },
+  githubBranches: async (fullName) => {
+    const branches = (await thingsOf.get()).githubBranches[fullName];
+    if (!branches) throw new ApiError(404, `No GitHub connection of this workspace reaches ${fullName.split("/")[0]}.`);
+    if (!(await thingsOf.get()).githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
+    return branches;
   },
   // The Mock keeps the image itself, as the data URL it came as.
   setProjectIcon: async (slug, dataUrl) => {
@@ -789,15 +1010,42 @@ export const mock: Api = {
         ...(change.size ? { size: change.size } : {}),
         ...(change.replicas !== undefined ? { replicas: change.replicas } : {}),
       };
+      // Sleep (#135): "off" is stored, "default" clears the project's own.
+      if (change.sleep) {
+        const after = change.sleep.after.toLowerCase();
+        if (after === "default" || after === "") delete spec.sleep;
+        else spec.sleep = after === "off" ? { after: "off" } : { after, resuming: change.sleep.resuming ?? "wait" };
+      }
+      // Bounds (RFC-0047): off clears them; a count on a process with
+      // bounds is its minimum.
+      if (change.autoscale) {
+        if (change.autoscale.off) delete spec.autoscale;
+        else
+          spec.autoscale = {
+            min: change.autoscale.min ?? 1,
+            max: change.autoscale.max ?? 1,
+            ...(change.autoscale.cpu !== undefined ? { cpu: change.autoscale.cpu } : {}),
+            ...(change.autoscale.concurrency !== undefined ? { concurrency: change.autoscale.concurrency } : {}),
+          };
+      }
+      if (spec.autoscale && change.replicas !== undefined) spec.autoscale = { ...spec.autoscale, min: change.replicas };
       p.spec.processes = { ...p.spec.processes, [name]: spec };
       const st = p.processes?.[name] ?? { desired: 1, ready: 1 };
+      const desired = spec.autoscale ? Math.max(spec.autoscale.min, Math.min(spec.autoscale.max, st.desired)) : (spec.replicas ?? st.desired);
+      const { autoscale: _was, ...rest } = st;
       p.processes = {
         ...p.processes,
         [name]: {
-          ...st,
-          desired: spec.replicas ?? st.desired,
-          ready: spec.replicas ?? st.ready,
+          ...rest,
+          desired,
+          ready: desired,
           size: spec.size ?? st.size,
+          ...(change.sleep && name === "web"
+            ? { sleep: sleepReadBack(spec.sleep, st.sleep) }
+            : {}),
+          ...(spec.autoscale
+            ? { autoscale: { min: spec.autoscale.min, max: spec.autoscale.max, cpu: spec.autoscale.cpu ?? 70, concurrency: spec.autoscale.concurrency ?? 20, state: "active" as const } }
+            : {}),
         },
       };
     }
@@ -820,6 +1068,14 @@ export const mock: Api = {
   },
   setAccess: async (slug, access) =>
     projectsOf.set({ ...(await projectsOf.find(slug)), access }),
+  setMaintenance: async (slug, body) => {
+    await wait();
+    const p = await projectsOf.find(slug);
+    const maintenance = body.enabled
+      ? { enabled: true, message: body.message, since: p.maintenance?.since ?? new Date().toISOString(), by: p.maintenance?.by ?? me.email }
+      : undefined;
+    return projectsOf.set({ ...p, maintenance, spec: { ...p.spec, maintenance } });
+  },
   preview: async (slug, body) => {
     await wait();
     const p = await projectsOf.find(slug);
@@ -1148,6 +1404,27 @@ export const mock: Api = {
       await thingsOf.set(all2);
     }, 5000);
     return { note: `A new key for ${name} is being written; the apps bound to it restart with it within a minute.` };
+  },
+  sleepPostgres: async (slug, name, after) => {
+    await wait();
+    const [all, t] = await ofProject(slug);
+    const r = t.resources.find((x) => x.kind === "Postgres" && x.name === name);
+    if (!r) throw new ApiError(404, `no database named ${name}`);
+    if (r.details?.type === "shared")
+      throw new ApiError(400, "Shared databases have no sleep setting; they are always on.");
+    const want = after.toLowerCase();
+    const st = sleepReadBack(
+      want === "default" || want === "" ? undefined : { after: want },
+      { state: r.details?.sleepState === "sleeping" ? "sleeping" : "awake" },
+    );
+    r.details = {
+      ...r.details,
+      sleepState: st.state,
+      sleepAfter: st.after ?? "",
+      sleepSource: st.source ?? "workspace",
+    };
+    await thingsOf.set(all);
+    return { name };
   },
   convertPostgres: async (slug, name, body) => {
     await wait();
@@ -1566,10 +1843,11 @@ export const mock: Api = {
       onLine(liveLine(slug, query.process ?? processes[0] ?? "web", n++)),
     );
   },
-  metrics: async (slug, range) => {
+  metrics: async (slug, query) => {
     await wait();
     const p = await projectsOf.find(slug);
-    return metricsOf(slug, Object.keys(p.spec.processes ?? { web: {} }), range);
+    const processes: Record<string, { replicas?: number }> = p.spec.processes ?? { web: {} };
+    return metricsOf(slug, Object.fromEntries(Object.entries(processes).map(([name, spec]) => [name, spec.replicas ?? 1])), query);
   },
   instances: async (slug) => {
     await wait();

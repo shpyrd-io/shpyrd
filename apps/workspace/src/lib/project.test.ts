@@ -15,6 +15,13 @@ describe("how a project is read for its card", () => {
     expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 0, ready: 0, sleep: { state: "sleeping" } } } }))).toBe("sleeping");
   });
 
+  it("is under maintenance while its page is up, whatever runs behind it", () => {
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: true } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Deploying", maintenance: { enabled: true, message: "Back soon" } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: true }, processes: { web: { desired: 0, ready: 0, sleep: { state: "sleeping" } } } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: false } }))).toBe("running");
+  });
+
   it.each(["awake", "waking", "unavailable"] as const)("keeps the project phase when its web process is %s", (state) => {
     expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 1, ready: 0, sleep: { state } } } }))).toBe("running");
   });
@@ -35,7 +42,7 @@ describe("how a project is read for its card", () => {
   it("says who may open it: anyone, everyone, or its teams by name", () => {
     const url = "https://shop.acme.app";
     expect(badgesOf({ url, access: "public", teams: ["finance"] })).toEqual(["Anyone"]);
-    expect(badgesOf({ url, access: "identified" })).toEqual(["Anyone"]);
+    expect(badgesOf({ url, access: "identified", teams: ["finance"] })).toEqual(["Finance"]);
     expect(badgesOf({ url, access: "authenticated", teams: ["everyone", "finance"] })).toEqual(["Everyone"]);
     expect(badgesOf({ url, access: "authenticated", teams: ["finance", "customer-care"] })).toEqual(["Finance", "Customer-care"]);
     expect(badgesOf({ url, access: "authenticated" })).toBeUndefined();

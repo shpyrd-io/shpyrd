@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -457,8 +458,56 @@ func redirectIngressName(app *shpyrdv1.App, host string) string {
 	return ingressName(app) + "-moved-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// ensureRedirectIngress creates or updates a 301 redirect Ingress from the
-// old host to the app's current default host.
+// Redirects are answered by the server, not by nginx (#133): ingress-nginx
+// refuses an nginx variable in permanent-redirect, and without
+// $request_uri the path is lost. A redirect Ingress rewrites each request
+// to RedirectPath on the server with its path after it (nginx keeps the
+// query), and the server reads where to send it from the
+// AnnotationRedirectTo of the Ingress labelled LabelRedirect that serves
+// the request's host.
+const (
+	RedirectPath           = "/_shpyrd/redirect"
+	AnnotationRedirectTo   = "shpyrd.io/redirect-to"
+	LabelRedirect          = "shpyrd.io/redirect"
+	redirectServiceName    = "shpyrd-redirect"
+	nginxPermanentRedirect = "nginx.ingress.kubernetes.io/permanent-redirect"
+)
+
+// routeRedirect turns ing into a redirect to target (https://host[:port])
+// answered by the server: every path of each host, captured whole.
+func routeRedirect(ing *networkingv1.Ingress, target string) {
+	// From earlier versions; the webhook refuses them.
+	delete(ing.Annotations, nginxPermanentRedirect)
+	delete(ing.Annotations, nginxPermanentRedirect+"-code")
+	ing.Annotations["nginx.ingress.kubernetes.io/use-regex"] = "true"
+	ing.Annotations["nginx.ingress.kubernetes.io/rewrite-target"] = RedirectPath + "/$1"
+	ing.Annotations[AnnotationRedirectTo] = target
+	ing.Labels = mergeMaps(ing.Labels, map[string]string{LabelRedirect: "true"})
+	// A regular expression is no Prefix path to the webhook.
+	pathType := networkingv1.PathTypeImplementationSpecific
+	for i := range ing.Spec.Rules {
+		ing.Spec.Rules[i].HTTP = &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+			Path: "/(.*)", PathType: &pathType,
+			Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+				Name: redirectServiceName, Port: networkingv1.ServiceBackendPort{Name: "http"},
+			}},
+		}}}
+	}
+}
+
+// ensureRedirectService is the server's alias in the app's namespace that
+// redirect Ingresses route to.
+func (r *AppReconciler) ensureRedirectService(ctx context.Context, app *shpyrdv1.App) error {
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: redirectServiceName, Namespace: app.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		r.Config.mutateEdgeService(app, svc)
+		return controllerutil.SetControllerReference(app, svc, r.Scheme)
+	})
+	return err
+}
+
+// ensureRedirectIngress creates or updates a redirect Ingress from the old
+// host to the app's current default host.
 func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1.App, oldHost string) error {
 	newHost := r.Config.defaultHost(app)
 	if target := r.Config.redirectTarget(app); target != "" {
@@ -466,6 +515,9 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 	}
 	if newHost == "" || newHost == oldHost {
 		return nil
+	}
+	if err := r.ensureRedirectService(ctx, app); err != nil {
+		return err
 	}
 	name := redirectIngressName(app, oldHost)
 	class := r.Config.IngressClassExternal
@@ -480,8 +532,7 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 			shpyrdv1.LabelApp:       app.Name,
 		})
 		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
-			"nginx.ingress.kubernetes.io/permanent-redirect": "https://" + newHost + "$request_uri",
-			"nginx.ingress.kubernetes.io/ssl-redirect":       "true",
+			"nginx.ingress.kubernetes.io/ssl-redirect": "true",
 		})
 		ing.Spec.IngressClassName = &class
 		// The old host's certificate: the apps' wildcard under the shared
@@ -500,6 +551,7 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 					}}}},
 			}},
 		}}
+		routeRedirect(ing, "https://"+newHost)
 		return controllerutil.SetControllerReference(app, ing, r.Scheme)
 	})
 	return err
@@ -574,9 +626,12 @@ func (r *AppReconciler) reconcileDomainRedirect(ctx context.Context, app *shpyrd
 	if !enabled || target == "" {
 		return r.deleteIfExists(ctx, ing)
 	}
+	if err := r.ensureRedirectService(ctx, app); err != nil {
+		return err
+	}
 	source := r.Config.platformHost(app)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
-		r.Config.mutateIngress(app, ing, false)
+		r.Config.mutateIngress(app, ing, false, false)
 		for _, key := range edgeAnnotationKeys {
 			delete(ing.Annotations, key)
 		}
@@ -584,12 +639,11 @@ func (r *AppReconciler) reconcileDomainRedirect(ctx context.Context, app *shpyrd
 		if r.Config.HTTPSPort != "" && r.Config.HTTPSPort != "443" {
 			host += ":" + r.Config.HTTPSPort
 		}
-		ing.Annotations["nginx.ingress.kubernetes.io/permanent-redirect"] = "https://" + host + "$request_uri"
-		ing.Annotations["nginx.ingress.kubernetes.io/permanent-redirect-code"] = "308"
-		// Reuse the app's backend/class, but only the platform host.
+		// Reuse the app's class, but only the platform host.
 		rule := ing.Spec.Rules[0]
 		rule.Host = source
 		ing.Spec.Rules = []networkingv1.IngressRule{rule}
+		routeRedirect(ing, "https://"+host)
 		tls := ing.Spec.TLS[:0:0]
 		for _, entry := range ing.Spec.TLS {
 			for _, h := range entry.Hosts {

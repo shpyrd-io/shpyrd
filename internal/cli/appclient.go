@@ -446,8 +446,60 @@ func (a *appClient) getDetail(ctx context.Context, slug string) (*api.AppDetail,
 
 // waitRunningAPI polls the project until the controller has acted on the
 // given generation and it runs (or failed), printing phase changes.
-func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation int64, timeout time.Duration) (*api.AppDetail, error) {
+// staleFailure is a project's failure from before a deploy: until the
+// project moves on from it, it is old news, not the new release's verdict
+// (#241). Nil when the project was not failing.
+type staleFailure struct {
+	message, image, target string
+}
+
+// staleFailureOf is the failure a project shows now, if it is failing.
+func staleFailureOf(d *api.AppDetail) *staleFailure {
+	if d == nil || d.Status.Phase != shpyrdv1.PhaseFailed {
+		return nil
+	}
+	f := &staleFailure{message: d.Status.Message, image: d.Status.Digest}
+	if d.Status.Release != nil {
+		f.target = d.Status.Release.Target
+	}
+	return f
+}
+
+// staleFailureOfApp is staleFailureOf for a project read as the resource.
+func staleFailureOfApp(app *shpyrdv1.App) *staleFailure {
+	if app == nil {
+		return nil
+	}
+	d := &api.AppDetail{}
+	d.Status.Phase, d.Status.Message, d.Status.Digest, d.Status.Release = app.Status.Phase, app.Status.Message, api.Digest(app.Status.Image), app.Status.Release
+	return staleFailureOf(d)
+}
+
+// still says the project shows that same failure: same message, same
+// image deployed, same release step.
+func (f *staleFailure) still(d *api.AppDetail) bool {
+	if f == nil || d.Status.Phase != shpyrdv1.PhaseFailed {
+		return false
+	}
+	g := staleFailureOf(d)
+	return g.message == f.message && g.image == f.image && g.target == f.target
+}
+
+// waitPoll is how often a wait reads the project again; staleGrace how long
+// the previous release's failure may stand before it is the answer after
+// all (the new release never took its place).
+var (
+	waitPoll   = 2 * time.Second
+	staleGrace = 90 * time.Second
+)
+
+// waitRunningAPI waits for the project to run the release the caller just
+// asked for. stale is the failure the project showed before (nil when it
+// was not failing, or when nothing new was asked for): seen again unchanged,
+// it is the previous release's and the wait goes on.
+func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation int64, timeout time.Duration, stale *staleFailure) (*api.AppDetail, error) {
 	deadline := time.Now().Add(timeout)
+	staleUntil := time.Now().Add(staleGrace)
 	last := ""
 	lastSize := ""
 	var release *releaseFollow
@@ -483,17 +535,23 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 				release.stop()
 				release = nil
 			}
-			switch d.Status.Phase {
-			case shpyrdv1.PhaseRunning:
+			switch {
+			case d.Status.Phase == shpyrdv1.PhaseRunning:
 				return d, nil
-			case shpyrdv1.PhaseFailed:
+			case stale.still(d) && time.Now().Before(staleUntil):
+				// The previous release's failure: the new one has not
+				// taken its place yet.
+			case d.Status.Phase == shpyrdv1.PhaseFailed:
 				return d, errors.New(d.Status.Message)
+			default:
+				// Moving: a failure from now on is this release's own.
+				stale = nil
 			}
 		}
 		if time.Now().After(deadline) {
 			return d, fmt.Errorf("timed out waiting for %s to be running (%s)", slug, d.Status.Phase)
 		}
-		if err := sleepCtx(ctx, 2*time.Second); err != nil {
+		if err := sleepCtx(ctx, waitPoll); err != nil {
 			return d, err
 		}
 	}
@@ -644,7 +702,7 @@ func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {
 		if len(sessions.Sessions) > 1 {
 			// Several workspaces, none chosen: do not guess, and do not fall
 			// back to whatever the kubeconfig points at.
-			return nil, errors.New("you are signed in to several workspaces: pick one with `shpyrd use <workspace URL>` (or set SHPYRD_URL), or name a cluster with --context")
+			return nil, errors.New("you are signed in to several workspaces: pick one with `shpyrd use <workspace>` (or set SHPYRD_URL), or name a cluster with --context")
 		}
 	}
 	k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
@@ -1071,6 +1129,7 @@ func detailToApp(d *api.AppDetail) *shpyrdv1.App {
 		LatestBuild: d.Status.LatestBuild, ObservedGeneration: d.Status.ObservedGeneration,
 		Conditions: d.Status.Conditions, Domains: d.Status.Domains, Processes: d.Processes,
 		ProcessTypes: d.Status.ProcessTypes, Release: d.Status.Release, ImageUsers: d.Status.ImageUsers,
+		Source: d.Status.Source,
 	}
 	for _, r := range d.Status.Releases {
 		app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{

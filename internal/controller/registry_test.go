@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // A private registry (OCIR, ECR...): credentials are mirrored per project,
@@ -63,7 +64,7 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 	// kpack Images build as the credentialed ServiceAccount.
 	src := sampleApp("gitapp")
 	src.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r.git"}}
-	img, _ := r.Config.desiredKpackImage(src)
+	img, _ := r.Config.desiredKpackImage(src, gitauth.Build{})
 	if sa, _, _ := unstructured.NestedString(img.Object, "spec", "serviceAccountName"); sa != BuildServiceAccount {
 		t.Errorf("kpack serviceAccountName = %q", sa)
 	}
@@ -73,7 +74,7 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 
 	// BuildKit: TLS (no registry.insecure), docker config mounted, pull secret.
 	dk := dockerfileApp()
-	job, _ := r.Config.desiredBuildJob(dk, 1, "key")
+	job, _ := r.Config.desiredBuildJob(dk, 1, "key", gitauth.Build{})
 	spec := job.Spec.Template.Spec
 	args := strings.Join(spec.Containers[0].Args, " ")
 	if strings.Contains(args, "registry.insecure") {
@@ -116,7 +117,7 @@ func TestNoRegistryCredentials(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-plain", Name: BuildServiceAccount}, sa); err == nil {
 		t.Error("no build SA expected without credentials")
 	}
-	if r.Config.buildServiceAccountName() != "default" {
+	if r.Config.buildServiceAccountName(gitauth.Build{}) != "default" {
 		t.Error("kpack must use the default SA without credentials")
 	}
 }

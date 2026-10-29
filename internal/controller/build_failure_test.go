@@ -68,7 +68,7 @@ func TestKpackBuildFailureInWords(t *testing.T) {
 			{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 51}}},
 		}},
 	}
-	r, c := newTestReconciler(t, app, build, pod)
+	r, c := newTestReconciler(t, pinGit(app, testCommit), build, pod)
 	r.Kube = kubefake.NewSimpleClientset() // its logs answer "fake logs"
 	runReconcile(t, r, app)
 	img := &unstructured.Unstructured{}
@@ -168,5 +168,65 @@ func TestABuildTheNodeEvictedSaysTheNodeRanOutOfDisk(t *testing.T) {
 	pod.Status.Reason = ""
 	if got := evictedBuildMessage(pod); got != "" {
 		t.Errorf("a pod that was not evicted: %q", got)
+	}
+}
+
+func TestRefusedCloneNamesTheFix(t *testing.T) {
+	for _, out := range []string{
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		"remote: Repository not found.\nfatal: repository 'https://github.com/acme/api.git/' not found",
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+		"Error: failed to fetch: authentication required",
+		// kpack, an ssh URL with no credential for it (seen on a kind run)
+		`unable to fetch references for repository: error creating SSH agent: "SSH agent requested but SSH_AUTH_SOCK not-specified"`,
+		// kpack (go-git), a key the host does not accept
+		"unable to fetch references for repository: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain",
+	} {
+		msg := describeBuildFailure("prepare", out)
+		if !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || !strings.Contains(msg, "shpyrd git-auth set") || !strings.Contains(msg, "shpyrd redeploy") {
+			t.Errorf("%q -> %s", out, msg)
+		}
+	}
+	// git's real output on a refused host key; only the fetch's marker (a
+	// deploy key was used) makes it the host-key message.
+	gitOut := "Host key verification failed.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists."
+	if msg := describeBuildFailure("prepare", gitOut+"\n"+hostKeyChangedMarker); !strings.Contains(msg, "host key is not the one recorded") || strings.Contains(msg, "private") {
+		t.Errorf("host key with the marker -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", gitOut); !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || strings.Contains(msg, "host key is not") {
+		t.Errorf("no deploy key (no marker) -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", "fatal: unable to access: Could not resolve host"); strings.Contains(msg, "git-auth") {
+		t.Errorf("a network failure is not an access failure: %s", msg)
+	}
+}
+
+// Only a clone of the app's own repository, in the prepare step, gets the
+// git-auth hint. An app's own fetch inside the build (npm, go, pip) does not.
+func TestAppDependencyFetchIsNotAClone(t *testing.T) {
+	for _, c := range []struct{ step, out string }{
+		{"build", "npm ERR! code E401\nnpm ERR! Authentication failed for registry"},
+		{"dockerfile", "process \"/bin/sh -c go mod download\" did not complete successfully: exit code: 1\nfatal: could not read Username for 'https://github.com': terminal prompts disabled"},
+		{"build", "Host key verification failed."},
+	} {
+		msg := describeBuildFailure(c.step, c.out)
+		if strings.Contains(msg, "git-auth") || strings.Contains(msg, "private") {
+			t.Errorf("%s: %q -> %s", c.step, c.out, msg)
+		}
+	}
+}
+
+// kpack's prepare step checks it may write the image before it fetches the
+// source. A registry refusing the write (read-only during its garbage
+// collection, 25 Oct 2026) is the platform's fault, not a source that could
+// not be fetched.
+func TestRegistryRefusingTheWriteIsThePlatforms(t *testing.T) {
+	out := `Loading registry credentials from service account secrets
+Loading secret for "10.96.0.50:5000" from secret "shpyrd-registry" at location "/var/build-secrets/shpyrd-registry"
+Loading cluster credential helpers
+Error verifying write access to "10.96.0.50:5000/apps/ws/app": POST https://10.96.0.50:5000/v2/apps/ws/app/blobs/uploads/: unexpected status code 405 Method Not Allowed: Method not allowed`
+	msg := describeBuildFailure("prepare", out)
+	if !strings.Contains(msg, "platform's registry") || !strings.Contains(msg, "not of the app") || strings.Contains(msg, "fetch the source") || strings.Contains(msg, "10.96.0.50") {
+		t.Errorf("message = %q", msg)
 	}
 }

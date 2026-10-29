@@ -237,6 +237,12 @@ func (s *Server) serveUI() gin.HandlerFunc {
 		if s.gateSignIn(c, apps[uiWorkspace]) {
 			return
 		}
+		// Any other page there belongs to the dashboard at the custom
+		// domain: links to the platform address (Accounts' Products) land
+		// on it rather than on "No app here".
+		if s.toPrimaryDoor(c) {
+			return
+		}
 		if s.customError(c) { // ingress-nginx's error backend for app hosts
 			return
 		}
@@ -253,6 +259,16 @@ func (s *Server) serveUI() gin.HandlerFunc {
 			if rest, ok := strings.CutPrefix(c.Request.URL.Path, uiOthers); ok {
 				folder, _, _ := strings.Cut(rest, "/")
 				if a := others[folder]; a != nil {
+					a.handle(c)
+					return
+				}
+			}
+		}
+		if name == uiWorkspace {
+			// A workspace that chose an application of its own gets it;
+			// the platform's own when it cannot be served.
+			if ws, err := s.tenant(c); err == nil && ws.Settings.UI != nil && ws.Settings.UI.Ref != "" {
+				if a := s.chosenUI().get(c.Request.Context(), ws, s.credentialsOf(c.Request.Context(), ws.Slug)); a != nil {
 					a.handle(c)
 					return
 				}

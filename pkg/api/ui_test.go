@@ -1,13 +1,18 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // The applications as a build leaves them: a folder each, with the entry,
@@ -224,5 +229,155 @@ func TestTheConsoleServesTheOtherApplicationsUnderApps(t *testing.T) {
 	}
 	if got := get(t, s, "acme.shpyrd.test", "/apps/workspaces").Body.String(); got != "<html>workspace</html>" {
 		t.Errorf("at a workspace = %q", got)
+	}
+}
+
+// A workspace that chose an application of its own (RFC-0084) gets it at
+// its door, served by the same rules as the platform's own: the entry for
+// any address, its files by path, the policy with the hashes of its
+// scripts and the origins its manifest declares. Other workspaces still
+// get the platform's own.
+func ownApplication(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func chooses(t *testing.T, s *Server, ws, ref string) {
+	t.Helper()
+	var settings store.WorkspaceSettings
+	if ref != "" {
+		settings.UI = &store.WorkspaceUI{Ref: ref}
+	}
+	if _, err := s.store.UpdateWorkspaceSettings(context.Background(), ws, settings); err != nil {
+		t.Fatal(err)
+	}
+	s.forgetTenants()
+}
+
+func TestAWorkspaceServesTheApplicationItChose(t *testing.T) {
+	s := uiServer(t)
+	s.opts.UISources = "oci,dir"
+	dir := ownApplication(t, map[string]string{
+		"index.html":      "<html><script>acme()</script>acme's own</html>",
+		"own.js":          "acme js",
+		"shpyrd-app.json": `{"name":"Acme","version":"2.3.1","origins":["https://cdn.acme.test"]}`,
+	})
+	chooses(t, s, "acme", "dir:"+dir)
+	rec := get(t, s, "acme.shpyrd.test", "/projects/shop")
+	if got := rec.Body.String(); got != "<html><script>acme()</script>acme's own</html>" {
+		t.Errorf("acme's door = %q", got)
+	}
+	policy := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, hashOf("acme()")) || !strings.Contains(policy, "script-src 'self' https://cdn.acme.test") {
+		t.Errorf("policy = %q, want the hash of acme's script and its origin", policy)
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/own.js").Body.String(); got != "acme js" {
+		t.Errorf("acme's file = %q", got)
+	}
+	if got := get(t, s, "example.test", "/").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("the default workspace's door = %q, want the platform's own", got)
+	}
+	rec = at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "")
+	if body := rec.Body.String(); !strings.Contains(body, `"state":"serving"`) || !strings.Contains(body, `"version":"2.3.1"`) {
+		t.Errorf("workspace = %s, want the application serving with its version", body)
+	}
+}
+
+func TestAnApplicationThatCannotBeServedFallsBackToThePlatformsOwn(t *testing.T) {
+	s := uiServer(t)
+	s.opts.UISources = "oci,dir"
+	chooses(t, s, "acme", "dir:"+filepath.Join(t.TempDir(), "missing"))
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("acme's door = %q, want the platform's own", got)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "")
+	if body := rec.Body.String(); !strings.Contains(body, `"state":"failed"`) || !strings.Contains(body, "not a directory") {
+		t.Errorf("workspace = %s, want the failure and its reason", body)
+	}
+}
+
+func TestAServerThatAcceptsNoSuchSourceServesThePlatformsOwn(t *testing.T) {
+	s := uiServer(t) // SHPYRD_UI_SOURCES unset: oci only
+	dir := ownApplication(t, map[string]string{"index.html": "acme's own"})
+	chooses(t, s, "acme", "dir:"+dir)
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("acme's door = %q, want the platform's own", got)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "")
+	if body := rec.Body.String(); !strings.Contains(body, `"state":"disabled"`) {
+		t.Errorf("workspace = %s, want disabled", body)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "PATCH", "/api/workspace", `{"ui":"dir:`+dir+`"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "does not accept dir:") {
+		t.Errorf("set = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTheWorkspaceChoosesItsApplicationThroughTheAPI(t *testing.T) {
+	s := uiServer(t)
+	s.opts.UISources = "oci,dir"
+	for _, bad := range []string{`{"ui":"relative/out"}`, `{"ui":"ftp://x"}`, `{"ui":"dir:` + filepath.Join(t.TempDir(), "missing") + `"}`} {
+		if rec := at(t, s, "acme.shpyrd.test", "PATCH", "/api/workspace", bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, rec.Code)
+		}
+	}
+	dir := ownApplication(t, map[string]string{"index.html": "acme's own"})
+	rec := at(t, s, "acme.shpyrd.test", "PATCH", "/api/workspace", `{"ui":"dir:`+dir+`/"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ref":"dir:`+dir+`"`) {
+		t.Errorf("set = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "acme's own" {
+		t.Errorf("acme's door = %q", got)
+	}
+	// Rebuilt in place: the reload serves the new files.
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("acme's own, rebuilt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "acme's own" {
+		t.Errorf("before the reload = %q, want the loaded copy", got)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/workspace/ui/reload", ""); rec.Code != http.StatusOK {
+		t.Errorf("reload = %d", rec.Code)
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "acme's own, rebuilt" {
+		t.Errorf("after the reload = %q", got)
+	}
+	rec = at(t, s, "acme.shpyrd.test", "PATCH", "/api/workspace", `{"ui":""}`)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"ui":`) {
+		t.Errorf("clear = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("cleared door = %q, want the platform's own", got)
+	}
+}
+
+func TestTheWorkspaceHoldsARegistryCredentialPerHost(t *testing.T) {
+	s := uiServer(t)
+	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/workspace/registry-auth/ghcr.io", `{"username":"acme-bot","token":"ghp_x"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"username":"acme-bot"`) || strings.Contains(rec.Body.String(), "ghp_x") {
+		t.Errorf("put = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/workspace/registry-auth/-bad", `{"username":"a","token":"b"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad host = %d", rec.Code)
+	}
+	if got := s.registryCredential(context.Background(), "acme", "ghcr.io"); got.Username != "acme-bot" || got.Token != "ghp_x" {
+		t.Errorf("credential = %+v", got)
+	}
+	if got := s.registryCredential(context.Background(), "default", "ghcr.io"); got.Token != "" {
+		t.Errorf("another workspace read acme's credential: %+v", got)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "GET", "/api/workspace/registry-auth", "")
+	if !strings.Contains(rec.Body.String(), `"host":"ghcr.io"`) || strings.Contains(rec.Body.String(), "ghp_x") {
+		t.Errorf("list = %s", rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "DELETE", "/api/workspace/registry-auth/ghcr.io", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("delete = %d", rec.Code)
+	}
+	if got := s.registryCredential(context.Background(), "acme", "ghcr.io"); got.Token != "" {
+		t.Errorf("credential after delete = %+v", got)
 	}
 }

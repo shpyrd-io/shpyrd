@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +37,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
@@ -81,11 +85,32 @@ type AppReconciler struct {
 	workspaceEvents chan event.GenericEvent
 }
 
+// RequeueGitHub reconciles the Apps of a workspace that build from
+// github.com again: its GitHub connections changed (RFC-0054), and with
+// them the credential <app>-git holds.
+func (r *AppReconciler) RequeueGitHub(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(app *shpyrdv1.App) bool { return buildsFromGitHub(app) })
+}
+
+// buildsFromGitHub says the App's source is a repository on github.com.
+func buildsFromGitHub(app *shpyrdv1.App) bool {
+	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return false
+	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	return err == nil && strings.EqualFold(repo.Host, "github.com")
+}
+
 // RequeueWorkspace reconciles every App of a workspace again: its address
 // or its domains changed, and with them the apps' hosts (RFC-0033 names).
 // The default workspace's include the Apps from before workspaces, which
 // carry no workspace label.
 func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(*shpyrdv1.App) bool { return true })
+}
+
+// requeueApps reconciles the Apps of a workspace that pick says again.
+func (r *AppReconciler) requeueApps(ctx context.Context, slug string, pick func(*shpyrdv1.App) bool) {
 	if r.workspaceEvents == nil {
 		return
 	}
@@ -96,7 +121,7 @@ func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
 	}
 	var picked []client.Object
 	for i := range apps.Items {
-		if workspaceOf(&apps.Items[i]) == slug {
+		if workspaceOf(&apps.Items[i]) == slug && pick(&apps.Items[i]) {
 			picked = append(picked, &apps.Items[i])
 		}
 	}
@@ -277,6 +302,12 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {
 		out.result.RequeueAfter = 30 * time.Second
 	}
+	// A build cloning through the GitHub App gets a new token before the
+	// one in <app>-git is 50 minutes old (RFC-0054); only a reconcile that
+	// wrote <app>-git knows when.
+	if d := out.gitRefresh; d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
+		out.result.RequeueAfter = d
+	}
 	return out.result, nil
 }
 
@@ -288,11 +319,22 @@ type outcome struct {
 	result         ctrl.Result
 	newRelease     *shpyrdv1.Release
 	clearNote      bool
+	// gitRefresh is when <app>-git, written by this reconcile, needs the
+	// GitHub App again (RFC-0054); 0: never.
+	gitRefresh time.Duration
 }
 
 func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{RequeueAfter: d}} }
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	var gitRefresh time.Duration
+	out, err := r.reconcileApp(ctx, app, &gitRefresh)
+	out.gitRefresh = gitRefresh
+	return out, err
+}
+
+// reconcileApp is reconcile; it sets gitRefresh once <app>-git is written.
+func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, gitRefresh *time.Duration) (outcome, error) {
 	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
 		return r.reconcileMaintenance(ctx, app)
 	}
@@ -346,6 +388,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err := r.reconcileRegistryCredentials(ctx, app); err != nil {
 		return outcome{}, err
 	}
+	gitBuild, err := r.reconcileGitCredentials(ctx, app)
+	if err != nil {
+		return outcome{}, err
+	}
+	*gitRefresh = r.githubRefreshOf(gitBuild)
+	if err := r.ensureBuildServiceAccount(ctx, app, gitBuild); err != nil {
+		return outcome{}, err
+	}
 	globals, err := r.reconcileGlobals(ctx, app)
 	if err != nil {
 		return outcome{}, err
@@ -367,14 +417,25 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return outcome{}, err
 	}
 
+	// What the source watcher saw of the branch (RFC-0018).
+	app.Status.Source = sourceStatus(app)
+	setSourceCondition(app)
+
 	// 2. Image: pinned, or built from the source (kpack Image for
 	// buildpacks, BuildKit Job for Dockerfiles).
 	image := app.Spec.Image
 	var build buildState
 	var kpackBuild *unstructured.Unstructured
 	if app.HasSource() {
-		if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
-			st, err := r.reconcileDockerfileBuild(ctx, app)
+		if msg, failed := waitingForCommit(app); msg != "" {
+			// No commit pinned for the branch yet: nothing is built, and
+			// what runs keeps running.
+			build = buildState{Ready: "Unknown", Reason: reasonWaitingForCommit, Message: msg, LatestImage: app.Status.Image, LatestBuild: app.Status.LatestBuild}
+			if failed {
+				build.Ready, build.Reason = "False", reasonSourceUnreadable
+			}
+		} else if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
+			st, err := r.reconcileDockerfileBuild(ctx, app, gitBuild)
 			if err != nil {
 				return outcome{}, err
 			}
@@ -398,7 +459,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
-			img, err := r.reconcileKpackImage(ctx, app)
+			img, err := r.reconcileKpackImage(ctx, app, gitBuild)
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
 				app.Status.Message = "moving the build to its new image repository"
@@ -452,10 +513,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "True":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionTrue, "BuildSucceeded", "image "+shortImage(build.LatestImage))
 		case "False":
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, build.failedReason(), build.Message)
 		default:
 			reason := "Building"
-			if build.Reason == "PreparingBuilder" {
+			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit {
 				reason = build.Reason
 			}
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
@@ -478,12 +539,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		if build.Ready == "False" {
 			app.Status.Phase = shpyrdv1.PhaseFailed
 			app.Status.Message = build.Message
-			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 			return outcome{}, nil
 		}
 		app.Status.Phase = shpyrdv1.PhaseBuilding
 		app.Status.Message = firstNonEmpty(build.Message, "waiting for the first build")
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
+		if build.Reason == reasonWaitingForCommit {
+			return requeue(5 * time.Second), nil
+		}
 		return requeue(30 * time.Second), nil
 	}
 
@@ -528,7 +592,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
-		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
+		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res, r.releaseMounts(ctx, app))
 		if err != nil {
 			return outcome{}, err
 		}
@@ -559,7 +623,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
 
 	// 4. Workloads.
-	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
+	procStatus, scalingRetry, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -627,6 +691,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = firstNonEmpty(build.Message, "building new release; "+summary)
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
 		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
+		if build.Reason == reasonWaitingForCommit {
+			out.result.RequeueAfter = 5 * time.Second
+		}
 	case failing && !ready:
 		// New instances cannot start; older ones may still be serving.
 		app.Status.Phase = shpyrdv1.PhaseFailed
@@ -637,7 +704,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	case app.HasSource() && app.Spec.Image == "" && build.Ready == "False":
 		app.Status.Phase = shpyrdv1.PhaseFailed
 		app.Status.Message = build.Message + " The previous release keeps running."
-		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 	case !ready:
 		app.Status.Phase = shpyrdv1.PhaseDeploying
 		app.Status.Message = summary
@@ -648,6 +715,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = summary
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionTrue, "Running", summary)
 	}
+	if scalingRetry > 0 && (out.result.RequeueAfter == 0 || scalingRetry < out.result.RequeueAfter) {
+		out.result.RequeueAfter = scalingRetry
+	}
 	if r.Config.suspended(app) {
 		app.Status.Message = "workspace suspended: the app is stopped and not served until it is activated; " + app.Status.Message
 	}
@@ -656,14 +726,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
-func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (*unstructured.Unstructured, error) {
 	// The project's own builder when it composes its build (RFC-0065),
 	// else the platform's.
 	builderRef, err := r.reconcileBuilder(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := r.Config.desiredKpackImage(app)
+	desired, err := r.Config.desiredKpackImage(app, git)
 	if err != nil {
 		return nil, err
 	}
@@ -722,14 +792,16 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	rebuild := app.Annotations[shpyrdv1.AnnotationRebuildAt]
 	needsTrigger := rebuild != "" && current.GetAnnotations()[shpyrdv1.AnnotationRebuildAt] != rebuild
 
-	// An archive uploaded before the sources port existed names the API
-	// port; rewriting that in the Image would make kpack rebuild every
-	// app on upgrade. The current URL stays until a build happens anyway:
+	// The same archive at another address (the sources port where the API
+	// port was, a token added, a host renamed) is not a new source:
+	// rewriting the URL in the Image would make kpack rebuild every app on
+	// an upgrade (#93). The archive is named by its sha256, so the current
+	// URL stays while that name is the same, until a build happens anyway:
 	// a new archive, or a rebuild asked for, which takes the new address.
 	if !needsTrigger {
 		curURL, _, _ := unstructured.NestedString(current.Object, "spec", "source", "blob", "url")
 		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
-		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
+		if curURL != "" && curURL != desURL && (r.Config.sourceURL(curURL) == desURL || sameArchive(curURL, desURL)) {
 			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
 		}
 	}
@@ -797,6 +869,27 @@ var errImageMoving = errors.New("kpack image moving to a new repository")
 
 // kpackBuildNeededAnnotation on an Image's latest Build makes kpack schedule
 // another build of the same source (build reason TRIGGER).
+// sameArchive says two source URLs name the same archive: the file is
+// named by its sha256 (<sha256>.tgz), whatever host, port or token carries
+// it (#93).
+func sameArchive(a, b string) bool {
+	name := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil || u.Path == "" {
+			return ""
+		}
+		base := path.Base(u.Path)
+		if !archiveName.MatchString(base) {
+			return ""
+		}
+		return base
+	}
+	n := name(a)
+	return n != "" && n == name(b)
+}
+
+var archiveName = regexp.MustCompile(`^[a-f0-9]{64}\.tgz$`)
+
 const kpackBuildNeededAnnotation = "image.kpack.io/additionalBuildNeeded"
 
 // triggerKpackBuild annotates the Image's latest Build so kpack builds
@@ -886,39 +979,94 @@ func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the
 // process map and removes workloads of dropped process types.
-func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
-	status := map[string]shpyrdv1.ProcessStatus{}
+// previousRelease is the last release that ran the process with another
+// image or another size than the spec asks now: what a fallback puts back
+// (#127). The current rollout's own record, and any record of the same
+// target, are skipped.
+func previousRelease(app *shpyrdv1.App, process, image, size string) *shpyrdv1.Release {
+	for i := len(app.Status.Releases) - 1; i >= 0; i-- {
+		rel := &app.Status.Releases[i]
+		if rel.Image == "" {
+			continue
+		}
+		if rel.Image == image && (rel.Sizes[process] == size || rel.Sizes[process] == "") {
+			continue
+		}
+		return rel
+	}
+	return nil
+}
+
+// fallbackWorkload is what a process runs while a fallback holds (#127):
+// the previous release's image and, when that release recorded a size for
+// the process, that size's resources; the spec's resources otherwise.
+func (r *AppReconciler) fallbackWorkload(prev *shpyrdv1.Release, p namedProcess, catalog sizes.Catalog, res corev1.ResourceRequirements) (string, corev1.ResourceRequirements, int) {
+	if size := prev.Sizes[p.Name]; size != "" && size != "custom" {
+		if got, _, err := catalog.Resolve(size, corev1.ResourceRequirements{}); err == nil {
+			res = got
+		}
+	}
+	return prev.Image, res, prev.Number
+}
+
+// fallbackNote completes a failure reason while the previous release runs.
+func fallbackNote(release int) string {
+	return fmt.Sprintf(" The previous release (v%d) runs again meanwhile; resize the process, or roll back.", release)
+}
+
+// reconcileWorkloads makes the Deployments, Services, KEDA objects and the
+// Ingress match the spec and reports each process's state. retry, when not
+// zero, asks for another look that soon (a legacy KEDA object on its way
+// out).
+func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (status map[string]shpyrdv1.ProcessStatus, retry time.Duration, err error) {
+	status = map[string]shpyrdv1.ProcessStatus{}
 	wanted := map[string]bool{}
 
 	catalog := r.catalog(ctx)
 	mounts, err := r.resolveMounts(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	// Sleep (RFC-0075): with a policy, the add-on installed and no pause,
-	// KEDA owns the web Deployment's replica count.
+	// Sleep (RFC-0075) and autoscaling (RFC-0047): with a policy or bounds,
+	// KEDA's kinds installed and no pause, KEDA owns the web Deployment's
+	// replica count.
 	sleepWanted := r.sleepEnabled(app)
+	autoscaleWanted := webAutoscale(app, mounts["web"]) != nil
 	_, paused := r.sleepPause(app)
-	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
-	var webReplicas *int32 // what the web Deployment currently asks for
+	kedaScales := (sleepWanted || autoscaleWanted) && !paused && r.kedaHTTPAvailable()
+	var webReplicas *int32                 // what the web Deployment currently asks for
+	var webRes corev1.ResourceRequirements // what the web process runs with
 	release := releaseNumber(app, image, hash)
+	// A fallback holds for the generation it was decided for (#127); a
+	// change to the spec starts a rollout from the spec again.
+	if fb := app.Status.Fallback; fb != nil && fb.Generation != app.Generation {
+		app.Status.Fallback = nil
+	}
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
-			return nil, fmt.Errorf("process %q needs a command: Dockerfile images have a single entrypoint (set processes.%s.command in shpyrd.yaml)", p.Name, p.Name)
+			return nil, 0, fmt.Errorf("process %q needs a command: Dockerfile images have a single entrypoint (set processes.%s.command in shpyrd.yaml)", p.Name, p.Name)
 		}
 		res, sizeName, err := processResources(p, catalog)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
+		}
+		// What this process runs: the spec, or, while a fallback holds for
+		// it, its previous release (#127).
+		pImage, pRes, pRelease := image, res, release
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			if prev := app.ReleaseByNumber(fb.Release); prev != nil {
+				pImage, pRes, pRelease = r.fallbackWorkload(prev, p, catalog, res)
+			}
 		}
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
 		scaledExternally := kedaScales && p.Name == "web"
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, revision, release, res, mounts[p.Name], d, scaledExternally)
+			r.Config.mutateDeployment(app, p, pImage, hash, revision, pRelease, pRes, mounts[p.Name], d, scaledExternally)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("deployment %s: %w", d.Name, err)
+			return nil, 0, fmt.Errorf("deployment %s: %w", d.Name, err)
 		}
 		if op != controllerutil.OperationResultNone {
 			log.FromContext(ctx).Info("deployment reconciled", "name", d.Name, "op", op)
@@ -928,7 +1076,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		// previous release's (#91).
 		current, err := r.currentReplicaSet(ctx, d)
 		if err != nil {
-			return nil, fmt.Errorf("replicasets of %s: %w", d.Name, err)
+			return nil, 0, fmt.Errorf("replicasets of %s: %w", d.Name, err)
 		}
 		ps := shpyrdv1.ProcessStatus{
 			Desired: p.replicas(),
@@ -941,7 +1089,30 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if d.Status.ObservedGeneration < d.Generation {
 			ps.Ready, ps.Updated = 0, 0
 		}
-		ps.Failing, ps.Reason = r.processHealth(ctx, current)
+		health := r.processHealthDetail(ctx, current)
+		ps.Failing, ps.Reason = health.failing, health.reason
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			// The previous release runs; the failure is the spec's, and it
+			// shows until the spec changes.
+			ps.Failing = max(ps.Failing, 1)
+			ps.Reason = fb.Message + fallbackNote(fb.Release)
+		} else if health.unschedulable && rolloutStrategy(p, mounts[p.Name]).Type == appsv1.RecreateDeploymentStrategyType {
+			// A Recreate rollout stopped the running instance before the new
+			// one proved impossible to place: put the previous release back
+			// (#127) rather than leave the app down behind a locked rollout.
+			if prev := previousRelease(app, p.Name, image, sizeName); prev != nil {
+				app.Status.Fallback = &shpyrdv1.FallbackStatus{Generation: app.Generation, Process: p.Name, Release: prev.Number, Message: health.reason}
+				fImage, fRes, fRelease := r.fallbackWorkload(prev, p, catalog, res)
+				if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
+					r.Config.mutateDeployment(app, p, fImage, hash, revision, fRelease, fRes, mounts[p.Name], d, scaledExternally)
+					return controllerutil.SetControllerReference(app, d, r.Scheme)
+				}); err != nil {
+					return nil, 0, fmt.Errorf("deployment %s (fallback): %w", d.Name, err)
+				}
+				r.Recorder.Eventf(app, corev1.EventTypeWarning, "Fallback", "%s: %s The previous release (v%d) runs again meanwhile.", p.Name, health.reason, prev.Number)
+				ps.Reason = health.reason + fallbackNote(prev.Number)
+			}
+		}
 		ps.Size = sizeName
 		// The size's CPU is the limit; a shared size requests only a share.
 		ps.CPU = res.Limits.Cpu().String()
@@ -952,6 +1123,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		ps.Pinned = singleInstanceNote(mounts[p.Name])
 		if p.Name == "web" {
 			webReplicas = d.Spec.Replicas
+			webRes = res
 		}
 		status[p.Name] = ps
 
@@ -961,36 +1133,44 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 				r.Config.mutateService(app, p, svc)
 				return controllerutil.SetControllerReference(app, svc, r.Scheme)
 			}); err != nil {
-				return nil, fmt.Errorf("service %s: %w", svc.Name, err)
+				return nil, 0, fmt.Errorf("service %s: %w", svc.Name, err)
 			}
 		} else if err := r.deleteIfExists(ctx, svc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
-	// Sleep objects (RFC-0075) come before the Ingress: the backend only
-	// points at the KEDA interceptor once the objects exist.
-	sleepActive, err := r.reconcileSleep(ctx, app)
+	// KEDA's objects (RFC-0075 sleep, RFC-0047 autoscaling) come before the
+	// Ingress: the backend only points at the interceptor once they exist.
+	scaling, err := r.reconcileWebScaling(ctx, app, mounts["web"], webRes)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if ps, ok := status["web"]; ok && sleepWanted {
-		// The sleep state, decided after the objects were reconciled (a
-		// pause may have just happened).
-		ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
-		switch pause, paused := r.sleepPause(app); {
-		case paused:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
-		case !sleepActive:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
-		case webReplicas != nil && *webReplicas == 0:
-			ps.Sleep.State = "sleeping"
-			ps.Desired = 0 // the scaler's decision, not a failure
-		}
-		if ps.Sleep.Message == "" && r.sleepSource(app) == "workspace" {
-			if sp := r.webSleepSpec(app); sp != nil {
-				ps.Sleep.Message = "the workspace's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
+	retry = scaling.retry
+	if ps, ok := status["web"]; ok {
+		// The policy as it applies and where it comes from, for every web
+		// process (#120, #132), then the state, decided after the objects
+		// were reconciled (a pause may have just happened).
+		ps.Sleep = r.webSleepStatus(app, mounts["web"])
+		if sleepWanted {
+			switch pause, paused := r.sleepPause(app); {
+			case paused:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
+			case !scaling.sleep:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
+			case webReplicas != nil && *webReplicas == 0:
+				ps.Sleep.State = "sleeping"
+				ps.Desired = 0 // the scaler's decision, not a failure
 			}
+			if ps.Sleep.Message == "" && ps.Sleep.Source == "workspace" {
+				ps.Sleep.Message = "the workspace's default: sleeps after " + ps.Sleep.After + " (" + ps.Sleep.Resuming + " mode), unless the project sets a sleep policy of its own or none"
+			}
+		}
+		// The bounds as set, and whether the cluster follows them. While
+		// it does, Desired is the count the scaler asks for now.
+		ps.Autoscale = r.webAutoscaleStatus(app, mounts["web"], scaling)
+		if scaling.autoscale && webReplicas != nil {
+			ps.Desired = *webReplicas
 		}
 		status["web"] = ps
 	}
@@ -1001,62 +1181,68 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// Remove the redirect before restoring the same host/path on the app ingress.
 	if !serving || r.Config.redirectTarget(app) == "" {
 		if err := r.reconcileDomainRedirect(ctx, app, false); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app), Namespace: app.Namespace}}
 	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
-			r.Config.mutateIngress(app, ing, sleepActive)
+			r.Config.mutateIngress(app, ing, scaling.interceptor, scaling.sleep)
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("ingress: %w", err)
+			return nil, 0, fmt.Errorf("ingress: %w", err)
+		}
+		// The bridge of the earlier name goes once the Ingress is off it.
+		if scaling.interceptor {
+			if err := r.deleteLegacyBridge(ctx, app); err != nil {
+				return nil, 0, err
+			}
 		}
 	} else if err := r.deleteIfExists(ctx, ing); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if serving && r.Config.redirectTarget(app) != "" {
 		if err := r.reconcileDomainRedirect(ctx, app, true); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenance(app)) {
+	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenanceHTTP(app)) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("edge service: %w", err)
+			return nil, 0, fmt.Errorf("edge service: %w", err)
 		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeIng, func() error {
 			r.Config.mutateEdgeIngress(app, edgeIng)
 			return controllerutil.SetControllerReference(app, edgeIng, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("edge ingress: %w", err)
+			return nil, 0, fmt.Errorf("edge ingress: %w", err)
 		}
 	} else {
 		if err := r.deleteIfExists(ctx, edgeIng); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := r.deleteIfExists(ctx, edgeSvc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	if err := r.reconcileCertificates(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := r.reconcileAppsTLS(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Garbage collect workloads of removed process types.
 	var deployments appsv1.DeploymentList
 	if err := r.List(ctx, &deployments, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for i := range deployments.Items {
 		d := &deployments.Items[i]
@@ -1065,14 +1251,14 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			continue
 		}
 		if err := r.deleteIfExists(ctx, d); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: d.Name, Namespace: d.Namespace}}
 		if err := r.deleteIfExists(ctx, svc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	return status, nil
+	return status, retry, nil
 }
 
 func (r *AppReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {
@@ -1114,16 +1300,27 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 			log.FromContext(ctx).Info("could not audit the release", "err", err.Error())
 			return
 		}
+		// Drop who asked for the release, unless someone (a push) asked
+		// for the next one meanwhile.
+		asked := map[string]string{}
+		for _, k := range []string{shpyrdv1.AnnotationDeployedBy, shpyrdv1.AnnotationDeployedSubject, shpyrdv1.AnnotationDeployedClient} {
+			if v, ok := app.Annotations[k]; ok {
+				asked[k] = v
+			}
+		}
 		patch := client.MergeFrom(app.DeepCopy())
 		if app.Annotations == nil {
 			app.Annotations = map[string]string{}
 		}
 		app.Annotations[shpyrdv1.AnnotationAuditedRelease] = strconv.Itoa(cur.Number)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedBy)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedSubject)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedClient)
 		if err := r.Patch(ctx, app, patch); err != nil {
 			log.FromContext(ctx).Info("could not mark the release audited", "err", err.Error())
+			return
+		}
+		for k, v := range asked {
+			if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+				logRemoveAnnotation(ctx, err, "kept who asked for the next release", "who asked for the release", "annotation", k)
+			}
 		}
 	case app.Status.Phase == shpyrdv1.PhaseFailed && before.Status.Phase != shpyrdv1.PhaseFailed:
 		entry.Action, entry.Detail = "release.failed", app.Status.Message
@@ -1133,13 +1330,20 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 	}
 }
 
-// clearReleaseNote removes the one-shot annotations once consumed.
+// clearReleaseNote removes the one-shot annotations once consumed, each
+// only while it holds the value this reconcile read: a note the source
+// watcher wrote meanwhile is the next release's (RFC-0018).
 func (r *AppReconciler) clearReleaseNote(ctx context.Context, app *shpyrdv1.App) {
-	patch := client.MergeFrom(app.DeepCopy())
-	delete(app.Annotations, shpyrdv1.AnnotationReleaseNote)
-	delete(app.Annotations, shpyrdv1.AnnotationRollbackTo)
-	if err := r.Patch(ctx, app, patch); err != nil {
-		log.FromContext(ctx).Info("could not clear release note", "err", err.Error())
+	read := map[string]string{}
+	for _, k := range []string{shpyrdv1.AnnotationReleaseNote, shpyrdv1.AnnotationRollbackTo} {
+		if v, ok := app.Annotations[k]; ok {
+			read[k] = v
+		}
+	}
+	for k, v := range read {
+		if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+			logRemoveAnnotation(ctx, err, "kept a newer one-shot annotation", "a one-shot annotation", "annotation", k)
+		}
 	}
 }
 

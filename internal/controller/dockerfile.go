@@ -22,6 +22,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Dockerfile builds run as Kubernetes Jobs: an init container fetches the
@@ -49,7 +50,7 @@ type buildResult struct {
 
 // reconcileDockerfileBuild makes sure a Job exists for the current source and
 // build settings and reports its state.
-func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App) (buildState, error) {
+func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (buildState, error) {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {
 		return buildState{}, fmt.Errorf("list builds: %w", err)
@@ -66,7 +67,7 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		if latest != nil {
 			n = buildNumber(latest) + 1
 		}
-		job, err := r.Config.desiredBuildJob(app, n, key)
+		job, err := r.Config.desiredBuildJob(app, n, key, git)
 		if err != nil {
 			return buildState{}, err
 		}
@@ -235,7 +236,8 @@ func buildKey(app *shpyrdv1.App) string {
 		case src.Blob != nil:
 			h.Write([]byte("blob:" + firstNonEmpty(src.Blob.SHA256, src.Blob.URL)))
 		case src.Git != nil:
-			h.Write([]byte("git:" + src.Git.URL + "#" + src.Git.Revision))
+			// The pinned commit: a new commit of the branch is a new build.
+			h.Write([]byte("git:" + src.Git.URL + "#" + app.BuildRevision()))
 		}
 		h.Write([]byte("subpath:" + src.SubPath))
 	}
@@ -264,6 +266,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			if t.Reason == "OOMKilled" {
+				return nil, buildOutOfMemory("fetching the source", buildFetchMemoryLimit)
+			}
 			return nil, describeBuildFailure("prepare", t.Message)
 		}
 	}
@@ -278,6 +283,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 				return &res, ""
 			}
 			return nil, "build finished without reporting an image"
+		}
+		if t.Reason == "OOMKilled" {
+			return nil, buildOutOfMemory("building the image", buildMemoryLimit)
 		}
 		return nil, describeBuildFailure("dockerfile", t.Message)
 	}
@@ -342,7 +350,7 @@ func (r *AppReconciler) pruneBuildJobs(ctx context.Context, builds []batchv1.Job
 func buildJobName(app *shpyrdv1.App, n int) string { return fmt.Sprintf("%s-build-%d", app.Name, n) }
 
 // desiredBuildJob builds the Job for build number n.
-func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string) (*batchv1.Job, error) {
+func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string, git gitauth.Build) (*batchv1.Job, error) {
 	name := buildJobName(app, n)
 	labels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuildNumber: strconv.Itoa(n)})
 	podLabels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuild: name})
@@ -417,21 +425,29 @@ echo "pushed $IMAGE_REPO@$digest"`
 					RestartPolicy:      corev1.RestartPolicyNever,
 					EnableServiceLinks: ptr.To(false),
 					NodeSelector:       c.appsNodeSelector(), // RFC-0077
+					// Outside the workspace's ceiling (#243), bounded by the
+					// limits below instead.
+					PriorityClassName: BuildPriorityClass,
 					SecurityContext:    &corev1.PodSecurityContext{FSGroup: uid},
 					InitContainers: []corev1.Container{{
 						Name:    fetchContainer,
 						Image:   c.BuildKitImage,
-						Command: []string{"sh", "-ec", c.fetchScript(app)},
-						// The build container asks for resources, so a workspace's
-						// quota covers the pod and refuses it unless this one asks
-						// too (#117). Small requests, no limit: a shallow clone of a
-						// large repository can need a few hundred MiB.
-						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("10m"),
-							corev1.ResourceMemory: resource.MustParse("64Mi"),
-						}},
+						Command: []string{"sh", "-ec", c.fetchScript(app, git)},
+						// Small requests for scheduling, a limit for protection: a
+						// shallow clone of a large repository can need a few
+						// hundred MiB.
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse(buildFetchCPULimit),
+								corev1.ResourceMemory: resource.MustParse(buildFetchMemoryLimit),
+							},
+						},
 						SecurityContext:          &corev1.SecurityContext{RunAsUser: uid, RunAsGroup: uid, AllowPrivilegeEscalation: ptr.To(false)},
-						VolumeMounts:             []corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}},
+						VolumeMounts:             append([]corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}}, gitAuthMounts(git)...),
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 					}},
 					Containers: []corev1.Container{{
@@ -443,10 +459,19 @@ echo "pushed $IMAGE_REPO@$digest"`
 							{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
 							{Name: "IMAGE_REPO", Value: repo},
 						}, c.buildKitAuthEnv()...), c.trustEnv()...),
-						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("250m"),
-							corev1.ResourceMemory: resource.MustParse("512Mi"),
-						}},
+						// The requests place the build on a machine; the limits
+						// are its hard ceiling, since the workspace's no longer
+						// counts it (#243).
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("250m"),
+								corev1.ResourceMemory: resource.MustParse("512Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse(buildCPULimit),
+								corev1.ResourceMemory: resource.MustParse(buildMemoryLimit),
+							},
+						},
 						SecurityContext: unconfined,
 						VolumeMounts: append(append([]corev1.VolumeMount{
 							{Name: "workspace", MountPath: workspaceDir},
@@ -458,12 +483,27 @@ echo "pushed $IMAGE_REPO@$digest"`
 					Volumes: append(append([]corev1.Volume{
 						{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 						{Name: "buildkit", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-					}, c.buildKitAuthVolumes()...), c.trustVolumes()...),
+					}, c.buildKitAuthVolumes()...), append(c.trustVolumes(), gitAuthVolumes(git)...)...),
 				},
 			},
 		},
 	}
 	return job, nil
+}
+
+// A Dockerfile build's hard ceiling (#243): out of the workspace's quota,
+// it is bounded here. Past the memory limit the build is killed and says
+// so; CPU above the limit is throttled.
+const (
+	buildMemoryLimit      = "2Gi"
+	buildCPULimit         = "2"
+	buildFetchMemoryLimit = "512Mi"
+	buildFetchCPULimit    = "500m"
+)
+
+// buildOutOfMemory says a build passed its hard ceiling, in words.
+func buildOutOfMemory(doing, limit string) string {
+	return fmt.Sprintf("The build ran out of memory while %s: a build may use up to %s. Make the build lighter (fewer steps in parallel, a smaller dependency install, a multi-stage Dockerfile).", doing, limit)
 }
 
 // dockerfilePath is the Dockerfile location relative to the context.
@@ -474,9 +514,14 @@ func dockerfilePath(app *shpyrdv1.App) string {
 	return "Dockerfile"
 }
 
+// gitAuthDir is where the fetch container finds <app>-git.
+const gitAuthDir = "/git-auth"
+
 // fetchScript downloads the uploaded archive or clones the git revision
-// into the workspace and records the resolved revision.
-func (c Config) fetchScript(app *shpyrdv1.App) string {
+// into the workspace and records the resolved revision. With a credential
+// it reads it from gitAuthDir: never inlined, so a value with quotes or a
+// newline cannot change the script.
+func (c Config) fetchScript(app *shpyrdv1.App, git gitauth.Build) string {
 	src := app.Spec.Source
 	dst := workspaceDir + "/src"
 	switch {
@@ -487,17 +532,48 @@ tar xzf /tmp/source.tgz -C %[1]s
 printf '%%s' %[3]s > %[4]s/revision
 echo "source ready"`, dst, shellQuote(c.sourceURL(src.Blob.URL)), shellQuote(src.Blob.Ref), workspaceDir)
 	case src.Git != nil:
-		rev := firstNonEmpty(src.Git.Revision, "main")
-		return fmt.Sprintf(`url=%[1]s
+		url := src.Git.URL
+		if git.CloneURL != "" {
+			url = git.CloneURL
+		}
+		auth := ""
+		switch git.Kind {
+		case gitauth.KindToken, gitauth.KindGitHubApp:
+			auth = fmt.Sprintf(`export HOME=/tmp
+printf 'machine %%s login %%s password %%s\n' %[1]s "$(cat %[2]s/username)" "$(cat %[2]s/password)" > "$HOME/.netrc"
+chmod 600 "$HOME/.netrc"
+`, shellQuote(git.Host), gitAuthDir)
+		case gitauth.KindDeployKey:
+			auth = fmt.Sprintf(`cp %[1]s/ssh-privatekey /tmp/deploy-key
+chmod 600 /tmp/deploy-key
+export GIT_SSH_COMMAND="ssh -i /tmp/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%[1]s/known_hosts"
+`, gitAuthDir)
+		}
+		// Only with a deploy key is there a recorded host key for ssh to
+		// refuse: git's output is the same without one, so the marker
+		// says which it was (describeBuildFailure).
+		hostKey := ""
+		if git.Kind == gitauth.KindDeployKey {
+			hostKey = fmt.Sprintf(`    if grep -q 'Host key verification failed' /tmp/clone.err; then echo %s >&2; fi
+`, shellQuote(hostKeyChangedMarker))
+		}
+		// The pinned commit of a branch; the script already fetches a
+		// commit that is not a branch or tag.
+		rev := app.BuildRevision()
+		return auth + fmt.Sprintf(`url=%[1]s
 rev=%[2]s
-if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/dev/null; then :; else
+if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/tmp/clone.err; then :; else
+  if grep -qiE 'authentication|could not read|permission denied|repository not found|host key verification' /tmp/clone.err; then
+    cat /tmp/clone.err >&2
+%[5]s    exit 1
+  fi
   # not a branch or tag: fetch the commit
   git init --quiet %[3]s
   git -C %[3]s fetch --quiet --depth 1 "$url" "$rev"
   git -C %[3]s checkout --quiet FETCH_HEAD
 fi
 git -C %[3]s rev-parse HEAD > %[4]s/revision
-echo "source ready at $(cat %[4]s/revision)"`, shellQuote(src.Git.URL), shellQuote(rev), dst, workspaceDir)
+echo "source ready at $(cat %[4]s/revision)"`, shellQuote(url), shellQuote(rev), dst, workspaceDir, hostKey)
 	}
 	return "echo 'no source'; exit 1"
 }
@@ -505,6 +581,26 @@ echo "source ready at $(cat %[4]s/revision)"`, shellQuote(src.Git.URL), shellQuo
 // shellQuote single-quotes s for POSIX sh.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// The project's git credential for the fetch container only: the build's
+// RUN steps never see it.
+func gitAuthMounts(git gitauth.Build) []corev1.VolumeMount {
+	if git.Secret == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: "git-auth", MountPath: gitAuthDir, ReadOnly: true}}
+}
+
+func gitAuthVolumes(git gitauth.Build) []corev1.Volume {
+	if git.Secret == nil {
+		return nil
+	}
+	// Optional: a credential removed between the Job and its pod fails the
+	// clone at once rather than holding the pod in ContainerCreating.
+	return []corev1.Volume{{Name: "git-auth", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+		SecretName: git.Secret.Name, DefaultMode: ptr.To[int32](0o440), Optional: ptr.To(true),
+	}}}}
 }
 
 // Registry credentials for BuildKit: the mirrored dockerconfigjson Secret

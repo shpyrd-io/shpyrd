@@ -69,6 +69,7 @@ vars:
   # SHPYRD_DATABASE_URL names a managed one.
   SHPYRD_DATABASE_URL: ""
   SHPYRD_CONTROL_PLANE_DB_SIZE: 50Gi
+  SHPYRD_CONTROL_PLANE_DB_INSTANCES: "2"  # with the postgres extension, a CloudNativePG cluster of this many instances
   SHPYRD_OBJECT_STORAGE_SIZE: 50Gi
   # The S3 gateway (RFC-0046) on OCI: Object Storage's S3 compatibility
   # honours If-None-Match but ignores If-Match, so the gateway runs as the

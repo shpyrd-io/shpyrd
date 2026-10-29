@@ -6,7 +6,7 @@ import type { Perms } from "@/lib/perms";
 import mockConfig from "../../../mock/config.json";
 import projects from "../../../mock/projects.json";
 import things from "../../../mock/things.json";
-import { allowanceOf, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, VolumeDialog } from "./resources";
+import { allowanceOf, AutoscaleDialog, autoscaleWords, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, SleepDialog, sleepOf, sleepWords, VolumeDialog } from "./resources";
 import workspace from "../../../mock/workspace.json";
 
 // The queries answer from the Mock's files, by the first word of their
@@ -225,13 +225,13 @@ describe("a bucket beside the application", () => {
     state.answers = { config, resources: [], volumes: [], sizes, workspace };
     render(<Resources project={project} perms={perms} />);
     open();
-    const item = await screen.findByRole("menuitem", { name: /A bucket/ });
+    const item = await screen.findByRole("menuitem", { name: /S3 Compatible Storage/ });
     expect(item.getAttribute("aria-disabled")).not.toBe("true");
     cleanup();
     state.answers = { config: { ...config, extensions: config.extensions.filter((x) => x !== "object-storage") }, resources: [], volumes: [], sizes, workspace };
     render(<Resources project={project} perms={perms} />);
     open();
-    expect((await screen.findByRole("menuitem", { name: /A bucket/ })).textContent).toContain("needs the object-storage extension");
+    expect((await screen.findByRole("menuitem", { name: /S3 Compatible Storage/ })).textContent).toContain("needs the object-storage extension");
   });
 
   it("says the plan's cap per bucket, and refuses more in the plan's words before the request", async () => {
@@ -249,5 +249,135 @@ describe("a bucket beside the application", () => {
     render(<BucketDialog slug="hello-world" onDone={nothing} onClose={nothing} />);
     expect(screen.getByText("This would bring the workspace to 2 of 1 buckets.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// Sleep (#120, #132): the three states of #135 read apart, on the web row
+// and on a dedicated database, and the dialog that sets them.
+describe("what a sleep policy says and how it is set", () => {
+  it("reads the three states apart, with the wake mode and the state now", () => {
+    expect(sleepWords({ state: "awake", source: "off" })).toBe("never sleeps, whatever the workspace's default");
+    expect(sleepWords({ state: "awake", after: "30m", resuming: "wait", source: "project" })).toBe("sleeps after 30m (wait mode), its own policy");
+    expect(sleepWords({ state: "sleeping", after: "15m", resuming: "page", source: "workspace" })).toBe("sleeps after 15m (page mode), the workspace's default; asleep now");
+    expect(sleepWords({ state: "awake", source: "workspace" })).toBe("does not sleep: the workspace's default sets none");
+    expect(sleepWords({ state: "suspended", after: "10m", source: "workspace" })).toBe("sleeps after 10m, the workspace's default; suspended now");
+  });
+  it("reads a database's policy out of its details, and says it in the details line only when something applies", () => {
+    expect(sleepOf({ sleepState: "sleeping", sleepAfter: "10m0s", sleepSource: "workspace" })).toEqual({ state: "sleeping", after: "10m0s", source: "workspace", message: undefined });
+    expect(detailsOf(named("db"))).not.toContain("sleep");
+    expect(detailsOf({ ...named("db"), details: { ...named("db").details, sleepAfter: "10m0s", sleepState: "awake" } })).toContain("sleeps after 10m0s, the workspace's default");
+    expect(detailsOf({ ...named("db"), details: { ...named("db").details, sleepSource: "off" } })).toContain("never sleeps");
+  });
+  it("shows the web process's policy on its row, and a Sleep control", () => {
+    state.answers = { resources, volumes, config, sizes, workspace };
+    const asleep = projects.find((p) => p.processes?.web?.sleep?.state === "sleeping") as unknown as Project;
+    const html = renderToStaticMarkup(<Resources project={asleep} perms={perms} />);
+    expect(html).toContain("sleeps after 15m (page mode), the workspace&#x27;s default; asleep now");
+    expect(html).toContain(">Sleep<");
+  });
+  it("offers the workspace's default, a quiet period of its own with the wake mode for a web process, and off", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="shop" current={{ state: "awake", after: "15m", resuming: "page", source: "workspace" }} modes onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText("When shop sleeps")).toBeTruthy();
+    expect(screen.getByText(/Now it sleeps after 15m \(page mode\), the workspace's default\./)).toBeTruthy();
+    // The default is kept as it is: saving hands the project back to the workspace.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "default" });
+  });
+  it("a quiet period of its own shows the period and, for a web process, the wake mode", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="shop" current={{ state: "awake", after: "30m", resuming: "wait", source: "project" }} modes onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText("Quiet period")).toBeTruthy();
+    expect(screen.getByText("Waking")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "30m", resuming: "wait" });
+  });
+  it("a database has no wake mode, and off is a policy of its own", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="db" current={{ state: "awake", source: "off" }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText(/Now it never sleeps, whatever the workspace's default\./)).toBeTruthy();
+    expect(screen.queryByText("Waking")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "off" });
+  });
+});
+
+describe("the bounds a web process follows its load between (RFC-0047)", () => {
+  it("says what the bounds do, then what the cluster cannot do about them", () => {
+    expect(autoscaleWords({ min: 2, max: 10, cpu: 70, concurrency: 20, state: "active" })).toBe("follows its load between 2 and 10: another instance past 70% CPU or 20 requests in flight");
+    expect(autoscaleWords({ min: 2, max: 10, cpu: 50, concurrency: 20, state: "active", message: "CPU is not measured" })).toBe("follows its load between 2 and 10: another instance past 50% CPU or 20 requests in flight; CPU is not measured");
+    expect(autoscaleWords({ min: 1, max: 4, cpu: 70, concurrency: 20, state: "unavailable", message: "autoscaling needs the autoscale extension" })).toBe("follows its load between 1 and 4: another instance past 70% CPU or 20 requests in flight; not now: autoscaling needs the autoscale extension");
+  });
+  it("shows the bounds in place of the steppers on the web row, with the Autoscale control, and the read-back", () => {
+    state.answers = { resources, volumes, config, sizes, workspace };
+    const bounded = {
+      ...project,
+      spec: { ...project.spec, processes: { ...project.spec.processes, web: { ...project.spec.processes?.web, autoscale: { min: 2, max: 10 } } } },
+      processes: { ...project.processes, web: { ...project.processes?.web, desired: 3, ready: 3, autoscale: { min: 2, max: 10, cpu: 70, concurrency: 20, state: "active" as const } } },
+    } as unknown as Project;
+    const html = renderToStaticMarkup(<Resources project={bounded} perms={perms} />);
+    const web = rowOf(html, "web") || html.split("<tr").find((row) => row.includes(">web<")) || "";
+    expect(web).toContain("2–10");
+    expect(web).toContain(">Autoscale<");
+    expect(web).not.toContain('aria-label="One more"');
+    expect(web).toContain("follows its load between 2 and 10: another instance past 70% CPU or 20 requests in flight");
+    // Without bounds the steppers stay, and the control offers them.
+    const plain = renderToStaticMarkup(<Resources project={project} perms={perms} />);
+    const webPlain = plain.split("<tr").find((row) => row.includes(">web<")) ?? "";
+    expect(webPlain).toContain('aria-label="One more"');
+    expect(webPlain).toContain(">Autoscale<");
+  });
+  it("saves the bounds, with the targets only when they differ from the defaults", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={4} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    expect(screen.getByText("How many instances shop runs")).toBeTruthy();
+    // A fixed count is what it has: saving as is turns the bounds off.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ off: true });
+  });
+  it("opens on the bounds it has and sends them back with a changed target", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    expect((screen.getByLabelText("Minimum instances") as HTMLInputElement).value).toBe("2");
+    expect((screen.getByLabelText("Maximum instances") as HTMLInputElement).value).toBe("10");
+    fireEvent.change(screen.getByLabelText("Maximum instances"), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText("CPU target"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ min: 2, max: 12, cpu: 50 });
+  });
+  it("moves the bounds along the line, a step at a time", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    const most = screen.getByRole("slider", { name: "At most" });
+    expect(most.getAttribute("aria-valuenow")).toBe("10");
+    fireEvent.focus(most);
+    fireEvent.keyDown(most, { key: "ArrowRight" });
+    // The thumb and the input say the same number.
+    expect((screen.getByLabelText("Maximum instances") as HTMLInputElement).value).toBe("11");
+    // A number typed moves the thumb.
+    fireEvent.change(screen.getByLabelText("Minimum instances"), { target: { value: "4" } });
+    expect(screen.getByRole("slider", { name: "At least" }).getAttribute("aria-valuenow")).toBe("4");
+    // The targets have a thumb of their own, beside their input.
+    const cpu = screen.getByRole("slider", { name: "CPU target slider" });
+    fireEvent.focus(cpu);
+    fireEvent.keyDown(cpu, { key: "ArrowLeft" });
+    expect((screen.getByLabelText("CPU target") as HTMLInputElement).value).toBe("69");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ min: 4, max: 11, cpu: 69 });
+  });
+  it("refuses bounds that make no sense", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    fireEvent.change(screen.getByLabelText("Maximum instances"), { target: { value: "1" } });
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

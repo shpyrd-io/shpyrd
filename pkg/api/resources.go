@@ -187,6 +187,15 @@ func resourceViewOf(t ext.ResourceType, u unstructured.Unstructured) ResourceVie
 			}
 		}
 	}
+	// Sleep (RFC-0075): the state, the quiet period that applies and where
+	// it comes from (#120).
+	if sl, ok, _ := unstructured.NestedMap(u.Object, "status", "sleep"); ok && sl != nil {
+		for key, detail := range map[string]string{"state": "sleepState", "after": "sleepAfter", "source": "sleepSource", "message": "sleepMessage"} {
+			if s, _ := sl[key].(string); s != "" {
+				v.Details[detail] = s
+			}
+		}
+	}
 	// Backups (RFC-0038): on/off with retention, the last one and the window.
 	if b, ok, _ := unstructured.NestedMap(u.Object, "spec", "backups"); ok && b != nil {
 		retention, _ := b["retention"].(string)
@@ -400,6 +409,9 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		ch.add, ch.addN, ch.instances = res, count, count
 		if t.Kind == "Postgres" && count == 1 {
 			note = strings.TrimSpace(note + " " + noteOneInstance)
+		}
+		if persistent, _ := spec["persistent"].(bool); t.Kind == "Redis" && !persistent {
+			note = strings.TrimSpace(note + " " + noteCacheSleeps)
 		}
 		// Its disk counts against the workspace's storage ceiling, as the
 		// namespace quota will count it, once per instance: refused here,
@@ -1015,6 +1027,9 @@ func (s *Server) mutateObjectBucket(c *gin.Context, mutate func(*shpyrdv1.Object
 	}
 	return out, nil
 }
+
+// noteCacheSleeps is said when a cache is created (storage plan step 6).
+const noteCacheSleeps = "A cache sleeps with the project's web process: it stops while the web process sleeps and comes back with it, empty."
 
 // projectBucket says the bucket is one of the project's own; the
 // platform's are answered as not found.

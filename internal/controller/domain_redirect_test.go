@@ -1,13 +1,16 @@
 package controller
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -33,8 +36,8 @@ func TestDomainRedirectRoutes(t *testing.T) {
 				r.Config.InternalLBAddress = "10.0.0.1"
 				r.Config.HTTPSPort = "8443"
 				ing := &networkingv1.Ingress{}
-				r.Config.mutateIngress(app, ing, true)
-				if len(ing.Spec.Rules) != 1 || ing.Spec.Rules[0].Host != "www.myprod.com" || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name != webSleepServiceName {
+				r.Config.mutateIngress(app, ing, true, true)
+				if len(ing.Spec.Rules) != 1 || ing.Spec.Rules[0].Host != "www.myprod.com" || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name != webInterceptorService {
 					t.Fatalf("app ingress: %+v", ing.Spec)
 				}
 				edge := &networkingv1.Ingress{}
@@ -50,9 +53,10 @@ func TestDomainRedirectRoutes(t *testing.T) {
 				if err := r.Get(t.Context(), key, redirect); err != nil {
 					t.Fatal(err)
 				}
-				if redirect.Spec.Rules[0].Host != "shop.example.test" || redirect.Annotations["nginx.ingress.kubernetes.io/permanent-redirect"] != "https://www.myprod.com:8443$request_uri" || redirect.Annotations["nginx.ingress.kubernetes.io/permanent-redirect-code"] != "308" {
+				if redirect.Spec.Rules[0].Host != "shop.example.test" || redirect.Annotations[AnnotationRedirectTo] != "https://www.myprod.com:8443" {
 					t.Fatalf("redirect: %+v", redirect)
 				}
+				answeredByTheServer(t, r, redirect)
 				if redirect.Annotations["nginx.ingress.kubernetes.io/auth-url"] != "" {
 					t.Fatal("redirect requires authentication before reaching destination")
 				}
@@ -87,13 +91,67 @@ func TestDomainRedirectRoutes(t *testing.T) {
 				if err := r.Get(t.Context(), key, redirect); !apierrors.IsNotFound(err) {
 					t.Fatalf("redirect not removed: %v", err)
 				}
-				r.Config.mutateIngress(app, ing, false)
+				r.Config.mutateIngress(app, ing, false, false)
 				if ing.Spec.Rules[0].Host != "shop.example.test" {
 					t.Fatal("platform host not restored")
 				}
 			})
 		}
 	}
+}
+
+// ingress-nginx's admission webhook allows rewrite-target only these
+// characters (parser.RegexPathWithCapture, controller v1.15); its
+// permanent-redirect refuses the $request_uri a redirect needs (#133).
+var nginxRewriteTarget = regexp.MustCompile(`^/?[\-\._~a-zA-Z0-9/:$]*$`)
+
+// answeredByTheServer: a redirect Ingress sends every path to the server's
+// redirect, through the server's alias in the namespace, and carries no
+// annotation the webhook refuses.
+func answeredByTheServer(t *testing.T, r *AppReconciler, ing *networkingv1.Ingress) {
+	t.Helper()
+	if _, ok := ing.Annotations[nginxPermanentRedirect]; ok {
+		t.Fatalf("nginx redirects: %v", ing.Annotations)
+	}
+	if got := ing.Annotations["nginx.ingress.kubernetes.io/rewrite-target"]; got != RedirectPath+"/$1" || !nginxRewriteTarget.MatchString(got) || ing.Annotations["nginx.ingress.kubernetes.io/use-regex"] != "true" {
+		t.Fatalf("rewrite-target %q", got)
+	}
+	if ing.Labels[LabelRedirect] != "true" {
+		t.Fatalf("not found by the server: %v", ing.Labels)
+	}
+	for _, rule := range ing.Spec.Rules {
+		for _, p := range rule.HTTP.Paths {
+			if p.Path != "/(.*)" || *p.PathType != networkingv1.PathTypeImplementationSpecific || p.Backend.Service.Name != redirectServiceName {
+				t.Fatalf("path %s goes to %s", p.Path, p.Backend.Service.Name)
+			}
+		}
+	}
+	svc := &corev1.Service{}
+	if err := r.Get(t.Context(), client.ObjectKey{Namespace: ing.Namespace, Name: redirectServiceName}, svc); err != nil || svc.Spec.ExternalName == "" {
+		t.Fatalf("the server's alias: %v %+v", err, svc.Spec)
+	}
+}
+
+func TestAMovedHostIsRedirectedByTheServerAndLosesNginxsRedirect(t *testing.T) {
+	app := domainsApp()
+	r, _ := newTestReconciler(t, app)
+	// One written by an earlier version, which the webhook now refuses.
+	old := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: redirectIngressName(app, "old.example.test"), Namespace: app.Namespace,
+		Annotations: map[string]string{nginxPermanentRedirect: "https://shop.example.test$request_uri"}}}
+	if err := r.Create(t.Context(), old); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensureRedirectIngress(t.Context(), app, "old.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	ing := &networkingv1.Ingress{}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(old), ing); err != nil {
+		t.Fatal(err)
+	}
+	if ing.Spec.Rules[0].Host != "old.example.test" || ing.Annotations[AnnotationRedirectTo] != "https://"+r.Config.defaultHost(app) {
+		t.Fatalf("moved: %+v %v", ing.Spec.Rules, ing.Annotations)
+	}
+	answeredByTheServer(t, r, ing)
 }
 
 func boolInt(v bool) int {

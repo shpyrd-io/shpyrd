@@ -1,0 +1,9 @@
+---
+title: "Runs and releases see your disk"
+description: "A one-off command and the release step can run with a process's volumes; a process that will not start opens in a shell."
+date: "2026-10-22"
+type: feature
+draft: false
+---
+
+`shpyrd run --process web -- rails db:migrate` runs the command with the volumes `web` mounts, on the machine that holds a single-instance disk, so a migration that touches files on the disk, or a script that reads an upload, runs where the data is. The release step does the same when its process is named (`processes.release.volumes` in `shpyrd.yaml`), so a deploy can prepare a disk before the new instances start. When a process refuses to start, `shpyrd shell --debug web` opens a copy of it with its config, its volumes and no command, to look around.

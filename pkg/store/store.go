@@ -23,7 +23,28 @@ const DefaultWorkspace = "default"
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("already exists")
+	// ErrFull is a store refusing more of something it caps.
+	ErrFull = errors.New("too many waiting")
 )
+
+// CLIDevice is a `shpyrd login` waiting for its approval in the browser
+// (RFC-0052): the CLI holds the device code (kept here by its hash) and
+// polls; the person types the user code at their workspace and approves.
+type CLIDevice struct {
+	DeviceHash  string
+	WorkspaceID string
+	UserCode    string
+	// Name is what the CLI called its machine.
+	Name string
+	// State is "" while waiting, then "approved" (Token holds the minted
+	// credential until a poll takes it) or "denied".
+	State    string
+	Token    string
+	Email    string
+	TokenExp *time.Time
+	LastPoll time.Time
+	Expires  time.Time
+}
 
 // Workspace is the tenant. Every workspace answers at an Address of its
 // own (RFC-0080): the dashboard and sign-in at <Address>, apps at
@@ -160,6 +181,20 @@ type WorkspaceSettings struct {
 	// MCPName is what an assistant shows for the workspace's MCP server
 	// (RFC-0032); "<name> on shpyrd" when empty.
 	MCPName string `json:"mcpName,omitempty"`
+	// UI is the workspace application this workspace's door serves (RFC-0084):
+	// a reference to a built application, served in place of the platform's
+	// own; nil means the platform's own.
+	UI *WorkspaceUI `json:"ui,omitempty"`
+}
+
+// WorkspaceUI is a workspace's choice of application (RFC-0084): Ref names
+// a built application the server can fetch ("dir:/path" for development,
+// "oci://host/repo@sha256:..." for a published one).
+type WorkspaceUI struct {
+	Ref string `json:"ref"`
+	// SetBy and SetAt say who set it and when.
+	SetBy string    `json:"setBy,omitempty"`
+	SetAt time.Time `json:"setAt,omitzero"`
 }
 
 // SleepDefaults are a workspace's default sleep: projects and databases
@@ -714,6 +749,8 @@ type Usage interface {
 	// Sleep events.
 	WriteSleepEvent(ctx context.Context, e SleepEvent) error
 	QuerySleepEvents(ctx context.Context, ws, project string, from, to time.Time) ([]SleepEvent, error)
+	// Out-of-memory kills (#119).
+	OOMKills
 }
 
 // Settings is the cluster-wide key/value store (RFC-0078).
@@ -874,6 +911,10 @@ type Memberships interface {
 	// DeleteMembership removes a person's workspace role; ErrNotFound when
 	// they had none.
 	DeleteMembership(ctx context.Context, ws, email string) error
+	// MembershipsOf lists the roles the person bound to an external
+	// identity holds, across workspaces, oldest first. A suspended person
+	// holds none, and an unbound legacy principal is never matched.
+	MembershipsOf(ctx context.Context, issuer, connector, subject string) ([]Membership, error)
 
 	// ListInvitations lists the workspace's invitations, expired ones
 	// included (the caller says so), oldest first.
@@ -929,6 +970,38 @@ type Store interface {
 	// the control-plane database, a transaction-scoped advisory lock, and
 	// is released when fn returns, whatever it returns.
 	LockWorkspace(ctx context.Context, slug string, fn func(ctx context.Context) error) error
+	// PutExecTicket keeps a one-time shell ticket (RFC-0026) under the hash
+	// of its code until it expires, and TakeExecTicket hands it out once,
+	// whichever replica of the server asks (storage plan step 7): false
+	// when no live ticket has the hash. Both sweep expired tickets.
+	PutExecTicket(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	TakeExecTicket(ctx context.Context, hash string) ([]byte, bool, error)
+	// PutPendingLogin keeps a sign-in in flight (RFC-0080) under the hash of
+	// its state until it expires; PeekPendingLogin reads it without taking
+	// it (the shared callback, which only hands the browser on) and
+	// TakePendingLogin hands it out once (the callback that completes it),
+	// whichever replica of the server asks: false when no live login has
+	// the hash. Put sweeps expired logins.
+	// PutCLIDevice keeps a code waiting for approval: ErrConflict when its
+	// user code waits already in the workspace, ErrFull at max waiting.
+	// The others find the one waiting by what the person typed, record the
+	// person's answer once, and answer the CLI's poll: not before minGap
+	// since the last (slowDown), and an answered code is taken by the poll
+	// that reads it. Times are the caller's clock; expired codes are gone
+	// (ErrNotFound) and swept on Put.
+	PutCLIDevice(ctx context.Context, d CLIDevice, max int, now time.Time) error
+	CLIDeviceByUserCode(ctx context.Context, workspaceID, userCode string, now time.Time) (*CLIDevice, error)
+	DecideCLIDevice(ctx context.Context, workspaceID, userCode, state, token, email string, tokenExp *time.Time, now time.Time) error
+	PollCLIDevice(ctx context.Context, workspaceID, deviceHash string, now time.Time, minGap time.Duration) (d *CLIDevice, slowDown bool, err error)
+	// PutArchiveDownload says which replica holds a project export's
+	// one-time download, under the hash of its ticket, until it expires;
+	// TakeArchiveDownload hands that out once: false when no live row has
+	// the hash. Put sweeps expired rows.
+	PutArchiveDownload(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	TakeArchiveDownload(ctx context.Context, hash string) ([]byte, bool, error)
+	PutPendingLogin(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
+	TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
 	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)
@@ -986,6 +1059,7 @@ type Store interface {
 	Settings
 	ConsoleUsers
 	Costs
+	GitHub
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

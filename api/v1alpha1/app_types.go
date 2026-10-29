@@ -111,6 +111,29 @@ const (
 	// AnnotationRebuildAt, on the App, builds the current source again
 	// (redeploy after a failed build, or to pick up a new base image).
 	AnnotationRebuildAt = "shpyrd.io/rebuild-at"
+	// AnnotationGitCommit and AnnotationGitCommitRef pin the commit a git
+	// branch builds (RFC-0018): the full SHA, and the revision it was read
+	// from. The pin holds only while the ref is spec.source.git's
+	// revision. The source watcher writes them; a git deploy removes them.
+	AnnotationGitCommit    = "shpyrd.io/git-commit"
+	AnnotationGitCommitRef = "shpyrd.io/git-commit-ref"
+	// AnnotationGitPush is a push the webhook received, as JSON, for the
+	// source watcher to consume.
+	AnnotationGitPush = "shpyrd.io/git-push"
+	// AnnotationGitSource is what the source watcher last saw of the
+	// branch, as JSON; the App controller copies it into status.source.
+	AnnotationGitSource = "shpyrd.io/git-source"
+	// AnnotationGitCI is a nudge the GitHub App's webhook leaves when a
+	// commit's checks or statuses change (RFC-0054), as JSON: the source
+	// watcher evaluates a held or CI-failed commit again, then drops it.
+	AnnotationGitCI = "shpyrd.io/git-ci"
+	// AnnotationGitHubReport is what the GitHub reporter last sent for the
+	// App, as JSON: the check run and the Deployment (RFC-0054).
+	AnnotationGitHubReport = "shpyrd.io/github-report"
+	// AnnotationGitHubLinkedBy is the GitHub login whose access picked the
+	// App's repository (RFC-0054, GitHub access by person): for the trail
+	// and the dashboard ("Connected by …"); nothing depends on it.
+	AnnotationGitHubLinkedBy = "shpyrd.io/github-linked-by"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes
@@ -120,6 +143,23 @@ const (
 	// `shpyrd secrets`.
 	EnvSecretSuffix = "-env"
 )
+
+// Maintenance is the maintenance mode of an app (RFC-0020).
+type Maintenance struct {
+	// Enabled puts the maintenance page in front of the app.
+	Enabled bool `json:"enabled"`
+	// Message is shown on the page under the project's name, plain text;
+	// empty shows the page's own words.
+	// +optional
+	// +kubebuilder:validation:MaxLength=500
+	Message string `json:"message,omitempty"`
+	// Since is when the mode was turned on, and By who turned it on, as
+	// the API records them; the header, the list and the CLI say so.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+	// +optional
+	By string `json:"by,omitempty"`
+}
 
 // Phases of an App.
 const (
@@ -134,6 +174,9 @@ const (
 const (
 	ConditionReady = "Ready"
 	ConditionBuilt = "Built"
+	// ConditionSourceReady says whether the branch an App follows could be
+	// read and a commit is pinned for it (RFC-0018).
+	ConditionSourceReady = "SourceReady"
 )
 
 // AppSpec is the desired state of an application.
@@ -207,6 +250,15 @@ type AppSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=public;authenticated;identified
 	Access string `json:"access,omitempty"`
+
+	// Maintenance puts a page in front of the app (RFC-0020): while
+	// Enabled, every HTTP request at its hosts receives a 503 and the
+	// maintenance page, programs a JSON answer with Retry-After. The
+	// processes keep running, and releases, scaling, shells and one-off
+	// commands go on underneath: the team works through the console, as
+	// nobody is let through the page. Nil or disabled serves the app.
+	// +optional
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
 
 	// Globals controls the cluster-wide config vars a platform admin sets
 	// with `shpyrd globals` (RFC-0016). Nil injects all of them.
@@ -299,13 +351,30 @@ type Source struct {
 	SubPath string `json:"subPath,omitempty"`
 }
 
-// GitSource builds from a Git repository; kpack polls branches for changes.
+// GitSource builds from a Git repository. A branch or tag is watched: the
+// source watcher pins its latest commit and builds use that commit
+// (RFC-0018). A commit is built as given.
 type GitSource struct {
 	URL string `json:"url"`
-	// Revision is a branch, tag or commit. Defaults to the default branch
-	// as resolved by kpack ("main" when unset).
+	// Revision is a branch, tag or commit. Defaults to "main".
 	// +optional
 	Revision string `json:"revision,omitempty"`
+	// AutoDeploy deploys every new commit of the branch; false records
+	// them without deploying. Unset means true.
+	// +optional
+	AutoDeploy *bool `json:"autoDeploy,omitempty"`
+	// WatchPaths are gitignore-style globs from the repository root: a
+	// commit deploys only when a file it changes matches. The last pattern
+	// that matches a file decides it; a leading ! excludes. GitHub App only
+	// (RFC-0054).
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=200
+	WatchPaths []string `json:"watchPaths,omitempty"`
+	// WaitForChecks holds a commit until its other checks and statuses on
+	// GitHub pass. GitHub App only (RFC-0054).
+	// +optional
+	WaitForChecks bool `json:"waitForChecks,omitempty"`
 }
 
 // BlobSource builds from an archive uploaded with `shpyrd deploy`.
@@ -381,7 +450,60 @@ type Build struct {
 	Target string `json:"target,omitempty"`
 }
 
-// Process is one process type of the app.
+// AutoscaleSpec lets a process's instance count follow its load between two
+// bounds (RFC-0047): KEDA scales the Deployment on the requests in flight
+// per instance and on CPU, whichever asks for more instances.
+type AutoscaleSpec struct {
+	// Min is the fewest instances, 1 or more.
+	// +kubebuilder:validation:Minimum=1
+	Min int32 `json:"min"`
+	// Max is the most, min or more.
+	// +kubebuilder:validation:Minimum=1
+	Max int32 `json:"max"`
+	// CPU is the CPU an instance may use before another is added, in
+	// percent of the size's CPU (its ceiling; a shared size's guaranteed
+	// share is a part of it). Default DefaultAutoscaleCPU.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	CPU *int32 `json:"cpu,omitempty"`
+	// Concurrency is the number of requests an instance may have in flight
+	// before another is added. Default DefaultAutoscaleConcurrency.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Concurrency *int32 `json:"concurrency,omitempty"`
+}
+
+// The targets an AutoscaleSpec means when it names none: 70% of the size's
+// CPU, and 20 requests in flight per instance (what Fly's proxy starts
+// another machine at).
+const (
+	DefaultAutoscaleCPU         int32 = 70
+	DefaultAutoscaleConcurrency int32 = 20
+)
+
+// TargetCPU is the CPU target in force, in percent of the size's CPU.
+func (a *AutoscaleSpec) TargetCPU() int32 {
+	if a != nil && a.CPU != nil && *a.CPU > 0 {
+		return *a.CPU
+	}
+	return DefaultAutoscaleCPU
+}
+
+// TargetConcurrency is the requests in flight per instance in force.
+func (a *AutoscaleSpec) TargetConcurrency() int32 {
+	if a != nil && a.Concurrency != nil && *a.Concurrency > 0 {
+		return *a.Concurrency
+	}
+	return DefaultAutoscaleConcurrency
+}
+
+// Valid says the bounds make sense: at least one instance, the maximum
+// not below the minimum.
+func (a *AutoscaleSpec) Valid() bool {
+	return a != nil && a.Min >= 1 && a.Max >= a.Min
+}
+
 // SleepSpec configures scale-to-zero for a process (RFC-0075).
 type SleepSpec struct {
 	// After is the quiet period before scaling to zero, e.g. "15m".
@@ -395,6 +517,39 @@ type SleepSpec struct {
 	Resuming string `json:"resuming,omitempty"`
 }
 
+// FallbackStatus records a process put back on its previous release
+// because the requested one cannot be scheduled (#127).
+type FallbackStatus struct {
+	// Generation of the spec the fallback was decided for.
+	Generation int64 `json:"generation"`
+	// Process is the process type running its previous release.
+	Process string `json:"process"`
+	// Release is the number of the release running again.
+	Release int `json:"release"`
+	// Message says why the requested release cannot start.
+	Message string `json:"message,omitempty"`
+}
+
+// AutoscaleStatus records how a process's count follows its load
+// (RFC-0047): the bounds and targets in force, and whether the cluster
+// follows them.
+type AutoscaleStatus struct {
+	// Min and Max are the bounds in force.
+	Min int32 `json:"min"`
+	Max int32 `json:"max"`
+	// CPU and Concurrency are the targets in force: percent of the size's
+	// CPU, requests in flight per instance.
+	CPU         int32 `json:"cpu"`
+	Concurrency int32 `json:"concurrency"`
+	// State is "active", or "unavailable" when the bounds are set but the
+	// cluster cannot follow them (Message says why).
+	State string `json:"state,omitempty"`
+	// Message explains an unavailable state, or what is missing from an
+	// active one (CPU is not measured without the Metrics Server).
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // SleepStatus records the sleep state of a process (RFC-0075).
 type SleepStatus struct {
 	// State is awake, sleeping or waking; "unavailable" when a policy is
@@ -403,6 +558,18 @@ type SleepStatus struct {
 	// Message explains an unavailable state.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// After and Resuming are the policy as it applies (#120): the quiet
+	// period and the wake mode, empty when nothing puts the process to
+	// sleep. Source says where it comes from: "project" for a policy of
+	// the project's own, "off" for an explicit off (awake whatever the
+	// workspace's default), "workspace" otherwise (the workspace's
+	// default, or none when it sets none).
+	// +optional
+	After string `json:"after,omitempty"`
+	// +optional
+	Resuming string `json:"resuming,omitempty"`
+	// +optional
+	Source string `json:"source,omitempty"`
 	// LastActivityAt is when the last request arrived.
 	// +optional
 	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
@@ -450,6 +617,11 @@ type Process struct {
 	// Sleep configures scale-to-zero for this process (web only, RFC-0075).
 	// +optional
 	Sleep *SleepSpec `json:"sleep,omitempty"`
+	// Autoscale lets the instance count follow the load between a minimum
+	// and a maximum (web only, RFC-0047); Replicas is then the count the
+	// process had before, kept for when autoscaling is turned off.
+	// +optional
+	Autoscale *AutoscaleSpec `json:"autoscale,omitempty"`
 }
 
 // HealthCheck describes the probe a process uses to report readiness.
@@ -535,6 +707,13 @@ type AppStatus struct {
 	// registry and removes them from the list (RFC-0059).
 	// +optional
 	StaleImages []string `json:"staleImages,omitempty"`
+	// Fallback says a process runs its previous release again because the
+	// one asked for cannot be scheduled (#127): a Recreate rollout (a
+	// single-instance volume) had stopped the running instance before the
+	// new one proved impossible to place. It holds for the generation it
+	// was set on; a change to the spec (a resize, a rollback) clears it.
+	// +optional
+	Fallback *FallbackStatus `json:"fallback,omitempty"`
 	// Processes reports rollout state per process type.
 	// +optional
 	Processes map[string]ProcessStatus `json:"processes,omitempty"`
@@ -551,6 +730,10 @@ type AppStatus struct {
 	// (RFC-0034).
 	// +optional
 	Domains []DomainStatus `json:"domains,omitempty"`
+	// Source is what the source watcher knows of the branch a git source
+	// follows, and the commit pinned for it (RFC-0018).
+	// +optional
+	Source *SourceStatus `json:"source,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -571,6 +754,49 @@ type DomainStatus struct {
 	Certificate string `json:"certificate"`
 	// Message explains a pending or failed state.
 	Message string `json:"message,omitempty"`
+}
+
+// SourceStatus is what the source watcher knows of a git branch.
+type SourceStatus struct {
+	// Commit is the commit pinned for the branch: what is built and runs.
+	// +optional
+	Commit string `json:"commit,omitempty"`
+	// Latest is the newest commit seen on the branch.
+	// +optional
+	Latest string `json:"latest,omitempty"`
+	// +optional
+	LatestAt *metav1.Time `json:"latestAt,omitempty"`
+	// Message and Author describe Latest when a push said them.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// +optional
+	Author string `json:"author,omitempty"`
+	// Via is how Latest was learnt: push, poll or deploy.
+	// +optional
+	Via string `json:"via,omitempty"`
+	// Skipped is a commit whose message asked not to deploy it.
+	// +optional
+	Skipped string `json:"skipped,omitempty"`
+	// Held is a commit waiting for its other checks on GitHub, since
+	// HeldSince (RFC-0054).
+	// +optional
+	Held string `json:"held,omitempty"`
+	// +optional
+	HeldSince *metav1.Time `json:"heldSince,omitempty"`
+	// NotDeployed is the last commit the watcher decided not to deploy:
+	// nothing changed in the watch paths, CI failed, or CI did not finish.
+	// NotDeployedReason says which, in words.
+	// +optional
+	NotDeployed string `json:"notDeployed,omitempty"`
+	// +optional
+	NotDeployedReason string `json:"notDeployedReason,omitempty"`
+	// +optional
+	LastWebhookAt *metav1.Time `json:"lastWebhookAt,omitempty"`
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// Error says why the branch could not be read, in words.
+	// +optional
+	Error string `json:"error,omitempty"`
 }
 
 // ReleasePhaseStatus is the state of the release command (the image's
@@ -650,6 +876,11 @@ type ProcessStatus struct {
 	// policy is set (RFC-0075); absent otherwise.
 	// +optional
 	Sleep *SleepStatus `json:"sleep,omitempty"`
+	// Autoscale is how the count follows the load when bounds are set
+	// (RFC-0047); absent otherwise. Desired is then the count the scaler
+	// asks for now.
+	// +optional
+	Autoscale *AutoscaleStatus `json:"autoscale,omitempty"`
 }
 
 // App is an application managed by shpyrd. It lives in the namespace that

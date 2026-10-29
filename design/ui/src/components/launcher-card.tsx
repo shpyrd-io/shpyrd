@@ -1,6 +1,6 @@
 import * as React from "react";
 import { cn } from "cn";
-import { Bot, Globe, Lock, Moon, Network, Settings } from "lucide-react";
+import { Bot, Globe, Lock, Moon, Network, Settings, ShieldHalf, Wrench } from "lucide-react";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardFooter } from "./card";
@@ -13,15 +13,18 @@ import { symbolInk } from "./app-icons";
 // a name is cut at its line, a description at its second, the tags at
 // their first row, and the band stays at the bottom.
 
-export type Phase = "running" | "deploying" | "failed" | "sleeping";
+export type Phase = "running" | "deploying" | "failed" | "sleeping" | "maintenance";
 export type Exposure = "public" | "internal";
-export type Access = "open" | "locked";
+// Who it answers: anyone; only who signs in; or anyone on some paths and
+// only who signs in on others.
+export type Access = "open" | "locked" | "mixed";
 
 export const phases: Record<Phase, { label: string; dot: string; live?: boolean }> = {
   running: { label: "Running", dot: "bg-success" },
   deploying: { label: "Deploying", dot: "bg-warning", live: true },
   failed: { label: "Failed", dot: "bg-destructive" },
   sleeping: { label: "Sleeping, wakes on the first request", dot: "bg-muted-foreground" },
+  maintenance: { label: "Under maintenance", dot: "bg-warning" },
 };
 
 export const exposures: Record<Exposure, { label: string; icon: React.ReactElement }> = {
@@ -29,15 +32,17 @@ export const exposures: Record<Exposure, { label: string; icon: React.ReactEleme
   internal: { label: "Local network", icon: <Network /> },
 };
 
-// The light beside the name: how the application is, at a glance.
+// The light beside the name: how the application is, at a glance. Asleep
+// is a moon, under maintenance a wrench; the rest a dot of a colour.
 function Semaphore({ phase, className }: { phase: Phase; className?: string }) {
   const p = phases[phase];
-  return phase === "sleeping" ? (
-    <Moon
+  const Icon = phase === "sleeping" ? Moon : phase === "maintenance" ? Wrench : null;
+  return Icon ? (
+    <Icon
       data-slot="launcher-semaphore"
       data-phase={phase}
       aria-label={p.label}
-      className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
+      className={cn("size-3.5 shrink-0", phase === "maintenance" ? "text-warning" : "text-muted-foreground", className)}
     />
   ) : (
     <span
@@ -92,6 +97,11 @@ function Signs({
       {access === "locked" && (
         <span role="img" aria-label="Only for who signs in" title="Only for who signs in" className="inline-flex">
           <Lock />
+        </span>
+      )}
+      {access === "mixed" && (
+        <span role="img" aria-label="Public, sign-in on some paths" title="Public, sign-in on some paths" className="inline-flex">
+          <ShieldHalf />
         </span>
       )}
     </span>
@@ -181,7 +191,7 @@ function LauncherCard({
             phase={phase}
             className={cn(
               "absolute -top-1 -right-1 rounded-full ring-2 ring-card",
-              phase === "sleeping" ? "bg-card p-px" : "size-2.5",
+              phase === "sleeping" || phase === "maintenance" ? "bg-card p-px" : "size-2.5",
               !opens && "ring-[color-mix(in_oklab,var(--ink)_5%,var(--card))]",
             )}
           />

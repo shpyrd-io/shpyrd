@@ -64,12 +64,200 @@ https://acme-hello-world.shpyrd.app
 Other sources:
 
 ```shell
-shpyrd deploy --git https://github.com/org/repo --ref main --path services/api   # new commits rebuild automatically
+shpyrd deploy --git https://github.com/org/repo --ref main --path services/api   # every push to the branch deploys
 shpyrd deploy --image ghcr.io/org/repo:1.4.2                                   # run a prebuilt image, no build
 shpyrd deploy --no-wait                                                         # do not follow the build
 ```
 
 Deploying from Git is also available in the dashboard (**Deploy** button, or when creating the project).
+
+### Private repositories
+
+A build clones your repository. For a private one, give shpyrd access in one of two ways. Both need you signed in (`shpyrd login`).
+
+On GitHub, the simplest way is to [connect GitHub](#connect-github) once for the workspace: no key or token per project. The two ways below work on any git host, and on GitHub too when a repository is not in a connected account.
+
+**A deploy key for the project.** Works on any git host. It is read-only and opens one repository.
+
+```shell
+shpyrd git-auth deploy-key --project shop
+```
+
+shpyrd makes the key for the host of the project's repository and prints its public half. A project with no git repository yet needs the host: `shpyrd git-auth deploy-key --project shop --host github.com`. Add it to the repository as a read-only deploy key (on GitHub: Settings, Deploy keys, Add deploy key, with write access off). Then build again with `shpyrd redeploy --project shop`: a `shpyrd deploy` of the same source sees nothing changed and does not build. A new `deploy-key` replaces the old one, and `shpyrd git-auth deploy-key --project shop --remove` deletes it. Remove it from the repository too.
+
+**A token for a host.** Set once by a workspace admin; every project of the workspace that clones from that host uses it.
+
+```shell
+shpyrd git-auth set --host gitlab.example.com --token -     # reads the token from stdin
+shpyrd git-auth list                                        # hosts, never values
+shpyrd git-auth unset --host gitlab.example.com
+```
+
+shpyrd sends a user name with the token. The default is `x-access-token`, `oauth2` on gitlab.com and `x-token-auth` on bitbucket.org. Another host may want another one: pass `--username`.
+
+Mind who can read a token. Every project of the workspace that clones from the host uses it, and project developers with cluster access can read its value from their project's namespace. Use a read-only token limited to the repositories the builds need, and prefer deploy keys for anything sensitive.
+
+If a project has both, the deploy key wins, as long as it is for the repository's host. `shpyrd git-auth show --project shop` says which credential its builds use.
+
+When the repository URL is not in the form the credential needs, shpyrd converts it: SSH for a deploy key, HTTPS for a token. A URL already in that form is used as given. A git URL it cannot parse, such as `git://`, builds as before, without credentials.
+
+Values are write-only: shpyrd never shows a token or a private key again.
+
+**The host key.** When the deploy key is made, shpyrd records the git host's SSH host key. Dockerfile builds check it and refuse a host that presents another. Buildpack builds clone with kpack, whose git client does not check the host key.
+
+**When access is refused.** A clone that the host refuses for access fails the build, and the message names `shpyrd git-auth`. Once access is given, `shpyrd redeploy` builds the same source again.
+
+### Deploying on push
+
+A project that deploys from a git branch deploys every push to it. shpyrd
+reads the branch's latest commit and builds that commit, never the branch
+itself, for buildpack and Dockerfile builds alike. Each release names its
+commit: `Push a1b2c3d by alice: fix login`, or `Commit a1b2c3d (head of main)` when shpyrd read the branch itself.
+
+**With a webhook: within seconds.** Each project has a webhook URL and a
+secret. Add them to the repository:
+
+```shell
+shpyrd git-hooks show --project shop      # the URL, the secret, and where they go
+shpyrd git-hooks rotate --project shop    # a new URL and secret; the old ones are refused
+```
+
+- GitHub: the repository's Settings, Webhooks, Add webhook. Payload URL: the
+  URL; Content type: `application/json`; Secret: the secret; "Just the push
+  event".
+- GitLab: the project's Settings, Webhooks, Add new webhook. URL: the URL;
+  Secret token: the secret; Trigger: Push events.
+- Gitea: the repository's Settings, Webhooks, Add webhook, Gitea. Target
+  URL: the URL; Content type: `application/json`; Secret: the secret;
+  Trigger on: Push events.
+
+The dashboard shows the same under the project's Summary, **Deploy on
+push**. Only people who may change the project see the secret.
+
+**Without one: pushes do not deploy.** On a GitHub repository the shpyrd GitHub App covers, there is nothing to set up: see [Connect GitHub](#connect-github). On another host, shpyrd does not check the branch on a timer: until the project's webhook is set up, a push deploys only when someone deploys (the dashboard's **Deploy**, or `shpyrd deploy`), which reads the branch and builds its latest commit. The Source block says which: "Pushes do not deploy until its webhook is set up. Deploy to build the branch's latest commit.", or "Deploys on push through its webhook (last delivery 3 days ago)." A repository shpyrd cannot read says why on the project, with the `shpyrd git-auth` command that fixes it, and shpyrd tries again by itself.
+
+**Skipping a commit.** A commit whose message says `[skip deploy]` (or
+`[deploy skip]`, in any case) is recorded and not deployed, also when a
+later check finds it at the head of the branch. The next commit deploys as
+usual. This works when the push reaches shpyrd by webhook: a check of the
+branch cannot read commit messages, so a project that relies on checking
+deploys the commit anyway.
+
+**Auto-deploy off.** To record pushes without deploying them:
+
+```shell
+shpyrd deploy --git https://github.com/org/repo --no-auto-deploy
+```
+
+or switch **Auto-deploy** off under the project's Summary. The project shows
+the latest commit it has not deployed; a deploy deploys it, and so does
+switching auto-deploy on again, at once and without waiting for the next
+check: the release says `Commit a1b2c3d (auto-deploy on)`. A commit that
+asked to be skipped stays skipped. A deploy that names neither `--auto-deploy` nor
+`--no-auto-deploy` keeps the project's setting.
+
+**What runs.** A `--ref` that is a branch or a tag is followed; a tag's
+commit is the one it points at. A `--ref` that is a commit (7 to 40
+hexadecimal characters) is built as given, and nothing is followed. A
+deploy reads the branch again at once. If the branch is deleted, what runs
+keeps running, and the project says so.
+
+The first time a project on a branch is built this way after an upgrade, it
+builds once more, the same code: the build now names the commit instead of
+the branch. A project already deployed from a branch that shpyrd cannot read
+keeps building the branch as before, and says why it cannot read it. A URL
+with a user name and password in it (`https://user:pass@host/org/repo`)
+still works without a token: shpyrd reads the branch with them, and never
+shows them.
+
+### Connect GitHub
+
+A workspace connects GitHub once. Then anyone who makes projects picks a repository from a list: private ones build without deploy keys or tokens, and every push to a project's branch deploys, with no webhook to add.
+
+**Connect an account or organisation** (workspace admins): in the dashboard, Workspace settings, **Git**, **Connect GitHub**. GitHub asks who you are, then shpyrd lists the installations of its App you own: **Connect** the one you want, and you are back on the workspace's page. To put the App on an account it is not on yet, use **Install the App on another account**, on the Git page or under that list: GitHub asks where to install it and which repositories it may read, then sends you back. From a terminal, `shpyrd github connect` opens that Git page and waits until the new connection appears; you press the button there.
+
+```shell
+shpyrd github connect            # opens the Git page, waits for the connection
+shpyrd github list               # the workspace's connections
+shpyrd github disconnect acme    # forget one; the App stays installed on GitHub
+```
+
+Only an owner of the GitHub account can connect it: an owner of the organisation, or, for a personal account, that account itself. Nobody else can connect it with a copied link. Several workspaces can connect the same account or organisation, each by an owner: a push deploys the projects on that repository in every one of them, and disconnecting it in one leaves the others connected. **Manage on GitHub** opens the installation's settings, where you add repositories, suspend it or remove it.
+
+**Link your GitHub account.** Each person links their own GitHub account once, in a browser session. In New project, **From GitHub** shows **Continue with GitHub**: GitHub asks you to authorize the App in a small window, and the dialog keeps what you typed. While it waits, the dialog offers **Not finished? Try again** and Cancel. Once linked, the bottom of the picker shows `GitHub: paezao` with **Unlink**, which asks before it unlinks. From a terminal, `shpyrd github link` opens the browser and waits, `shpyrd github unlink` unlinks, and `shpyrd whoami` shows the account. An API token can read the link and unlink it, but cannot link: linking needs a browser. An API token acts as the person who made it, so an agent with your token picks what you can pick. The admin token is not a person and has no link.
+
+**Make a project from a repository:** New project, **From GitHub**, pick the account (the workspace's accounts your GitHub account can see), filter the list, pick the repository and the branch (its default branch first). The list shows only the repositories you can read on GitHub; a list cut short says "Showing the first N. Filter to narrow." **Can't find a repository?** opens the account's installation on GitHub, where repositories are added; **Add GitHub account or organisation** connects another (workspace admins; others are told to ask one). Or find it with `shpyrd github repos --filter shop` and deploy it as any git repository:
+
+```shell
+shpyrd deploy --git https://github.com/acme/shop --ref main --project shop
+```
+
+**Who can pick what.** For a private repository on github.com whose owner the workspace has connected through the GitHub App (a live installation, not a suspended one), making a project, deploying with a changed repository URL, and restoring an archived project check that you can read the repository on GitHub (for a token, the person who made it). If you cannot, shpyrd answers 403 "You can't read acme/shop on GitHub, or the GitHub App's installation on acme does not include it", or asks you to link your account first. If you can, but the installation does not include the repository, it answers 422 "The GitHub App's installation on acme does not include acme/vault: add it to the installation on GitHub, or give shpyrd a deploy key (shpyrd git-auth deploy-key)". A public repository needs no link, and neither does a private repository of an owner the workspace has not connected: that one builds with a deploy key or a token, which have their own access. The admin token, tokens it made, the operator's kubeconfig access, and a server run without sign-in are no person and are not checked. A redeploy of the same repository is not checked. While the project's Source block reads "Deploys on push through the GitHub App", it shows who connected it ("Connected by paezao"). Builds, webhooks, checks and Deployments go through the workspace's installation, never through your account: when you unlink or leave the workspace, your projects keep deploying.
+
+**What shpyrd keeps.** GitHub's user token for the App can do only what both you and the App may do. Its access token lives in the platform's memory only. Its refresh token is stored encrypted (AES-256-GCM), under a key in the Secret `shpyrd-token-key`, apart from the database. Unlinking revokes the token on GitHub. A refresh token GitHub no longer accepts (unused for 6 months, or revoked) removes the link, and New project asks you to link again; so does a new token key. To rotate the key, an operator deletes that Secret and restarts every server replica together; people then link again. Linking needs the App's user tokens to expire: with "Expire user authorization tokens" off in the App's settings on GitHub, linking is refused and says so.
+
+**How builds reach it.** For a repository on github.com whose owner the workspace has connected, every build and every check of the branch uses a token the App gives for that one repository, read-only, that lasts an hour; shpyrd renews it every 50 minutes. The App comes first, then the project's deploy key, then the workspace's token. shpyrd skips the App for a suspended installation, a repository the installation does not include, an installation that is gone, and while GitHub is failing (it asks again after a pause). A token already issued is kept through a short GitHub outage. `shpyrd git-auth show --project shop` says `through the GitHub App (acme)`, and so does the Source block of the project's overview.
+
+**Pushes** arrive through the App's own webhook, with nothing to set up per project: `shpyrd git-hooks show` says so. A repository the App covers is never checked on a timer. Every 5 minutes shpyrd asks GitHub to deliver again whatever push, CI result or installation event did not reach it (GitHub keeps deliveries three days), so a missed delivery deploys within about 5 minutes. A delivery GitHub never made is not caught: push again, or Redeploy. A suspended installation's pushes do not deploy. `[skip deploy]` and auto-deploy work as in [Deploying on push](#deploying-on-push).
+
+**When the App cannot read a repository.** shpyrd tries the deploy key and the token. When nothing gives access, the project says why, starting with the App's reason ("The GitHub App's installation on acme does not include shop: add the repository to it on GitHub."), and what runs keeps running.
+
+On shpyrd cloud the App is already set up; on a self-hosted platform an operator registers it once: see [Installation](/docs/installation#connect-github).
+
+### Checks and Deployments on GitHub
+
+For a repository the GitHub App covers, GitHub shows what shpyrd does with each commit. A check named `shpyrd / <project>` appears on the commit: **Building**, then **Deploying**, then **Running at** the app's address, or **Failed** with the last lines of the reason. Its **Details** link opens the project in the dashboard. A commit that waits for CI shows **Waiting for CI**. A commit that was not deployed, that asked to be skipped, that a newer commit overtook, that a newer pin replaced, or that a rollback or a deploy by image overtook before it was deployed shows a neutral check that says why ("Replaced by a1b2c3d", "Superseded by a1b2c3d", "Not deployed: rolled back to release 3").
+
+Each release that changes the code is also a GitHub **Deployment**, in an environment named after the project, with a link to the app once it runs. A rollback to an older commit is a Deployment too. A Deployment that was still unfinished when a newer release replaced it is marked inactive. A release that only changes config vars or sizes gets no Deployment, and never changes a check that is finished. Two projects on one repository each get their own check and their own environment.
+
+The check and the Deployment never hold a deploy back: when GitHub is down or refuses a write, shpyrd deploys as usual and sends what it owes later. A suspended or removed installation reports nothing. When shpyrd stops reporting on a project (it no longer follows a branch on github.com, for one), its unfinished checks and its unfinished Deployment are closed. When the App stops covering the repository, they are closed too while shpyrd still holds a token for it; otherwise they stay as they were.
+
+An installation made before the App asked for checks, statuses and Deployments has to accept the App's updated permissions on GitHub; until it does, nothing is reported, and a commit that would wait for CI is not deployed (below).
+
+### Wait for CI
+
+With **Wait for CI** on, a pushed commit deploys only once every other check and commit status on it passes, all except shpyrd's own. Switch it on under the project's overview, in the Source block, or:
+
+```shell
+shpyrd deploy --git https://github.com/acme/shop --wait-for-ci      # --no-wait-for-ci switches it off
+```
+
+That command is your own deploy, and yours never waits: it deploys the branch's head now, and the setting applies from the next push. To switch it on without deploying, use the switch in the Source block.
+
+The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and `shpyrd projects info` prints `Commit:     a1b2c3d waits for CI (since 2m)`. Then:
+
+- **They pass:** the commit deploys; its release says `Push a1b2c3d by alice: fix login (CI passed)`.
+- **One fails:** the commit is not deployed, and the project says which check failed: the Source block, "a1b2c3d not deployed: CI failed (test)"; `shpyrd projects info` and the check on GitHub, "CI failed: test". Re-run it on GitHub: if it passes while the commit is still the branch's newest, it deploys.
+- **None reports within a minute:** the commit has no CI, and it deploys (`… (no CI)`). A CI that reports later than a minute after the push may lose that race.
+- **Still pending an hour later:** the commit is not deployed ("CI did not finish within an hour"). It is not tried again by itself.
+- **A newer commit arrives:** it replaces the waiting one at once.
+- **GitHub does not answer:** the commit keeps waiting, and the hour keeps counting. It is never deployed unchecked.
+- **The App stops covering the repository:** a waiting commit stays held and ends "CI could not be read: the GitHub App no longer covers the repository".
+- **The installation has not accepted the App's updated permissions:** the commit is not deployed, at once: "CI could not be read: accept the GitHub App's updated permissions on GitHub". Accept them on GitHub; the next push waits for its CI again.
+
+shpyrd learns of results through the App's webhook, and checks a waiting commit every 2 minutes in case a delivery is missed (the projects on one repository share what GitHub said for 90 seconds). A deploy by a person (`shpyrd deploy`, Redeploy, a rollback) and the first commit of a new project do not wait. Turning auto-deploy back on sends the commit that was waiting through watch paths and wait for CI like any other.
+
+### Watch paths
+
+**Watch paths** deploy only the commits that change certain files: in a repository that holds several services, each project deploys its own. They are patterns from the repository root, one per line:
+
+```text
+services/api
+!**/*.md
+```
+
+`*` matches within one folder and `**` across any number of folders. Patterns start at the repository root, with or without a leading `/`: `*.md` matches only Markdown files in the root, and `**/*.md` matches them anywhere. A pattern that names a folder (`services/api`) covers everything below it; `services/api/` matches only what is below it. Character classes such as `[a-z]` work. A leading `!` excludes. Patterns run in order and the last one that matches a file decides it: the two above deploy any change under `services/api` except Markdown. A project takes up to 20 patterns of up to 200 characters; a pattern shpyrd cannot read is refused when it is set.
+
+Set them under the project's overview, in the Source block, or:
+
+```shell
+shpyrd deploy --git https://github.com/acme/monorepo --watch-path 'services/api' --watch-path '!**/*.md'
+shpyrd deploy --git https://github.com/acme/monorepo --no-watch-paths     # every commit deploys again
+```
+
+A commit that changes nothing in them is recorded, not deployed (the Source block and `shpyrd projects info` say "a1b2c3d not deployed: no changes in the watch paths"; the check on GitHub says "No changes in the watch paths"). The files counted are everything changed since the commit that runs, so a commit that was not deployed still counts once a later one matches, and a renamed file counts under its old name and its new one. When GitHub's list of changes cannot be trusted (300 or more files changed, the branch's history was rewritten, GitHub's compare failed, or GitHub is not answering), the commit deploys, and its release ends with "(watch paths not checked: …)", naming the reason.
+
+Watch paths and wait for CI work through the GitHub App. On a repository the GitHub App doesn't cover (another host, an owner the workspace hasn't connected, or a repository the installation doesn't include) they are kept but do nothing: the dashboard says "Needs the GitHub App" and lets you only switch wait for CI off and clear the watch paths, and `shpyrd deploy` says so when it sets them.
 
 <Callout title="Which languages?">
 
@@ -204,7 +392,7 @@ Adding a machine usually takes a few minutes; keeping the app's image small also
 reduces the download time on a new machine. Once the container starts, the status
 shows the command running and its output follows.
 
-The release command runs at the `web` process's size unless `processes.release` sets its own. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
+The release command runs at the `web` process's size unless `processes.release` sets its own. Like a build, it does not count against the workspace's memory and CPU ceiling: it is a step of the deploy, so it can run while the app is awake, bounded by that size's limits. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
 
 ```yaml
 processes:
@@ -233,6 +421,8 @@ Released v2: Deploy c26f84642501
 
 The build runs as a rootless [BuildKit](https://github.com/moby/buildkit) Job in the project namespace: a first step fetches your archive (or clones the Git revision), the second builds the context and pushes the image. Multi-stage builds, build arguments, `.dockerignore` and a layer cache between builds all work as with `docker build`.
 
+A build is a step of a deploy, not something the workspace keeps running: it does not count against the workspace's memory and CPU ceiling, so an app that is awake never stops its own next deploy. Each build has a hard ceiling of its own instead: up to 2 GiB of memory and 2 CPUs while it builds (512 MiB and half a CPU while it fetches the source). A build that needs more memory stops and says so; lighten it with a multi-stage `Dockerfile`, fewer steps in parallel, or a smaller dependency install.
+
 Processes, release steps, and one-off commands run as non-root. Prefer a numeric `USER 1000` in the final Dockerfile stage, and give that user access to the files the app needs. For images built by shpyrd, named users such as `USER node` are resolved from the image’s `/etc/passwd` and run with that numeric uid/gid. If the name cannot be resolved, startup fails with a suggestion to use a numeric `USER`; root users remain disallowed.
 
 Pin or tune it in [`shpyrd.yaml`](/docs/shpyrd-yaml):
@@ -250,7 +440,7 @@ processes:
     command: ["node", "worker.js"]   # Dockerfile images have one entrypoint: other process types name their command
 ```
 
-From Git, detection is not possible; say so explicitly: `shpyrd deploy --git https://github.com/o/r --dockerfile` (optionally `--dockerfile deploy/Dockerfile`). The dashboard's **Deploy** dialog has the same choice. Git sources with a Dockerfile are rebuilt when the revision or the build settings change, not on every new commit as buildpack builds are; pass a commit or redeploy to rebuild a branch.
+From Git, detection is not possible; say so explicitly: `shpyrd deploy --git https://github.com/o/r --dockerfile` (optionally `--dockerfile deploy/Dockerfile`). The dashboard's **Deploy** dialog has the same choice. Git sources with a Dockerfile are rebuilt on every push to the branch, like buildpack builds ([Deploying on push](#deploying-on-push)), and when the build settings change.
 
 Failures show BuildKit's error in the CLI, the Activity panel and `shpyrd projects info <project>`; the previous release keeps serving. `examples/hello-docker` in the repository is a complete example.
 
@@ -275,9 +465,12 @@ Scale at any time; counts survive deploys:
 
 ```shell
 shpyrd scale web=3 worker=2
+shpyrd autoscale my-service --min 2 --max 10    # web follows its load between the bounds (autoscale extension)
 shpyrd resize web=shared-l worker=dedicated-s   # change the size; a release
 shpyrd sleep my-service --after 15m             # scale web to zero when idle (sleep extension)
 ```
+
+With bounds, the web process gets another instance when one passes 70% of its size's CPU or carries more than 20 requests in flight (`--cpu` and `--concurrency` change the targets), and one fewer when the load has been lower for five minutes. `shpyrd scale web=N` then sets the minimum. Sleep and bounds go together: zero while asleep, the minimum on a wake, the bounds under load.
 
 Without a size, a process gets `shared-m` for Node.js, Ruby, Python and Java, and `shared-s` for the rest. `shpyrd sizes list` shows the catalog.
 
@@ -291,7 +484,7 @@ shpyrd env unset LOG_LEVEL
 shpyrd secrets list            # names and when each was last set; values are never shown
 ```
 
-Changes are saved without restarting the app. Run `shpyrd redeploy` (or deploy new source) when ready to apply them. Until then, running processes, replacement instances and one-off commands keep using the deployed configuration. The project's **Config** page shows a pending-changes notice and a save toast; it supports editing visible variables, replacing hidden secrets, and pasting `.env` files with a choice of kind.
+Changes are saved without restarting the app. Run `shpyrd redeploy` (or deploy new source) when ready to apply them. On a project that deploys on push, the next push to the branch deploys them too, with its commit. Until then, running processes, replacement instances and one-off commands keep using the deployed configuration. The project's **Config** page shows a pending-changes notice and a save toast; it supports editing visible variables, replacing hidden secrets, and pasting `.env` files with a choice of kind.
 
 Variables are readable by everyone who can view the project. New entries default to secrets, and existing secrets stay hidden on upgrade. Making a secret a variable requires confirmation; credential-looking names such as `API_KEY` or `AUTH_TOKEN` also require confirmation (`shpyrd env set --confirm-plain` in the CLI). Making a variable a secret hides its value without changing it. A name has one project-owned value: saving it as a secret takes precedence, while existing secrets cannot be converted back to visible variables. Attached-resource variables still override project configuration.
 
@@ -348,6 +541,8 @@ The same check runs three ways: at start (the grace period), for readiness (3 fa
 
 The deploy waits for each new instance to pass its readiness probe before the old one is removed, so traffic is always served. If a new instance never becomes healthy the rollout stalls, the Activity panel shows the reason (exit code, probe error) and a rollback button; the old instances keep serving.
 
+A size no machine can hold is refused before anything is stopped ("dedicated-m needs 2 cores; the largest machine in this cluster offers 1.83 cores"), and so is one the machine that holds a process's disk has no room for. An instance that still finds no room fails instead of waiting for ever: at once when no machine is large enough ("web cannot start: it asks for 2 cores; no machine here has more than 1.83 cores"), after five minutes when the cluster is not adding a machine. A process with a single-instance volume rolls out by stopping the old instance first; when the new one cannot start, the previous release runs again meanwhile and the page says so until you resize or roll back. The way back is never locked: a rollback or a resize over a rollout in progress asks for a confirmation (`--force` on the CLI) and cancels it.
+
 HTTP checks reach the process directly, without the edge's sign-in, cookies or identity headers. Keep the health path outside your app's authentication middleware and return `2xx` to a plain GET. A `401`, `403`, server error, timeout or failing redirect can leave the instance unready; repeated startup or liveness failures restart it even when its logs say it started successfully. Redirecting an unauthenticated check to `/.shpyrd/signin` cannot sign it in: that route belongs to the edge.
 
 If `/` requires sign-in, add an unauthenticated `/healthz` route and set `processes.web.healthCheck.path: /healthz`. Alternatively, use `processes.web.healthCheck.tcp: true` to check only that the port accepts connections; this does not check the HTTP response or application dependencies. See [Sign-in for your app](/docs/app-access#health-checks-and-sign-in).
@@ -387,6 +582,8 @@ shpyrd shell -- cat /etc/os-release   # run one command and return its exit code
 
 `shpyrd shell` attaches to a **running instance**: what you see is the live process's filesystem and environment. Buildpack images get the same environment as the process (through the CNB launcher), so `node`, `bundle` or `python` are on the `PATH`.
 
+A process that will not start has no instance to attach to. `shpyrd shell --debug` (with `--process` or `--instance` to name it) opens a shell in a **new copy of the process**: its image, config vars and volumes, on the machine that holds its disk, with the process's command replaced by the shell. Look at `/data`, run the fix, exit; the copy is removed.
+
 ```shell
 shpyrd run rails db:migrate                 # a new instance of the current release, removed when the command exits
 shpyrd run --size shared-l python manage.py import big.csv
@@ -394,6 +591,20 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 ```
 
 `shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). A one-off instance stops after an hour at most; `--detach` leaves it running until then.
+
+A one-off instance has no volumes unless you ask: `shpyrd run --process web -- fluxyr migrate-storage` mounts web's volumes at their paths, and runs on the machine that holds a single-instance disk right now, so the two instances share the attached disk. The release step can see them too: declare the volume on the `release` process in `shpyrd.yaml` (`processes.release.volumes`, the same entry as the process's) and the step runs with it, where the disk is. A data migration on a disk belongs there.
+
+## Maintenance mode
+
+```shell
+shpyrd maintenance on --message "Back at 15:00 UTC"   # the page instead of the app
+shpyrd maintenance                                    # on or off, since when, by whom
+shpyrd maintenance off                                # the app again
+```
+
+While maintenance is on, every request at the project's addresses gets a **503** and a page with the project's name and your message; programs get a JSON answer with `Retry-After`, so crawlers and webhooks come back later rather than record an error. Nobody is let through, the team included, as on Heroku: the team works through the console. The processes keep running, and releases, scaling, `shpyrd shell` and `shpyrd run` go on underneath, so a migration runs behind the page, a deploy rolls out behind it, and `off` shows the result. Switching is instant and restarts nothing: the project's addresses point at the page, then at the app again.
+
+The project's **Overview** has the same switch and message; the header, the project list and the launcher say **Maintenance** while the page is up, and the audit trail records who turned it on and off. An app that sleeps is kept awake while the page is up, since no request would wake it, and may sleep again afterwards. Shells, one-off commands and deploys are refused only during a move or a restore, which has its own page.
 
 ## Volumes
 

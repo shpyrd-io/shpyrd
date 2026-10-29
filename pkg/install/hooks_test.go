@@ -103,6 +103,46 @@ func TestRegistryCredentialsAreIndependentOfPlatformBackupCredentials(t *testing
 	}
 }
 
+// Every registry replica signs uploads with the same secret, made once and
+// kept across installs: a new one would void uploads in flight on a roll.
+func TestRegistryHTTPSecretIsGeneratedOnceAndKept(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	e := fakeEngine(ctx, cs, map[string]string{})
+	c := &Component{Name: "registry", Namespace: "shpyrd-system"}
+	read := func() string {
+		t.Helper()
+		sec, err := cs.CoreV1().Secrets(c.Namespace).Get(ctx, RegistryHTTPSecretName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(sec.Data["secret"])
+	}
+	if err := registryHTTPSecretHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	first := read()
+	if len(first) != 64 {
+		t.Fatalf("secret %q is not 32 random bytes in hex", first)
+	}
+	if err := registryHTTPSecretHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	if read() != first {
+		t.Fatal("a reinstall replaced the registry's HTTP secret")
+	}
+	// An empty Secret (made by hand, say) is filled rather than kept.
+	if _, err := cs.CoreV1().Secrets(c.Namespace).Update(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: RegistryHTTPSecretName, Namespace: c.Namespace}}, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registryHTTPSecretHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); len(got) != 64 || got == first {
+		t.Fatalf("empty secret not regenerated: %q", got)
+	}
+}
+
 // With the gateway on, a registry given a provider bucket of its own keeps
 // writing there with its own credential; one without goes through the
 // gateway and leaves its credential to the gateway hook.

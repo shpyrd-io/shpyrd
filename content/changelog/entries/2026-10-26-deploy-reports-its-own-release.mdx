@@ -1,0 +1,9 @@
+---
+title: "shpyrd deploy reports the release it made"
+description: "A deploy right after a failed one no longer prints the old failure and exits 1 while the new release is still starting."
+date: "2026-10-26"
+type: fix
+draft: false
+---
+
+When a project's last release had failed, `shpyrd deploy` could print that old failure and exit with an error right after the build, while the new release was still starting and went on to run. It now waits for the release it asked for and reports how that one ended, so a successful deploy looks successful, in a terminal and in CI. `shpyrd redeploy` and `shpyrd rebuild` wait the same way.

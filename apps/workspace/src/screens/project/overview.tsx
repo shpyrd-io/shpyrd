@@ -8,7 +8,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -27,11 +26,14 @@ import { ProgressBar } from "@shpyrd/ui/components/progress-bar";
 import { api } from "@/api/api";
 import type { AuditEntry, Project } from "@/api/types";
 import { ago } from "@/lib/project";
+import type { Perms } from "@/lib/perms";
+import { Maintenance } from "./maintenance";
+import { GitSource } from "./source";
 
 // What the project is made of, as one table of names and values, and
 // the last things done to it. Everything else has a page of its own at
 // the side.
-export function Overview({ project }: { project: Project }) {
+export function Overview({ project, perms }: { project: Project; perms: Perms }) {
   const { spec, status } = project;
   const current = [...status.releases].sort((a, b) => b.number - a.number)[0];
   const audit = useQuery({
@@ -51,9 +53,6 @@ export function Overview({ project }: { project: Project }) {
       <Card className="@5xl/page-layout:col-span-2">
         <CardHeader>
           <CardTitle>Summary</CardTitle>
-          <CardDescription>
-            Where the project comes from, what runs now, and on what.
-          </CardDescription>
           <CardAction className="flex gap-3">
             <Link
               to={`/projects/${project.slug}/releases`}
@@ -69,18 +68,9 @@ export function Overview({ project }: { project: Project }) {
             </Link>
           </CardAction>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-4">
+          <GitSource project={project} perms={perms} />
           <InfoTable columns={3}>
-            {spec.source?.git && (
-              <>
-                <InfoTableItem label="Git" mono truncate span={2}>
-                  {spec.source.git.url}
-                </InfoTableItem>
-                <InfoTableItem label="Revision" mono>
-                  {spec.source.git.revision ?? "main"}
-                </InfoTableItem>
-              </>
-            )}
             {spec.source?.blob && (
               <>
                 <InfoTableItem label="Archive" mono>
@@ -140,7 +130,10 @@ export function Overview({ project }: { project: Project }) {
             )}
             {Object.entries(spec.processes ?? {}).map(([name, p]) => (
               <InfoTableItem key={name} label={`Process ${name}`} mono>
-                {p.size ?? "shared-s"} × {p.replicas ?? 1}
+                {p.size ?? "shared-s"} ×{" "}
+                {p.autoscale
+                  ? `${project.processes?.[name]?.desired ?? p.autoscale.min} (auto ${p.autoscale.min}–${p.autoscale.max})`
+                  : (p.replicas ?? 1)}
               </InfoTableItem>
             ))}
             {Object.keys(spec.processes ?? {}).length === 0 && (
@@ -150,13 +143,11 @@ export function Overview({ project }: { project: Project }) {
         </CardContent>
       </Card>
 
+      <Maintenance project={project} perms={perms} />
+
       <Card>
         <CardHeader>
           <CardTitle>Activity</CardTitle>
-          <CardDescription>
-            The last thing done to the project, from the dashboard, the API or
-            the CLI.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {audit.isLoading ? (
@@ -256,12 +247,6 @@ function StorageUsed({
     <Card className="@5xl/page-layout:col-span-3">
       <CardHeader>
         <CardTitle>Storage</CardTitle>
-        <CardDescription>
-          {usage.own
-            ? "This project has a cap of its own, set under the workspace's General page."
-            : "The workspace's ceiling, shared with its other projects."}{" "}
-          Disks and dedicated databases count by the capacity they claim.
-        </CardDescription>
         <CardAction>
           <Link
             to={`/projects/${slug}/resources`}

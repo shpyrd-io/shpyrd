@@ -30,7 +30,8 @@ func (extension) Description() string {
 }
 
 // Components: KEDA first (the add-on needs its CRDs), both in the keda
-// namespace. RFC-0047 autoscaling will share the keda component.
+// namespace. The autoscale extension (RFC-0047) names the same two: the
+// installer puts a shared component in place once.
 func (extension) Components() []ext.ComponentRef {
 	return []ext.ComponentRef{{Name: "keda", Runlevel: "rc3"}, {Name: "keda-http", Runlevel: "rc4"}}
 }

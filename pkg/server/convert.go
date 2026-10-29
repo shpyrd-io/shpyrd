@@ -53,6 +53,17 @@ func runConvertDB(logger *slog.Logger) error {
 	source := pgdump.Connected{Postgres: pgdump.Postgres{Conn: sourceConn, Env: envOf(sourceEnv), Database: sourceEnv["PGDATABASE"]}}
 	target := pgdump.Connected{Postgres: pgdump.Postgres{Conn: targetConn}}
 	c := pgdump.Convert{Source: source, Target: target, Objects: bucket, Getter: bucket, Key: os.Getenv("SHPYRD_CONVERT_KEY"), Log: logger}
+	// The target's superuser counts the rows: a table with row-level
+	// security forced hides them from the owner the copy lands as.
+	if super := os.Getenv("TARGET_SUPERUSER"); super != "" {
+		superEnv := map[string]string{"PGHOST": os.Getenv("PGHOST"), "PGPORT": firstNonEmptyStr(os.Getenv("PGPORT"), "5432"), "PGDATABASE": os.Getenv("PGDATABASE"), "PGSSLMODE": firstNonEmptyStr(os.Getenv("PGSSLMODE"), "require"), "PGUSER": super, "PGPASSWORD": os.Getenv("TARGET_SUPERPASSWORD")}
+		superConn, err := connectWithPatience(ctx, connString(superEnv), logger, "target superuser")
+		if err != nil {
+			return fmt.Errorf("connect to the target as its superuser: %w", err)
+		}
+		defer superConn.Close(ctx)
+		c.TargetCounter = pgdump.Postgres{Conn: superConn}
+	}
 	if list := os.Getenv("SHPYRD_CONVERT_EXTENSIONS"); list != "" {
 		c.Allowed = strings.Split(list, ",")
 	}

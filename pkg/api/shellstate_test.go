@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 func TestExecTicketOneShot(t *testing.T) {
@@ -133,5 +134,34 @@ func TestExecTicketStoreRecoversWhenTicketsExpire(t *testing.T) {
 	now = now.Add(execTicketTTL + time.Second)
 	if _, err := st.mint(execTicket{Project: "blog", Instance: "web.1"}); err != nil {
 		t.Errorf("mint once the outstanding tickets expired: %v", err)
+	}
+}
+
+// Storage plan step 7: with a store, a ticket minted by one replica is
+// redeemed by another, once, and expires there too.
+func TestExecTicketsTravelBetweenReplicas(t *testing.T) {
+	st := store.NewMemory()
+	a, b := newSharedTicketStore(execTicketTTL, st), newSharedTicketStore(execTicketTTL, st)
+	code, err := a.mint(execTicket{Identity: ext.Identity{Subject: "u1"}, Project: "blog", Instance: "web.1", Command: []string{"sh"}, TTY: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.redeem(code)
+	if err != nil {
+		t.Fatalf("the other replica redeems: %v", err)
+	}
+	if got.Project != "blog" || got.Instance != "web.1" || !got.TTY || len(got.Command) != 1 || got.Identity.Subject != "u1" {
+		t.Errorf("redeemed = %+v", got)
+	}
+	if _, err := a.redeem(code); err == nil {
+		t.Error("a ticket is redeemed once, whichever replica took it")
+	}
+	// Expiry is kept with the ticket.
+	later := time.Now().Add(2 * execTicketTTL)
+	c := newSharedTicketStore(execTicketTTL, st)
+	c.now = func() time.Time { return later }
+	code2, _ := a.mint(execTicket{Project: "blog"})
+	if _, err := c.redeem(code2); err == nil {
+		t.Error("an expired ticket must not be redeemable")
 	}
 }

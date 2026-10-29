@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { toLogLine, toMetrics, toProject, type DetailAnswer, type MetricsAnswer } from "./backend";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { backend, metricsPath, toLogLine, toMetrics, toProject, type DetailAnswer, type MetricsAnswer } from "./backend";
 
 describe("the Backend reads the server's shapes as the screens read them", () => {
   it("lifts the phase, the address, the access and the processes of a project out of status and spec", () => {
@@ -51,19 +51,61 @@ describe("the Backend reads the server's shapes as the screens read them", () =>
       step: 60,
       charts: [
         { id: "latency", title: "Response time", unit: "ms", kind: "line", series: [{ name: "95th percentile", points: [[100, 12], [160, 14]] }] },
-        { id: "cpu", title: "CPU", unit: "cores", kind: "line", series: [{ name: "web", points: [[100, 0.2], [160, 0.3]], reference: 0.5, burst: 1 }] },
+        { id: "cpu", title: "CPU", unit: "cores", kind: "line", instanceCapable: true, note: "1 replaced instance hidden", series: [{ name: "web", points: [[100, 0.2], [160, 0.3]], reference: 0.5, burst: 1 }] },
         { id: "memory", title: "Memory", unit: "bytes", kind: "line", series: [], error: "no data" },
       ],
       releases: [{ number: 3, time: 130, label: "v3" }],
+      ooms: [{ time: 140, process: "web", instance: "web.1", limit: 268435456, size: "shared-m", release: 3 }],
     };
     const m = toMetrics(answer);
     expect(m.from).toBe(100);
     expect(m.to).toBe(160);
-    expect(m.responseTime[0]?.name).toBe("95th percentile");
-    expect(m.cpu[0]).toMatchObject({ name: "web", reference: 0.5, burst: 1, tone: "orange" });
-    expect(m.memory).toEqual([]);
-    expect(m.network).toEqual([]);
-    expect(m.throughput).toEqual([]);
+    expect(m.responseTime.series[0]?.name).toBe("95th percentile");
+    expect(m.cpu.series[0]).toMatchObject({ name: "web", reference: 0.5, burst: 1, tone: "orange" });
+    expect(m.cpu).toMatchObject({ unit: "cores", instanceCapable: true, note: "1 replaced instance hidden" });
+    expect(m.responseTime.instanceCapable).toBe(false);
+    expect(m.memory.series).toEqual([]);
+    expect(m.memory.error).toBe("no data");
+    expect(m.network.series).toEqual([]);
+    expect(m.throughput.series).toEqual([]);
     expect(m.releases).toEqual([{ time: 130, label: "v3" }]);
+    expect(m.ooms).toEqual([{ time: 140, process: "web", instance: "web.1", limit: 268435456, size: "shared-m", release: 3 }]);
+  });
+
+  it("reads an answer from a server that knows no kills as none", () => {
+    const m = toMetrics({ range: "1h", step: 60, charts: [], releases: [] });
+    expect(m.ooms).toEqual([]);
+  });
+
+  it("asks the server only for what differs from its own defaults (RFC-0027)", () => {
+    expect(metricsPath("shop", { range: "1h", mode: "total" })).toBe("/api/projects/shop/metrics?range=1h&mode=total");
+    expect(metricsPath("shop", { range: "1h", by: "process", agg: "none", replaced: false })).toBe("/api/projects/shop/metrics?range=1h");
+    expect(metricsPath("shop", { range: "15m", process: "web", by: "instance", agg: "sum", mode: "percent", replaced: true })).toBe(
+      "/api/projects/shop/metrics?range=15m&process=web&by=instance&agg=sum&mode=percent&replaced=true",
+    );
+  });
+});
+
+describe("the Backend reads GitHub's answers", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("marks a repository list the server cut, and asks for one account when told", async () => {
+    const fetchMock = vi.fn(async (_path: string) => new Response(JSON.stringify([{ installation: 42, fullName: "acme/a", private: false, defaultBranch: "main" }]), { status: 200, headers: { "X-Shpyrd-Truncated": "true" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const cut = await backend.githubRepositories(42);
+    expect(cut.truncated).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/workspace/github/repositories?installation=42");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    expect((await backend.githubRepositories()).truncated).toBeUndefined();
+  });
+
+  it("marks a branch list the server cut", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_path: string) => new Response('["main"]', { status: 200, headers: { "X-Shpyrd-Truncated": "true" } })));
+    expect((await backend.githubBranches("acme/a")).truncated).toBe(true);
+  });
+
+  it("takes a 404 on the person's link as no link", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "no link" }), { status: 404 })));
+    expect(await backend.githubMe()).toBeNull();
   });
 });

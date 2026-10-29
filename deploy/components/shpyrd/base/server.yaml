@@ -79,6 +79,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # Where the other replica fetches a project export's download
+            # that landed here but lives there (on the sources port).
+            - name: SHPYRD_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: SHPYRD_DOMAIN
               value: "${SHPYRD_DOMAIN}"
             - name: SHPYRD_REGISTRY_HOST

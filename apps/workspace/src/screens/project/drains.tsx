@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -55,7 +55,6 @@ export function Drains({ project, perms }: { project: Project; perms: Perms }) {
       <Card>
         <CardHeader>
           <CardTitle>Log drains</CardTitle>
-          <CardDescription>Every line of the project, sent as it is written to a service of your own. The values of the headers are never read back.</CardDescription>
           {perms.resource && (
             <CardAction>
               <AddDrain slug={project.slug} processes={Object.keys({ ...project.spec.processes, ...project.processes }).sort()} onDone={refresh} />

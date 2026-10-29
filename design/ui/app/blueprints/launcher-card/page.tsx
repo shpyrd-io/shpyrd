@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, Briefcase, Mail, Tv } from "lucide-react";
+import { BookOpen, Briefcase, Mail, ShoppingCart, Tv } from "lucide-react";
 import { AppIcon } from "@shpyrd/ui/components/app-icons";
 import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
 import { Section } from "../../section";
@@ -43,7 +43,7 @@ export default function Page() {
           />
         </div>
       </Section>
-      <Section title="Deploying, and the least a card can have">
+      <Section title="Deploying, under maintenance, and the least a card can have">
         <div className="grid items-stretch gap-4 @xl/page-layout:grid-cols-2 @3xl/page-layout:grid-cols-3">
           <LauncherCard
             name="Docs"
@@ -54,8 +54,24 @@ export default function Page() {
             phase="deploying"
             tags={["Public"]}
           />
+          <LauncherCard
+            name="Shop"
+            description="Orders, stock and the till."
+            icon={<ShoppingCart />}
+            tone="orange"
+            url="shop.acme.com"
+            phase="maintenance"
+            tags={["Public"]}
+          />
           <LauncherCard name="Mail" icon={<Mail />} tone="neutral" url="mail.acme.internal" exposure="internal" access="locked" />
           <LauncherCard name="Reports" tone="blue" phase="running" exposure="internal" />
+        </div>
+      </Section>
+      <Section title="Who it answers: anyone, only who signs in, or a sign-in on some paths">
+        <div className="grid items-stretch gap-4 @xl/page-layout:grid-cols-2 @3xl/page-layout:grid-cols-3">
+          <LauncherCard name="Corporate" icon={<Briefcase />} url="corporate.acme.shpyrd.app" />
+          <LauncherCard name="Mail" icon={<Mail />} tone="neutral" url="mail.acme.shpyrd.app" access="locked" />
+          <LauncherCard name="Dash TV" icon={<Tv />} tone="violet" url="dash.acme.internal" exposure="internal" access="mixed" />
         </div>
       </Section>
       <Section title="The colour the project chose for its symbol, and a picture of its own, as it is">

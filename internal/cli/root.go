@@ -128,7 +128,12 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newEnvCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newDrainsCmd(g))
+	root.AddCommand(newGitAuthCmd(g))
+	root.AddCommand(newRegistryAuthCmd(g))
+	root.AddCommand(newGitHooksCmd(g))
+	root.AddCommand(newGitHubCmd(g)) // RFC-0054
 	root.AddCommand(newScaleCmd(g))
+	root.AddCommand(newAutoscaleCmd(g)) // RFC-0047
 	root.AddCommand(newResizeCmd(g))
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newVolumesCmd(g))
@@ -154,6 +159,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newRollbackCmd(g))
 	root.AddCommand(newExposureCmd(g))
 	root.AddCommand(newAccessCmd(g))
+	root.AddCommand(newMaintenanceCmd(g))
 	root.AddCommand(newAllowCmd(g))
 	root.AddCommand(newDomainsCmd(g))
 	root.AddCommand(newLoginCmd(g))

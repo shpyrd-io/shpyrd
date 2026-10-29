@@ -263,6 +263,13 @@ spec:
                       with the signal stale, a busy database is never put to sleep.
                     format: date-time
                     type: string
+                  after:
+                    description: |-
+                      After is the quiet period as it applies (#120), empty when nothing
+                      puts the database to sleep; Source says where it comes from:
+                      "project" for a policy of the database's own, "off" for an explicit
+                      off, "workspace" otherwise (the workspace's default, or none).
+                    type: string
                   lastActivityAt:
                     description: |-
                       LastActivityAt is the timestamp of the last observed session or
@@ -272,6 +279,8 @@ spec:
                   message:
                     description: Message explains the state (why not sleeping, wake
                       progress).
+                    type: string
+                  source:
                     type: string
                   state:
                     description: State is awake, sleeping, waking or suspended.

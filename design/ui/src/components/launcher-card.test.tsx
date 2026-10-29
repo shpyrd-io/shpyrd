@@ -34,10 +34,24 @@ describe("LauncherCard", () => {
     expect(lights[1].tagName).toBe("svg");
   });
 
+  it("wears a wrench under maintenance, with the words", () => {
+    const { container } = render(<LauncherCard name="Shop" url="shop.example" phase="maintenance" />);
+    const light = container.querySelector("[data-slot=launcher-semaphore]")!;
+    expect(light.getAttribute("data-phase")).toBe("maintenance");
+    expect(light.getAttribute("aria-label")).toBe("Under maintenance");
+    expect(light.tagName).toBe("svg");
+  });
+
   it("says where it answers and whether it is locked, with icons that have words", () => {
     render(<LauncherCard name="Mail" url="mail.example" exposure="internal" access="locked" />);
     expect(screen.getByRole("img", { name: "Local network" })).not.toBeNull();
     expect(screen.getByRole("img", { name: "Only for who signs in" })).not.toBeNull();
+  });
+
+  it("marks one that asks for a sign-in on some paths only with its own sign, not the lock", () => {
+    render(<LauncherCard name="Shop" url="shop.example" access="mixed" />);
+    expect(screen.getByRole("img", { name: "Public, sign-in on some paths" })).not.toBeNull();
+    expect(screen.queryByRole("img", { name: "Only for who signs in" })).toBeNull();
   });
 
   it("opens its settings from the gear, and has none without a handler", () => {

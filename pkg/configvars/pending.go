@@ -18,9 +18,22 @@ const AnnotationPendingBase = "shpyrd.io/config-pending-base"
 func PendingName(app *shpyrdv1.App) string { return app.EnvSecretName() + "-pending" }
 
 // DeployToken changes only for a deployment request, not a resize, sleep,
-// health update or saved config edit. Include source/image for direct CR users.
+// health update or saved config edit. Include source/image for direct CR
+// users. Switching auto-deploy is a setting and leaves it alone; a new
+// commit pinned for the branch is a deploy and changes it (RFC-0018).
 func DeployToken(app *shpyrdv1.App) string {
-	b, _ := json.Marshal([]any{app.Spec.Image, app.Spec.Source, app.Spec.Build, app.Annotations[AnnotationDeployRequested], app.Annotations[shpyrdv1.AnnotationRestartedAt], app.Annotations[shpyrdv1.AnnotationRebuildAt]})
+	source := app.Spec.Source
+	if source != nil && source.Git != nil && source.Git.AutoDeploy != nil {
+		s, g := *source, *source.Git
+		g.AutoDeploy = nil
+		s.Git = &g
+		source = &s
+	}
+	parts := []any{app.Spec.Image, source, app.Spec.Build, app.Annotations[AnnotationDeployRequested], app.Annotations[shpyrdv1.AnnotationRestartedAt], app.Annotations[shpyrdv1.AnnotationRebuildAt]}
+	if pin := app.PinnedCommit(); pin != "" {
+		parts = append(parts, pin)
+	}
+	b, _ := json.Marshal(parts)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }

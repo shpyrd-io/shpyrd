@@ -106,7 +106,7 @@ export function ProjectPages() {
         <>
           <Heading project={project.data} perms={perms} />
           <Routes>
-            <Route index element={<Overview project={project.data} />} />
+            <Route index element={<Overview project={project.data} perms={perms} />} />
             <Route path="releases" element={<Releases project={project.data} perms={perms} />} />
             <Route path="backups" element={<Backups project={project.data} perms={perms} />} />
             <Route path="metrics" element={<Metrics project={project.data} />} />
@@ -119,7 +119,6 @@ export function ProjectPages() {
               element={
                 <DomainsCard
                   title="Domains"
-                  description="Addresses of your own that reach the project. Choose a verified domain to redirect visitors from the platform address."
                   queryKey={["domains", slug]}
                   list={() => api.domains(slug)}
                   add={(host) => api.addDomain(slug, host)}

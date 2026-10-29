@@ -19,6 +19,9 @@ export type PublicConfig = {
       kind?: string;
       realm?: string;
       workspace?: string;
+      // Where a person signed in at the provider ends that session to
+      // sign in as someone else; offered after a refused sign-in.
+      switchAccountURL?: string;
     }[];
     password?: { id: string; label: string };
   };
@@ -36,6 +39,9 @@ export type PublicConfig = {
     appHost?: { prefix: string; suffix: string };
     ownedByOperator?: boolean;
     branding?: { logoUrl?: string; color?: string };
+    // The reference of the application the workspace chose for its door
+    // (RFC-0084); absent when it runs the platform's own.
+    ui?: string;
   };
   door?: "console" | "workspace";
   consoleUrl?: string;
@@ -133,6 +139,9 @@ export type WorkspaceInfo = {
   joinPolicy: "open" | "company" | "listed";
   ownMethodsOnly: boolean;
   branding?: { logoUrl?: string; color?: string };
+  // The application the workspace chose for its door (RFC-0084); absent
+  // when it runs the platform's own.
+  ui?: WorkspaceUI;
   mcpName: string;
   mcpUrl: string;
   owners: string[];
@@ -140,12 +149,65 @@ export type WorkspaceInfo = {
   updatedAt: string;
 };
 
+// The application a workspace chose (RFC-0084): the reference, who set
+// it, and what it is doing on the server answering.
+export type WorkspaceUI = {
+  ref: string;
+  setBy?: string;
+  setAt?: string;
+  status?: {
+    state: "serving" | "failed" | "pending" | "disabled";
+    error?: string;
+    at?: string;
+    name?: string;
+    version?: string;
+  };
+};
+
+// A read credential of the workspace for a registry host (RFC-0084):
+// the value is never read back.
+export type RegistryToken = {
+  host: string;
+  username: string;
+  updatedBy?: string;
+  updatedAt: string;
+};
+
 export type SleepStatus = {
-  state: "awake" | "sleeping" | "waking" | "unavailable";
+  state: "awake" | "sleeping" | "waking" | "unavailable" | "suspended";
+  message?: string;
+  // The policy as it applies and where it comes from (#120): a quiet
+  // period of the project's own, an explicit off, or the workspace's
+  // default (none when it sets none).
+  after?: string;
+  resuming?: "page" | "wait" | "";
+  source?: "project" | "off" | "workspace";
+};
+
+// The bounds a web process follows its load between (RFC-0047): cpu is a
+// percent of the size's CPU, concurrency the requests in flight an
+// instance may carry; both have defaults (70, 20).
+export type AutoscaleSpec = {
+  min: number;
+  max: number;
+  cpu?: number;
+  concurrency?: number;
+};
+
+// The bounds as they apply: the targets in force, and whether the cluster
+// follows them (unavailable says why; a message on an active one says what
+// is missing, such as CPU without the Metrics Server).
+export type AutoscaleStatus = {
+  min: number;
+  max: number;
+  cpu: number;
+  concurrency: number;
+  state?: "active" | "unavailable";
   message?: string;
 };
 
 export type ProcessStatus = {
+  // With bounds, what the scaler asks for now.
   desired: number;
   ready: number;
   updated?: number;
@@ -157,10 +219,20 @@ export type ProcessStatus = {
   // Why the process keeps to one instance, when it does.
   pinned?: string;
   sleep?: SleepStatus;
+  autoscale?: AutoscaleStatus;
 };
 
 export type Exposure = "external" | "internal";
 export type Access = "public" | "authenticated" | "identified";
+
+// The page in front of the app (RFC-0020): what it says under the
+// project's name, and when and by whom it went up, as the API records.
+export type Maintenance = {
+  enabled: boolean;
+  message?: string;
+  since?: string;
+  by?: string;
+};
 
 export type Release = {
   number: number;
@@ -187,6 +259,8 @@ export type ProjectSummary = {
   createdAt: string;
   exposure?: Exposure;
   access: Access;
+  // The page in front of the app, only while it is up.
+  maintenance?: Maintenance;
   // The symbol of its card on the launcher and its colour; the image it
   // sent in their place, and that image's type.
   icon?: string;
@@ -203,14 +277,22 @@ export type ProjectSummary = {
 export type Project = ProjectSummary & {
   spec: {
     source?: {
-      git?: { url: string; revision?: string };
+      git?: { url: string; revision?: string; autoDeploy?: boolean; watchPaths?: string[]; waitForChecks?: boolean };
       blob?: { sha256?: string; ref?: string };
       subPath?: string;
     };
     pinnedDigest?: string;
     processes?: Record<
       string,
-      { size?: string; replicas?: number; command?: string; port?: number }
+      {
+        size?: string;
+        replicas?: number;
+        command?: string;
+        port?: number;
+        sleep?: { after?: string; resuming?: "page" | "wait" | "" };
+        // The bounds the process follows its load between (RFC-0047).
+        autoscale?: AutoscaleSpec;
+      }
     >;
     build?: {
       strategy?: "buildpacks" | "dockerfile";
@@ -219,6 +301,7 @@ export type Project = ProjectSummary & {
     };
     env?: { name: string; value?: string }[];
     bindings?: { kind: string; name: string }[];
+    maintenance?: Maintenance;
   };
   status: {
     phase: string;
@@ -235,6 +318,8 @@ export type Project = ProjectSummary & {
       state: "Running" | "Succeeded" | "Failed";
       message?: string;
     };
+    // What the source watcher knows of the branch (RFC-0018).
+    source?: SourceStatus;
     // Built is False when the last build failed; Ready's reason says what
     // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
     conditions?: {
@@ -244,16 +329,114 @@ export type Project = ProjectSummary & {
       message?: string;
     }[];
   };
+  // The GitHub App covers the repository: watch paths and wait for CI
+  // apply (RFC-0054). sourceNote says when they are set and do not.
+  githubFeatures?: boolean;
+  sourceNote?: string;
+  // How shpyrd learns of the branch's pushes: the GitHub App, the
+  // project's own webhook, or not until its webhook is set up (manual).
+  sourceWatch?: { mode: "github-app" | "webhook" | "manual" };
+  // The GitHub account whose access picked the repository.
+  githubLinkedBy?: string;
+};
+
+// What the source watcher knows of the branch a project follows
+// (RFC-0018): the commit that runs, the newest seen, and how.
+export type SourceStatus = {
+  commit?: string;
+  latest?: string;
+  latestAt?: string;
+  message?: string;
+  author?: string;
+  via?: "push" | "poll" | "deploy";
+  // A commit whose message asked not to deploy it.
+  skipped?: string;
+  // A commit waiting for its other checks on GitHub, since heldSince.
+  held?: string;
+  heldSince?: string;
+  // The last commit not deployed, and why ("No changes in the watch
+  // paths", "CI failed: test", "CI did not finish within an hour").
+  notDeployed?: string;
+  notDeployedReason?: string;
+  lastWebhookAt?: string;
+  checkedAt?: string;
+  // Why the branch cannot be read, in words.
+  error?: string;
+};
+
+// The webhook a git host calls on a push: its address and its secret.
+export type GitHooks = { url: string; secret: string };
+
+// A GitHub App installation connected to the workspace (RFC-0054).
+export type GitHubInstallation = {
+  id: number;
+  account: string;
+  type: "Organization" | "User";
+  connectedBy: string;
+  createdAt: string;
+  suspended: boolean;
+  // The installation's settings on GitHub.
+  manageURL: string;
+};
+
+// The workspace's GitHub: whether the platform has an App, why not, and
+// the connections.
+export type GitHubConnections = {
+  configured: boolean;
+  appURL?: string;
+  note?: string;
+  installations: GitHubInstallation[];
+};
+
+// A repository a connection reaches, for New project.
+export type GitHubRepository = {
+  installation: number;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+};
+
+// An account of the workspace's GitHub the person sees on GitHub: the
+// picker's account switcher. manageURL is its settings on GitHub, where
+// repositories are added.
+export type GitHubAccount = {
+  installation: number;
+  account: string;
+  type: "Organization" | "User";
+  suspended: boolean;
+  manageURL: string;
+};
+
+// The person's accounts, and how many the workspace has: none, and New
+// project offers no GitHub.
+export type GitHubAccounts = { accounts: GitHubAccount[]; connected: number };
+
+// The person's own GitHub account (RFC-0054).
+export type GitHubLink = { login: string; linkedAt: string };
+
+// A listing of repositories; truncated when the server cut it at the most
+// it reads (the header X-Shpyrd-Truncated), so the picker says so.
+export type GitHubRepositories = GitHubRepository[] & { truncated?: boolean };
+
+// A repository's branches; truncated when the server cut the list.
+export type GitHubBranches = string[] & { truncated?: boolean };
+
+// What the project's builds clone with.
+export type ProjectGitAuth = {
+  url?: string;
+  using: "none" | "token" | "deploy-key" | "github-app";
+  githubAccount?: string;
 };
 
 // buildFailed says the project's last build failed (its Built condition).
+// A branch shpyrd cannot read (SourceUnreadable) built nothing.
 export const buildFailed = (status: {
   phase: string;
-  conditions?: { type: string; status: string }[];
+  conditions?: { type: string; status: string; reason?: string }[];
 }) =>
   status.phase === "Failed" &&
   (status.conditions ?? []).some(
-    (c) => c.type === "Built" && c.status === "False",
+    (c) => c.type === "Built" && c.status === "False" && c.reason !== "SourceUnreadable",
   );
 
 export type DeployRequest = {
@@ -601,15 +784,55 @@ export type Series = {
     | "warning"
     | "error";
 };
+// What the metrics of a project are asked for (RFC-0027). `by` breaks
+// CPU, memory and network down per instance, and `agg` collapses those
+// instances into one series; `mode` reads CPU and memory as a share of
+// the size or in their units; `replaced` keeps the instances that no
+// longer exist; `process` narrows everything to one process type.
+export type MetricsQuery = {
+  range: string;
+  process?: string;
+  by?: "process" | "instance";
+  agg?: "none" | "sum" | "avg" | "max";
+  mode?: "percent" | "total";
+  replaced?: boolean;
+};
+
+// One chart of the metrics: its series, their unit, and what the server
+// says about them — a query that failed, data it chose not to draw, and
+// whether the chart can be broken down per instance at all.
+export type MetricChart = {
+  series: Series[];
+  unit: string;
+  error?: string;
+  note?: string;
+  instanceCapable: boolean;
+};
+
 export type Metrics = {
   from: number;
   to: number;
-  responseTime: Series[];
-  throughput: Series[];
-  cpu: Series[];
-  memory: Series[];
-  // Bytes a second in and out, by process.
-  network: Series[];
-  instances: Series[];
+  responseTime: MetricChart;
+  throughput: MetricChart;
+  cpu: MetricChart;
+  memory: MetricChart;
+  // Bytes a second in and out.
+  network: MetricChart;
+  instances: MetricChart;
   releases: { time: number; label: string }[];
+  // The processes killed for crossing their memory in the time, oldest
+  // first (#119): the Memory chart marks each.
+  ooms: OOMKill[];
+};
+
+// One instance killed for running out of memory. The instance is its name
+// then (web.1), missing for a release step or a build; the limit is in
+// bytes, and the size names it when it is one the process has.
+export type OOMKill = {
+  time: number;
+  process: string;
+  instance?: string;
+  limit: number;
+  size?: string;
+  release?: number;
 };

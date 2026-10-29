@@ -67,6 +67,24 @@ func (o *oneWorkspace) WorkspaceByHost(ctx context.Context, host string) (*Works
 	return ws, h, nil
 }
 
+// GitHubInstallationConnections are only the default workspace's: an
+// installation a workspace added by hand holds is not there for the
+// webhook (RFC-0054).
+func (o *oneWorkspace) GitHubInstallationConnections(ctx context.Context, id int64) ([]GitHubInstallation, error) {
+	all, err := o.Store.GitHubInstallationConnections(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	slug := o.defaultSlug(ctx)
+	out := []GitHubInstallation{}
+	for _, inst := range all {
+		if inst.Workspace == slug {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
 func (o *oneWorkspace) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	all, err := o.Store.ListWorkspaces(ctx)
 	if err != nil {
