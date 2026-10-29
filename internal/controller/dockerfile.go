@@ -490,9 +490,10 @@ echo "pushed $IMAGE_REPO@$digest"`
 
 // A Dockerfile build's hard ceiling (#243): out of the workspace's quota,
 // it is bounded here. Past the memory limit the build is killed and says
-// so; CPU above the limit is throttled.
+// so; CPU above the limit is throttled. 4Gi, since 2Gi left a Next.js
+// site with Turbopack stalled at the ceiling instead of finishing.
 const (
-	buildMemoryLimit      = "2Gi"
+	buildMemoryLimit      = "4Gi"
 	buildCPULimit         = "2"
 	buildFetchMemoryLimit = "512Mi"
 	buildFetchCPULimit    = "500m"
