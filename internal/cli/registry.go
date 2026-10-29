@@ -215,6 +215,13 @@ func serverRequest(ctx context.Context, k *kube.Client, method, path string, bod
 			}
 		}
 	}
+	// client-go sends a request again by itself when the answer is a 429
+	// or 5xx with Retry-After; a write that reached the server may have
+	// done its work already, and a second create finds the first's result
+	// in its way (#90). Only reads go twice.
+	if method != http.MethodGet {
+		req = req.MaxRetries(0)
+	}
 	if body != nil {
 		req = req.Body(body)
 		if contentType != "" {
