@@ -5,6 +5,7 @@ resources:
   # https://github.com/buildpacks-community/kpack/releases/download/v0.18.0/release-0.18.0.yaml
   - release.yaml
   - builder.yaml
+  - refresh.yaml
 patches:
   # The registry needs a credential on every profile (RFC-0059): the builder
   # ServiceAccount carries Secret shpyrd-registry (hook registry-credentials)

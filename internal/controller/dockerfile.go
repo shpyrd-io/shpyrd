@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -78,14 +79,14 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 			return buildState{}, fmt.Errorf("create build job: %w", err)
 		}
 		// Only stop older builds once their replacement exists.
-		if err := r.reconcileSupersededBuilds(ctx, builds); err != nil {
+		if err := r.reconcileSupersededBuilds(ctx, app, builds); err != nil {
 			return buildState{}, err
 		}
 		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "started Dockerfile build %s", job.Name)
 		return buildState{LatestBuild: job.Name, Ready: "Unknown", Message: "build pending", LatestImage: lastImage(builds)}, nil
 	}
 
-	if err := r.reconcileSupersededBuilds(ctx, builds[:len(builds)-1]); err != nil {
+	if err := r.reconcileSupersededBuilds(ctx, app, builds[:len(builds)-1]); err != nil {
 		return buildState{}, err
 	}
 	st := buildState{LatestBuild: latest.Name, Ready: "Unknown", Message: "building"}
@@ -117,7 +118,7 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 	case JobFailed(latest):
 		_, msg := r.buildOutcome(ctx, latest)
 		st.Ready, st.Message = "False", firstNonEmpty(msg, JobFailureMessage(latest))
-		if err := r.annotateJob(ctx, latest, map[string]string{shpyrdv1.AnnotationBuildFailure: st.Message}); err != nil {
+		if err := r.annotateJob(ctx, latest, r.failedJobAnnotations(ctx, app, latest, st.Message)); err != nil {
 			return st, err
 		}
 		st.LatestImage = lastImage(builds[:len(builds)-1])
@@ -183,22 +184,29 @@ func JobFailed(j *batchv1.Job) bool {
 	return false
 }
 
-// JobFailureMessage describes a terminal failure even when no pod was created.
+// JobFailureMessage describes a terminal failure even when no pod was
+// created: in words of the build, never the Job controller's own ("Job has
+// reached the specified backoff limit").
 func JobFailureMessage(j *batchv1.Job) string {
 	for _, c := range j.Status.Conditions {
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			if c.Reason == "DeadlineExceeded" {
-				return "The build did not finish within 30 minutes."
-			}
-			return firstNonEmpty(c.Message, c.Reason, "The Dockerfile build failed. "+buildLogHint)
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue && c.Reason == "DeadlineExceeded" {
+			return buildDeadlineMessage
 		}
 	}
 	return "The Dockerfile build failed. " + buildLogHint
 }
 
+// buildDeadline is how long a Dockerfile build may run; past it the build
+// is stopped and says so. Production hit it four times in October 2026,
+// each a build that would not have finished.
+const buildDeadline = 30 * time.Minute
+
+// buildDeadlineMessage is what a build stopped at the deadline says.
+var buildDeadlineMessage = fmt.Sprintf("The build did not finish within %d minutes and was stopped. Make it faster: fewer or lighter steps, the dependency install before the source is copied so its layer is cached, a multi-stage Dockerfile. %s", int(buildDeadline.Minutes()), buildLogHint)
+
 // reconcileSupersededBuilds preserves completed outcomes and stops older pending
 // or active builds. Suspended Jobs retain their history without consuming quota.
-func (r *AppReconciler) reconcileSupersededBuilds(ctx context.Context, builds []batchv1.Job) error {
+func (r *AppReconciler) reconcileSupersededBuilds(ctx context.Context, app *shpyrdv1.App, builds []batchv1.Job) error {
 	for i := range builds {
 		job := &builds[i]
 		if job.Annotations[shpyrdv1.AnnotationBuildImage] != "" || job.Annotations[shpyrdv1.AnnotationBuildFailure] != "" {
@@ -207,7 +215,7 @@ func (r *AppReconciler) reconcileSupersededBuilds(ctx context.Context, builds []
 		switch {
 		case JobFailed(job):
 			_, msg := r.buildOutcome(ctx, job)
-			if err := r.annotateJob(ctx, job, map[string]string{shpyrdv1.AnnotationBuildFailure: firstNonEmpty(msg, JobFailureMessage(job))}); err != nil {
+			if err := r.annotateJob(ctx, job, r.failedJobAnnotations(ctx, app, job, firstNonEmpty(msg, JobFailureMessage(job)))); err != nil {
 				return err
 			}
 		case job.Status.Succeeded > 0:
@@ -287,6 +295,43 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 		return nil, describeBuildFailure("dockerfile", t.Message)
 	}
 	return nil, ""
+}
+
+// failedJobAnnotations is what a failed build Job records: why, and the end
+// of the failed step's output (the termination message holds its last
+// lines), masked, for when the log is gone.
+func (r *AppReconciler) failedJobAnnotations(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, msg string) map[string]string {
+	ann := map[string]string{shpyrdv1.AnnotationBuildFailure: msg}
+	step, out := r.failedJobOutput(ctx, job)
+	if kept := keptOutput(out); kept != "" {
+		ann[shpyrdv1.AnnotationBuildOutput] = r.buildMasker(ctx, app).Line(kept)
+		ann[shpyrdv1.AnnotationBuildFailedStep] = step
+	}
+	return ann
+}
+
+// failedJobOutput is the failed step of a build Job's latest instance and
+// what it printed last, as the runtime kept it in the termination message;
+// "" when the instance is gone.
+func (r *AppReconciler) failedJobOutput(ctx context.Context, job *batchv1.Job) (step, out string) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{shpyrdv1.LabelBuild: job.Name}); err != nil || len(pods.Items) == 0 {
+		return "", ""
+	}
+	sort.Slice(pods.Items, func(i, k int) bool {
+		return pods.Items[i].CreationTimestamp.After(pods.Items[k].CreationTimestamp.Time)
+	})
+	pod := pods.Items[0]
+	for _, cs := range append(append([]corev1.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			name := cs.Name
+			if name == fetchContainer {
+				name = "prepare"
+			}
+			return name, t.Message
+		}
+	}
+	return "", ""
 }
 
 func (r *AppReconciler) annotateJob(ctx context.Context, job *batchv1.Job, ann map[string]string) error {
@@ -415,7 +460,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:          ptr.To[int32](0),
-			ActiveDeadlineSeconds: ptr.To[int64](1800),
+			ActiveDeadlineSeconds: ptr.To(int64(buildDeadline / time.Second)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 				Spec: corev1.PodSpec{
@@ -425,7 +470,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 					// Outside the workspace's ceiling (#243), bounded by the
 					// limits below instead.
 					PriorityClassName: BuildPriorityClass,
-					SecurityContext:    &corev1.PodSecurityContext{FSGroup: uid},
+					SecurityContext:   &corev1.PodSecurityContext{FSGroup: uid},
 					InitContainers: []corev1.Container{{
 						Name:    fetchContainer,
 						Image:   c.BuildKitImage,
@@ -456,14 +501,12 @@ echo "pushed $IMAGE_REPO@$digest"`
 							{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
 							{Name: "IMAGE_REPO", Value: repo},
 						}, c.buildKitAuthEnv()...), c.trustEnv()...),
-						// The requests place the build on a machine; the limits
-						// are its hard ceiling, since the workspace's no longer
-						// counts it (#243).
+						// The requests place the build on a machine
+						// (build_resources.go); the limits are its hard
+						// ceiling, since the workspace's no longer counts it
+						// (#243).
 						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("250m"),
-								corev1.ResourceMemory: resource.MustParse("512Mi"),
-							},
+							Requests: buildRequests(),
 							Limits: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse(buildCPULimit),
 								corev1.ResourceMemory: resource.MustParse(buildMemoryLimit),

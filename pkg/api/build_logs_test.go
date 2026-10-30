@@ -54,8 +54,8 @@ func TestJobBuildInfoFailureWithoutPod(t *testing.T) {
 		name, reason, message, annotation, want string
 		status                                  corev1.ConditionStatus
 	}{
-		{name: "deadline without pod", reason: "DeadlineExceeded", status: corev1.ConditionTrue, want: "The build did not finish within 30 minutes."},
-		{name: "other condition", reason: "BackoffLimitExceeded", message: "Job has reached the specified backoff limit", status: corev1.ConditionTrue, want: "Job has reached the specified backoff limit"},
+		{name: "deadline without pod", reason: "DeadlineExceeded", status: corev1.ConditionTrue, want: "The build did not finish within 30 minutes and was stopped."},
+		{name: "other condition", reason: "BackoffLimitExceeded", message: "Job has reached the specified backoff limit", status: corev1.ConditionTrue, want: "The Dockerfile build failed."},
 		{name: "annotation wins", reason: "DeadlineExceeded", annotation: "The source could not be fetched.", status: corev1.ConditionTrue, want: "The source could not be fetched."},
 		{name: "false condition", reason: "DeadlineExceeded", status: corev1.ConditionFalse},
 		{name: "unknown condition", reason: "DeadlineExceeded", status: corev1.ConditionUnknown},
@@ -67,9 +67,40 @@ func TestJobBuildInfoFailureWithoutPod(t *testing.T) {
 				if got.Status != "Building" || got.CompletedAt != nil {
 					t.Fatalf("nonterminal build = %+v", got)
 				}
-			} else if got.Status != "Failed" || got.Message != tc.want || got.CompletedAt == nil || !got.CompletedAt.Equal(finished.Time) {
+			} else if got.Status != "Failed" || !strings.HasPrefix(got.Message, tc.want) || got.CompletedAt == nil || !got.CompletedAt.Equal(finished.Time) {
 				t.Fatalf("failed build = %+v, want %q at %v", got, tc.want, finished)
 			}
 		})
+	}
+}
+
+// A build whose instance is gone still has a log to show when the
+// controller kept the end of its failed step's output on the build: that,
+// with the step named, instead of "the output is gone".
+func TestAGoneBuildServesTheOutputItKept(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Status: shpyrdv1.AppStatus{LatestBuild: "shop-build-3"}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name: "shop-build-3", Namespace: "app-shop",
+		Labels: map[string]string{shpyrdv1.LabelApp: "shop", shpyrdv1.LabelBuildNumber: "3"},
+		Annotations: map[string]string{
+			shpyrdv1.AnnotationBuildFailure:    "The build failed while running `npm run build` (exit status 1). The build's log has the full output.",
+			shpyrdv1.AnnotationBuildFailedStep: "build",
+			shpyrdv1.AnnotationBuildOutput:     "> next build\nError: Cannot find module 'tailwindcss'\nexit status 1",
+		},
+	}}
+	bare := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "shop-build-2", Namespace: "app-shop", Labels: map[string]string{shpyrdv1.LabelApp: "shop", shpyrdv1.LabelBuildNumber: "2"}}}
+	s, _ := newTestServer(t, nil, []client.Object{app, job, bare})
+	rec := do(t, s, "GET", "/api/projects/shop/builds/shop-build-3/logs", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("log of a gone build with kept output = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"===> build (", "Cannot find module 'tailwindcss'", "===> step build failed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("log lacks %q: %s", want, body)
+		}
+	}
+	if rec := do(t, s, "GET", "/api/projects/shop/builds/shop-build-2/logs", "", true); rec.Code != http.StatusNotFound {
+		t.Errorf("log of a gone build that kept nothing = %d", rec.Code)
 	}
 }

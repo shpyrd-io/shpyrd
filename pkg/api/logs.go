@@ -331,6 +331,9 @@ func (s *Server) buildLogs(c *gin.Context) {
 			return
 		}
 		if !follow {
+			if s.keptBuildOutput(c, app, build) {
+				return
+			}
 			abort(c, http.StatusNotFound, fmt.Errorf("the output of build %s is gone (only a limited build history is kept)", build))
 			return
 		}
@@ -423,6 +426,39 @@ func (s *Server) buildLogs(c *gin.Context) {
 	if follow {
 		w.line("===> done")
 	}
+}
+
+// keptBuildOutput serves what the controller kept of a failed build whose
+// log is gone: the end of the failed step's output, written on the build
+// itself (AnnotationBuildOutput). false when the build kept none.
+func (s *Server) keptBuildOutput(c *gin.Context, app *shpyrdv1.App, build string) bool {
+	ctx := c.Request.Context()
+	key := types.NamespacedName{Namespace: app.Namespace, Name: build}
+	var ann map[string]string
+	var job batchv1.Job
+	if err := s.apps.Get(ctx, key, &job); err == nil {
+		ann = job.Annotations
+	} else {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(controller.KpackBuildGVK)
+		if err := s.apps.Get(ctx, key, u); err == nil {
+			ann = u.GetAnnotations()
+		}
+	}
+	out := ann[shpyrdv1.AnnotationBuildOutput]
+	if out == "" {
+		return false
+	}
+	step := ann[shpyrdv1.AnnotationBuildFailedStep]
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Cache-Control", "no-cache")
+	c.Status(http.StatusOK)
+	w := newLineWriter(c.Writer)
+	w.line("===> " + step + " (the end of its output; the rest of the build's log has expired)")
+	w.line(out)
+	w.line("===> step " + step + " failed")
+	return true
 }
 
 // ContainerStatus finds the status of an init or regular container.

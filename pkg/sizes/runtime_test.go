@@ -7,6 +7,7 @@ func TestRuntimeDefaults(t *testing.T) {
 		{"node-engine", "Node.js", "shared-m"}, {"mri", "Ruby", "shared-m"},
 		{"cpython", "Python", "shared-m"}, {"bellsoft-liberica", "JVM", "shared-m"},
 		{"go-build", "Go", "shared-s"}, {"rust", "Rust", "shared-s"}, {"nginx", "static", "shared-s"},
+		{"php-dist", "PHP", "shared-m"}, {"dotnet-core-runtime", ".NET", "shared-m"},
 		{"unknown", "", "shared-s"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
@@ -21,6 +22,10 @@ func TestRuntimeDefaults(t *testing.T) {
 	}
 	if got := RuntimeFromBuildpacks([]string{"paketo-buildpacks/node-engine", "paketo-buildpacks/nginx"}); got != "static" {
 		t.Fatalf("asset build runtime = %q", got)
+	}
+	// The PHP buildpacks bring the web server along: the runtime is PHP.
+	if got := RuntimeFromBuildpacks([]string{"paketo-buildpacks/php-dist", "paketo-buildpacks/nginx", "paketo-buildpacks/php-start"}); got != "PHP" {
+		t.Fatalf("PHP behind nginx runtime = %q", got)
 	}
 	cat := Defaults()
 	cat.Default = "shared-xl"

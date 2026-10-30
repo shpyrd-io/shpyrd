@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -359,7 +360,7 @@ func TestDockerfileSupersededBuilds(t *testing.T) {
 						t.Fatalf("superseded build = %+v", old)
 					}
 				case "failed without pod":
-					if ptr.Deref(old.Spec.Suspend, false) || old.Annotations[shpyrdv1.AnnotationBuildFailure] != "The build did not finish within 30 minutes." {
+					if ptr.Deref(old.Spec.Suspend, false) || old.Annotations[shpyrdv1.AnnotationBuildFailure] != buildDeadlineMessage {
 						t.Fatalf("failed build = %+v", old)
 					}
 				case "succeeded":
@@ -391,7 +392,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 	if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := getJob(t, c, app.Namespace, "dk-build-1").Annotations[shpyrdv1.AnnotationBuildFailure]; got != "The build did not finish within 30 minutes." {
+	if got := getJob(t, c, app.Namespace, "dk-build-1").Annotations[shpyrdv1.AnnotationBuildFailure]; got != buildDeadlineMessage {
 		t.Fatalf("old failure = %q", got)
 	}
 }
@@ -570,5 +571,65 @@ func TestABuildOutOfMemorySaysSo(t *testing.T) {
 		if _, msg := r.buildOutcome(ctx, job); !strings.HasPrefix(msg, tc.want) {
 			t.Errorf("init=%v: message = %q, want %q", tc.init, msg, tc.want)
 		}
+	}
+}
+
+// A failed Dockerfile build keeps the end of its failed step's output on
+// the Job (the runtime's termination message holds the last lines), so the
+// log is still there to read once the instance is gone; what it printed of
+// the project's secrets is masked, like the log.
+func TestAFailedBuildKeepsItsOutput(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: app.BuildEnvName(), Namespace: app.Namespace}, Data: map[string][]byte{"NPM_TOKEN": []byte("s3cr3t-token")}}
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1", Namespace: "app-dk", Labels: map[string]string{shpyrdv1.LabelApp: app.Name}},
+		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}},
+	}
+	out := "#8 [5/6] RUN npm run build\n#8 1.2 npm error token s3cr3t-token rejected\n#8 ERROR: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 1\n"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1-x", Namespace: "app-dk", Labels: map[string]string{shpyrdv1.LabelBuild: job.Name}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  buildContainer,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: out}},
+		}}},
+	}
+	r, c := newTestReconciler(t, app, secret, job, pod)
+	if err := r.reconcileSupersededBuilds(ctx, app, []batchv1.Job{*job}); err != nil {
+		t.Fatal(err)
+	}
+	got := getJob(t, c, app.Namespace, job.Name).Annotations
+	if !strings.Contains(got[shpyrdv1.AnnotationBuildFailure], "while running `npm run build`") {
+		t.Errorf("failure = %q", got[shpyrdv1.AnnotationBuildFailure])
+	}
+	if got[shpyrdv1.AnnotationBuildFailedStep] != "build" {
+		t.Errorf("failed step = %q", got[shpyrdv1.AnnotationBuildFailedStep])
+	}
+	kept := got[shpyrdv1.AnnotationBuildOutput]
+	if !strings.Contains(kept, "RUN npm run build") || !strings.Contains(kept, "exit code: 1") {
+		t.Errorf("kept output = %q", kept)
+	}
+	if strings.Contains(kept, "s3cr3t-token") {
+		t.Errorf("the kept output shows a secret: %q", kept)
+	}
+}
+
+// The kept output is the end of the step's output, bounded, without colour
+// codes, and never a line cut in the middle.
+func TestKeptOutputIsTheEnd(t *testing.T) {
+	if got := keptOutput("\x1b[31mred\x1b[0m line\n\n"); got != "red line" {
+		t.Errorf("keptOutput = %q", got)
+	}
+	if keptOutput("   \n") != "" {
+		t.Error("blank output kept")
+	}
+	var b strings.Builder
+	for i := 0; b.Len() < 2*keptOutputBytes; i++ {
+		fmt.Fprintf(&b, "line %06d of the build's output, long enough to count\n", i)
+	}
+	b.WriteString("the last line")
+	got := keptOutput(b.String())
+	if len(got) > keptOutputBytes || !strings.HasSuffix(got, "the last line") || !strings.HasPrefix(got, "line ") {
+		t.Errorf("kept %d bytes, starts %q, ends %q", len(got), got[:10], got[len(got)-13:])
 	}
 }

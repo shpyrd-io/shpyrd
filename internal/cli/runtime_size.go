@@ -27,19 +27,30 @@ func sourceRuntime(dir string, build *shpyrdv1.Build) string {
 			}
 		}
 	}
+	// PHP and .NET before Node.js: their apps often carry a package.json
+	// for the assets, and what stays in the image is PHP-FPM or the .NET
+	// runtime.
 	for _, candidate := range []struct {
 		runtime string
 		files   []string
+		globs   []string
 	}{
-		{"Go", []string{"go.mod"}}, {"Rust", []string{"Cargo.toml"}},
-		{"Ruby", []string{"Gemfile", "config.ru"}},
-		{"Python", []string{"requirements.txt", "pyproject.toml", "Pipfile", "setup.py"}},
-		{"JVM", []string{"pom.xml", "build.gradle", "build.gradle.kts"}},
-		{"Node.js", []string{"package.json"}},
-		{"static", []string{"index.html", "public/index.html"}},
+		{"Go", []string{"go.mod"}, nil}, {"Rust", []string{"Cargo.toml"}, nil},
+		{"Ruby", []string{"Gemfile", "config.ru"}, nil},
+		{"Python", []string{"requirements.txt", "pyproject.toml", "Pipfile", "setup.py"}, nil},
+		{"JVM", []string{"pom.xml", "build.gradle", "build.gradle.kts"}, nil},
+		{"PHP", []string{"composer.json", "index.php", "public/index.php"}, nil},
+		{".NET", nil, []string{"*.csproj", "*.fsproj", "*.vbproj", "*.sln"}},
+		{"Node.js", []string{"package.json"}, nil},
+		{"static", []string{"index.html", "public/index.html"}, nil},
 	} {
 		for _, f := range candidate.files {
 			if fileExists(dir, f) {
+				return candidate.runtime
+			}
+		}
+		for _, g := range candidate.globs {
+			if hasGlob(dir, g) {
 				return candidate.runtime
 			}
 		}
