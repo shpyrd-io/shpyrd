@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/utils/ptr"
 
+	"github.com/shpyrd-io/shpyrd/pkg/buildcatalog"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
@@ -168,18 +169,42 @@ func (a *applier) applyOneAs(ctx context.Context, o *unstructured.Unstructured, 
 	unstructured.RemoveNestedField(o.Object, "status")
 	unstructured.RemoveNestedField(o.Object, "metadata", "creationTimestamp")
 	unstructured.RemoveNestedField(o.Object, "metadata", "managedFields")
-	data, err := json.Marshal(o.Object)
-	if err != nil {
-		return err
-	}
 	opts := metav1.PatchOptions{FieldManager: manager, Force: ptr.To(true)}
 	if dryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	} else if err := a.clearRollingUpdate(ctx, ri, o); err != nil {
 		return err
+	} else if err := a.keepBuildCatalogPins(ctx, ri, o); err != nil {
+		return err
+	}
+	data, err := json.Marshal(o.Object)
+	if err != nil {
+		return err
 	}
 	_, err = ri.Patch(ctx, o.GetName(), types.ApplyPatchType, data, opts)
 	return err
+}
+
+// keepBuildCatalogPins applies a buildpack or stack of the build catalog
+// with the digest the cluster pinned it to (pkg/buildcatalog) while the
+// manifest still names the tag it was pinned from: an upgrade must not undo
+// the pins and assemble every builder again at deploy time. A manifest
+// naming a new tag is applied as written.
+func (a *applier) keepBuildCatalogPins(ctx context.Context, ri dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
+	if buildcatalog.Fields(desired.GetKind()) == nil || desired.GetAPIVersion() != "kpack.io/v1alpha2" {
+		return nil
+	}
+	live, err := ri.Get(ctx, desired.GetName(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if kept := buildcatalog.KeepPins(desired, live); kept > 0 {
+		a.log.Debug("build catalog pins kept", "kind", desired.GetKind(), "name", desired.GetName(), "fields", kept)
+	}
+	return nil
 }
 
 // clearRollingUpdate makes room for a Deployment's strategy to become

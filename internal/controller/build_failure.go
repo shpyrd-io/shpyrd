@@ -43,6 +43,46 @@ var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository no
 // image to the registry ("Error verifying write access to ...").
 var registryRefusedWrite = regexp.MustCompile(`(?i)error verifying write access`)
 
+// The platform's own faults, as kpack's message or the step's output says
+// them (production, October 2026). Each is explained as the platform's, with
+// what to do, and none of its words (an address, a token, a signal) is
+// repeated.
+var (
+	// nodePressure: the machine refused or evicted the build for want of
+	// disk (DiskPressure, "The node was low on resource: ephemeral-storage").
+	nodePressure = regexp.MustCompile(`(?i)DiskPressure|MemoryPressure|was low on resource|Pod was rejected|\bevicted\b`)
+	// sourceUnreachable: the server that holds the uploaded archive did
+	// not answer (it was restarting).
+	sourceUnreachable = regexp.MustCompile(`/api/sources/[^\n]*(?:connection refused|connection reset|i/o timeout|no such host|context deadline exceeded)`)
+	// sourceGone: the archive is not on the server any more.
+	sourceGone = regexp.MustCompile(`/api/sources/[^\n]*404 Not Found`)
+	// toolCrashed: the platform's fetch tool itself died.
+	toolCrashed = regexp.MustCompile(`Segmentation fault|core dumped|Illegal instruction|Bus error`)
+	// emptyRepository and missingRef: kpack's git found nothing to build.
+	emptyRepository = regexp.MustCompile(`remote repository is empty`)
+	missingRef      = regexp.MustCompile(`couldn't find remote ref "?([^"\s:]+)"?`)
+)
+
+// What the Node package managers say on a first deploy (production,
+// October 2026: eleven of the seventeen `npm run build` failures were one
+// of these).
+var (
+	// pnpmLockfile: pnpm refuses a lockfile behind a package.json.
+	pnpmLockfile = regexp.MustCompile(`ERR_PNPM_OUTDATED_LOCKFILE[^\n]*?(\S*pnpm-lock\.yaml) is not up to date with (\S*package\.json)`)
+	// npmLockfile: npm ci refuses a lockfile behind package.json, naming
+	// what is missing.
+	npmLockfile = regexp.MustCompile("`npm ci` can only install packages when your package.json and package-lock.json")
+	npmMissing  = regexp.MustCompile(`Missing: (\S+) from lock file`)
+	// lifecycleNotFound: a package's lifecycle script (pnpm prints
+	// "prepare: sh: 1: husky: not found") ran a command that is gone,
+	// as happens when the dev dependencies are pruned and prepare runs
+	// again.
+	lifecycleNotFound = regexp.MustCompile(`(?m)^[^\n:]*?\b(\w+): sh: \d+: (\S+): not found`)
+	// commandNotFound: a script ran a command that is not installed
+	// (exit status 127).
+	commandNotFound = regexp.MustCompile(`sh: \d+: (\S+): not found`)
+)
+
 // unsupportedVersion is a Paketo buildpack finding no version of the
 // language that satisfies the app (#185): `failed to satisfy "go"
 // dependency version constraint ">= 1.27": no compatible versions on
@@ -117,6 +157,24 @@ func describeBuildFailure(step, out string) string {
 	if script != "" {
 		while = fmt.Sprintf("The build failed while running `%s`", script)
 	}
+	if nodePressure.MatchString(text) {
+		return "The machine the build ran on ran out of disk while it was building: a fault of the platform, not of the app. Deploying again puts the build on a machine with room, and usually passes. " + buildLogHint
+	}
+	if step == "prepare" && toolCrashed.MatchString(text) {
+		return "The platform's own tool crashed while fetching the source, before the app's code ran: a fault of the platform, not of the app. Deploying again usually passes. " + buildLogHint
+	}
+	if step == "prepare" && sourceUnreachable.MatchString(text) {
+		return "The build could not download the uploaded source from the platform, which was not answering (it was restarting): a fault of the platform, not of the app. Deploying again usually passes. " + buildLogHint
+	}
+	if step == "prepare" && sourceGone.MatchString(text) {
+		return "The uploaded source is no longer on the platform (it was lost when the platform restarted). Deploy again from the source directory, which uploads it anew; building this build again will not pass. " + buildLogHint
+	}
+	if step == "prepare" && emptyRepository.MatchString(text) {
+		return "The repository is empty: nothing has been pushed to it yet. Push a first commit, and the build runs again. " + buildLogHint
+	}
+	if m := missingRef.FindStringSubmatch(text); step == "prepare" && m != nil {
+		return fmt.Sprintf("The repository has no branch named %s. Set the branch the project deploys from to one that exists (the repository's default branch may be master, or another name), then deploy again. %s", m[1], buildLogHint)
+	}
 	if step == "prepare" && registryRefusedWrite.MatchString(text) {
 		// kpack checks it may write the image before fetching the source;
 		// the registry refusing (read-only, unreachable, out of space) is
@@ -138,6 +196,22 @@ func describeBuildFailure(step, out string) string {
 			have = v[1]
 		}
 		return unsupportedVersionMessage(m[1], m[2], have)
+	}
+	if m := pnpmLockfile.FindStringSubmatch(text); m != nil {
+		return fmt.Sprintf("The build failed installing the dependencies: %s is not up to date with %s. Run pnpm install, commit the lockfile and deploy again. %s", m[1], m[2], buildLogHint)
+	}
+	if npmLockfile.MatchString(text) {
+		missing := ""
+		if m := npmMissing.FindStringSubmatch(text); m != nil {
+			missing = fmt.Sprintf(" (%s is not in the lockfile)", m[1])
+		}
+		return fmt.Sprintf("The build failed installing the dependencies: package-lock.json is not in sync with package.json%s. Run npm install, commit the updated lockfile and deploy again. %s", missing, buildLogHint)
+	}
+	if m := lifecycleNotFound.FindStringSubmatch(text); m != nil && script == "" {
+		return fmt.Sprintf("The build failed in the package's %s script: it runs %s, which is not installed at that point (a dev dependency, removed before the script ran again). Make the script tolerate its absence, as in \"%s || true\", or move that step out of %s. %s", m[1], m[2], m[2], m[1], buildLogHint)
+	}
+	if m := commandNotFound.FindStringSubmatch(text); m != nil {
+		return fmt.Sprintf("%s: %s is not installed in the build. When it is a dev dependency, check that package.json lists it and the lockfile has it (the build installs dev dependencies); a tool installed on your machine by hand has to be a dependency too. %s", while, m[1], buildLogHint)
 	}
 	for _, re := range missingVariable {
 		if m := re.FindStringSubmatch(text); m != nil {
@@ -204,16 +278,19 @@ func kpackStep(kpackMessage string) string {
 }
 
 // KpackFailure is what the platform says of a failed kpack Build: the
-// message the controller wrote on it, else one from the step kpack names.
+// message the controller wrote on it, else one from kpack's own message,
+// which names the step and, for the platform's faults (the machine out of
+// disk, the source server away, the registry refusing), the fault itself.
 // For the API, which never reads logs.
 func KpackFailure(b *unstructured.Unstructured) string {
 	if msg := b.GetAnnotations()[shpyrdv1.AnnotationBuildFailure]; msg != "" {
 		return msg
 	}
-	if stepNotStarted(kpackMessage(b)) {
+	msg := kpackMessage(b)
+	if stepNotStarted(msg) {
 		return notStartedMessage
 	}
-	return describeBuildFailure(kpackStep(kpackMessage(b)), "")
+	return describeBuildFailure(kpackStep(msg), msg)
 }
 
 // buildFailed says a kpack Build's Succeeded condition is False.
@@ -253,20 +330,58 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	if step == "" {
 		step = kpackStep(kpackMessage(b))
 	}
-	msg := describeBuildFailure(step, out)
+	// kpack's message names the platform's faults when the step's output
+	// does not (the machine evicted the build; nothing was written).
+	msg := describeBuildFailure(step, out+"\n"+kpackMessage(b))
 	if !started || stepNotStarted(kpackMessage(b)) {
 		msg = notStartedMessage
 	}
-	// The message quotes the script that ran, from the build's output:
-	// masked like the log (#54).
-	var vars corev1.Secret
-	if app := r.appOfBuild(ctx, b); app != nil && r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.BuildEnvName()}, &vars) == nil {
-		msg = logs.NewMasker(logs.BuildSecrets(app, vars.Data)).Line(msg)
+	// The message quotes the script that ran, from the build's output,
+	// and the output itself is kept: masked like the log (#54).
+	masker := r.buildMasker(ctx, r.appOfBuild(ctx, b))
+	ann := map[string]string{shpyrdv1.AnnotationBuildFailure: masker.Line(msg)}
+	if kept := keptOutput(out); kept != "" {
+		ann[shpyrdv1.AnnotationBuildOutput] = masker.Line(kept)
+		ann[shpyrdv1.AnnotationBuildFailedStep] = step
 	}
 	patch := client.MergeFrom(b.DeepCopy())
-	b.SetAnnotations(mergeMaps(b.GetAnnotations(), map[string]string{shpyrdv1.AnnotationBuildFailure: msg}))
+	b.SetAnnotations(mergeMaps(b.GetAnnotations(), ann))
 	_ = r.Patch(ctx, b, patch) // read again next time when it does not stick
-	return msg
+	return ann[shpyrdv1.AnnotationBuildFailure]
+}
+
+// buildMasker masks the project's secret variables (#54); nil, which masks
+// nothing, when the app or its build Secret cannot be read.
+func (r *AppReconciler) buildMasker(ctx context.Context, app *shpyrdv1.App) *logs.Masker {
+	if app == nil {
+		return nil
+	}
+	var vars corev1.Secret
+	if r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.BuildEnvName()}, &vars) != nil {
+		return nil
+	}
+	return logs.NewMasker(logs.BuildSecrets(app, vars.Data))
+}
+
+// keptOutputBytes bounds what a build keeps of its failed step's output:
+// enough for the error and what led to it, small beside the object it is
+// written on.
+const keptOutputBytes = 16 << 10
+
+// keptOutput is the end of a failed step's output, as kept on the build:
+// the last lines within keptOutputBytes, without colour codes.
+func keptOutput(out string) string {
+	out = strings.TrimRight(ansiEscape.ReplaceAllString(out, ""), "\n ")
+	if out == "" {
+		return ""
+	}
+	if len(out) > keptOutputBytes {
+		out = out[len(out)-keptOutputBytes:]
+		if i := strings.IndexByte(out, '\n'); i >= 0 {
+			out = out[i+1:]
+		}
+	}
+	return out
 }
 
 // notStartedMessage is what a build says when the platform could not start

@@ -647,6 +647,8 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App, git gitauth.Build) (*unstru
 	}
 	// The project's variables, through the Secret it binds (build_env.go).
 	build["services"] = []interface{}{buildEnvService(app)}
+	// Its place on a machine (build_resources.go).
+	build["resources"] = kpackBuildResources()
 	if sel := c.appsNodeSelector(); sel != nil {
 		// Builds are bursty and transient: the apps pool (RFC-0077).
 		ns := map[string]interface{}{}

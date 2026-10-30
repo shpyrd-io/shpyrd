@@ -104,6 +104,12 @@ const (
 	AnnotationBuildRevision = "shpyrd.io/build-revision"
 	// AnnotationBuildFailure holds the failure summary of a build Job.
 	AnnotationBuildFailure = "shpyrd.io/build-failure"
+	// AnnotationBuildOutput keeps the end of the failed step's output,
+	// masked, and AnnotationBuildFailedStep the step's name: the build's
+	// log itself is gone within days, and these are what the API serves
+	// in its place.
+	AnnotationBuildOutput     = "shpyrd.io/build-output"
+	AnnotationBuildFailedStep = "shpyrd.io/build-failed-step"
 	// AnnotationRestartedAt, on the App, restarts the instances of the
 	// current release (redeploy): the controller copies it to the pod
 	// templates, which roll without a new release.

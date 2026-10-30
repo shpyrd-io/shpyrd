@@ -1,0 +1,57 @@
+# The build catalog above (the ClusterBuildpacks and ClusterStacks) names
+# tags, and kpack follows a tag: every publication of a Paketo buildpack or
+# base image assembled the platform's builder again, then every project's,
+# and a run-image change rebased every app, at whatever hour Paketo shipped
+# (29 times in October 2026 on production; the first build of each app
+# afterwards restored no cache). The server pins the catalog to digests at
+# its first start (pkg/buildcatalog), the installer keeps the pins across
+# upgrades, and this job moves them to the current digests once a week, on
+# Sunday at 03:00 UTC, an hour before the registry's garbage collection:
+# kpack assembles the builders once, overnight, and the slow first builds
+# fall where nobody deploys. A new language version reaches the buildpacks
+# at the next refresh. `kubectl create job --from=cronjob/buildpacks-refresh`
+# in the system namespace runs it now.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: buildpacks-refresh
+  namespace: ${SHPYRD_SYSTEM_NS}
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  schedule: "0 3 * * 0"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: buildpacks-refresh
+            app.kubernetes.io/part-of: shpyrd
+        spec:
+          serviceAccountName: shpyrd-server
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: refresh
+              image: ${SHPYRD_SERVER_IMAGE}
+              args: ["refresh-buildpacks"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi

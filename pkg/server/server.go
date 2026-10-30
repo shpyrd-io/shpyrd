@@ -31,6 +31,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -159,6 +160,17 @@ func Main(opts Options) {
 	if len(os.Args) > 2 && os.Args[1] == "copy-self" {
 		if err := copySelf(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server refresh-buildpacks`: move the build catalog's pins to
+	// the current digests, then exit (the weekly job of the kpack
+	// component).
+	if len(os.Args) > 1 && os.Args[1] == "refresh-buildpacks" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runRefreshBuildpacks(logger); err != nil {
+			logger.Error("refresh failed", "err", err.Error())
 			os.Exit(1)
 		}
 		return
@@ -395,6 +407,14 @@ func run(o runOptions, logger *slog.Logger) error {
 				if err := mgr.Add(registryGC); err != nil {
 					return fmt.Errorf("registry garbage collector: %w", err)
 				}
+			}
+			// A fresh install's build catalog is pinned at the first start
+			// (pkg/buildcatalog); the pins already set are the weekly job's.
+			if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+				pinBuildCatalog(ctx, k.Dynamic, logger)
+				return nil
+			})); err != nil {
+				return fmt.Errorf("build catalog pins: %w", err)
 			}
 			if os.Getenv(install.VarRegistryIP) != "" {
 				// The in-cluster registry restarts when its certificate is renewed (RFC-0059).
