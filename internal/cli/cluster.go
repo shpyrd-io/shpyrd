@@ -807,6 +807,16 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 	} else if len(removed) > 0 {
 		fmt.Fprintf(out, "Removed %s: retired on the %s profile.\n", strings.Join(removed, ", "), flags.profile)
 	}
+	// The Team and ProjectMember definitions (#249): the server, ready by
+	// now, has imported their objects; they go once it has imported all.
+	if retired, err := eng.RetireLegacyMembership(ctx, legacyExportDir(eng.Vars()[install.VarCluster])); err != nil {
+		return err
+	} else if len(retired.Removed) > 0 {
+		fmt.Fprintf(out, "Removed the legacy definitions %s: teams and grants live in the control-plane database.\n", strings.Join(retired.Removed, ", "))
+		if retired.Export != "" {
+			fmt.Fprintf(out, "  Their %d object(s), as they were, are in %s.\n", retired.Objects, retired.Export)
+		}
+	}
 
 	if flags.frontDoor == install.FrontDoorCaddy {
 		if err := setupFrontDoor(ctx, cmd, flags); err != nil {
@@ -1660,4 +1670,18 @@ func (quietReporter) Failed(string, error)       {}
 func signalContext() context.Context {
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	return ctx
+}
+
+// legacyExportDir is where the legacy Team and ProjectMember objects are
+// written before their definitions go: beside the cluster's CA, in
+// ~/.shpyrd/clusters/<name>/; the working directory when there is no home.
+func legacyExportDir(name string) string {
+	if name == "" {
+		name = "cluster"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, ".shpyrd", "clusters", name)
 }

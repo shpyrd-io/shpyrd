@@ -36,7 +36,7 @@ func signIn(t *testing.T, s *Server, id ext.Identity) (string, string) {
 func TestAuthorization(t *testing.T) {
 	shop := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
 	blog := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "app-blog"}}
-	s, cr := newTestServer(t, nil, []client.Object{shop, blog})
+	s, _ := newTestServer(t, nil, []client.Object{shop, blog})
 	s.authz.TTL = 1 // no caching between steps
 
 	dev := ext.Identity{Subject: "u1", Email: "dev@example.test", Name: "Dev", Provider: "local"}
@@ -185,10 +185,16 @@ func TestAuthorization(t *testing.T) {
 	if rec := doCookie(t, s, "GET", "/api/projects/shop", "", viewSID, ""); rec.Code != http.StatusForbidden {
 		t.Errorf("viewer after team deletion: %d", rec.Code)
 	}
-	var left shpyrdv1.ProjectMemberList
-	_ = cr.List(context.Background(), &left)
-	if len(left.Items) != 0 {
-		t.Errorf("grants left: %d", len(left.Items))
+	// Only the removed developer's grant and the deleted team's were left:
+	// the store holds no grant on shop now.
+	grants, err := s.store.ListGrants(context.Background(), store.DefaultWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range grants {
+		if g.Project == "shop" {
+			t.Errorf("grant left on shop: %+v", g)
+		}
 	}
 	if MemberName("shop", "viewer", "Ada+Dev@Example.test", "") != "shop-viewer-user-ada-plus-dev-at-example-test" {
 		t.Errorf("member name = %s", MemberName("shop", "viewer", "Ada+Dev@Example.test", ""))

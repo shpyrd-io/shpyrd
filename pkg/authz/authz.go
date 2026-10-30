@@ -75,8 +75,9 @@ type Roles struct {
 	Workspace string            `json:"workspace,omitempty"`
 	Platform  string            `json:"platform,omitempty"`
 	Projects  map[string]string `json:"projects,omitempty"`
-	// Enforced is false while the cluster has no Team or ProjectMember:
-	// then every signed-in user is a platform admin (bootstrap).
+	// Enforced is false while the workspace has no team, grant or role
+	// (Snapshot.Enforced): then every signed-in user is a platform admin
+	// (bootstrap).
 	Enforced bool `json:"enforced"`
 	// Suspended says the person's access is switched off (RFC-0033).
 	Suspended bool `json:"suspended,omitempty"`

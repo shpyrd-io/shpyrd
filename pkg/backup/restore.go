@@ -223,7 +223,11 @@ func (r *Restorer) restoreStore(ctx context.Context, res *Result) error {
 			team, _, _ := unstructured.NestedString(u.Object, "spec", "team")
 			dump.Grants = append(dump.Grants, store.Grant{Project: project, Role: role, User: user, Team: team})
 		}
-		dump.Version = store.DumpVersion
+		// Email-only permissions, from before RFC-0082: the version says
+		// so, and the import records their people as unbound principals.
+		// Declaring the current version made a user's grant fail the whole
+		// restore (#249).
+		dump.Version = 3
 	}
 	if len(dump.Teams) == 0 && len(dump.Grants) == 0 && len(dump.Identities) == 0 {
 		return nil
@@ -385,7 +389,6 @@ func gvrFor(obj *unstructured.Unstructured) (schema.GroupVersionResource, error)
 	resource, ok := map[string]string{
 		"Namespace": "namespaces", "ConfigMap": "configmaps", "Secret": "secrets",
 		"App": "apps", "Volume": "volumes", "Postgres": "postgres", "Redis": "redis", "LogDrain": "logdrains",
-		"Team": "teams", "ProjectMember": "projectmembers",
 		"Password": "passwords", "Connector": "connectors",
 	}[obj.GetKind()]
 	if !ok {
