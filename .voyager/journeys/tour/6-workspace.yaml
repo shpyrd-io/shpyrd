@@ -1,0 +1,220 @@
+id: tour-workspace
+
+title: "Tour 6: the workspace settings"
+
+area: workspace
+
+tags: [tour]
+
+scenario: tour
+
+goal: >
+  The workspace's own settings: its name and look, people, teams, sign-in,
+  API tokens, config vars for every project, log drains and domains.
+
+steps:
+  # Signing in on the launcher, where its result is plain to see.
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Storefront
+
+  - action: goto
+    path: /workspace
+
+  - action: wait
+    text: Name and look
+    narration: "The workspace has settings of its own: its name, colour and logo."
+
+  - action: capture
+    name: general
+    description: The workspace's name, accent colour and logo.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/people
+
+  - action: wait
+    text: dev@acme.test
+    narration: Its people and their roles.
+
+  - action: capture
+    name: people
+    description: The people of the workspace and their roles.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Invite, until the Invite someone dialog opens
+
+  - action: wait
+    text: Invite someone
+
+  - action: capture
+    name: invite-dialog
+    description: Inviting someone to the workspace.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/teams
+
+  - action: wait
+    text: platform
+    narration: Teams group people, so roles are given once.
+
+  - action: capture
+    name: teams
+    description: The teams of the workspace.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click New team, until the New team dialog opens
+
+  - action: wait
+    text: Make the team
+
+  - action: capture
+    name: team-dialog
+    description: Making a team.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/teams
+
+  - action: wait
+    text: platform
+
+  - action: capture
+    name: teams-again
+    description: The teams, again.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Edit platform, until the dialog of the team platform opens
+
+  - action: wait
+    text: The team platform
+
+  - action: capture
+    name: team-edit-dialog
+    description: Editing a team.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/sign-in
+
+  - action: wait
+    text: Who may join
+    narration: How people sign in, and who may join.
+
+  - action: capture
+    name: sign-in-settings
+    description: How people sign in, and who may join.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/tokens
+
+  - action: wait
+    text: New token
+
+  - action: capture
+    name: tokens
+    description: API tokens for scripts and CI.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click New token, until the New token dialog opens
+
+  - action: wait
+    text: Lasts
+    narration: Tokens for scripts and CI, scoped to a project or the whole workspace.
+
+  - action: capture
+    name: token-dialog
+    description: Making an API token.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/connections
+
+  # Licensed (enterprise) on a self-hosted install: the page says what it
+  # shows without a license. The nav's own label is always there.
+  - action: wait
+    text: Connections
+
+  - action: capture
+    name: connections
+    description: The AI assistants connected to the workspace.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/mcp
+
+  - action: wait
+    text: MCP
+    narration: AI assistants connect to the workspace through MCP.
+
+  - action: capture
+    name: mcp
+    description: Connecting an AI assistant to the workspace through MCP.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/globals
+
+  - action: wait
+    text: LOG_LEVEL
+    narration: Config vars every project gets at once.
+
+  - action: capture
+    name: globals
+    description: Config vars every project gets.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/drains
+
+  - action: wait
+    text: archive
+
+  - action: capture
+    name: workspace-drains
+    description: Log drains for every project of the workspace.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Add a drain dialog opens
+
+  - action: wait
+    text: Add a drain
+
+  - action: capture
+    name: workspace-drain-dialog
+    description: Adding a log drain for the whole workspace.
+    use: { docs: true }
+
+  - action: goto
+    path: /workspace/domains
+
+  - action: wait
+    text: Domains
+    narration: And the workspace can answer at a domain of your own.
+
+  - action: capture
+    name: workspace-domains
+    description: The workspace's own domains.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

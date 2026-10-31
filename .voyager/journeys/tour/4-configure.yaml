@@ -1,0 +1,214 @@
+id: tour-configure
+
+title: "Tour 4: configuring a project"
+
+area: projects
+
+tags: [tour]
+
+scenario: tour
+
+goal: >
+  How a project is set up: its config vars, the databases, stores and
+  volumes beside it, its domains and its log drains.
+
+steps:
+  # Signing in on the launcher, where its result is plain to see.
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Storefront
+
+  - action: goto
+    path: /projects/storefront/config
+
+  - action: wait
+    text: API_URL
+    narration: Config vars are set here, or come from the databases attached to the app.
+
+  - action: capture
+    name: config
+    description: Config vars, set by hand and provided by the resources.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click From a .env, until the Set from a .env dialog opens
+
+  - action: wait
+    text: Set from a .env
+
+  - action: capture
+    name: env-dialog
+    description: Setting config vars from a .env file.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/resources
+
+  - action: wait
+    text: Beside the application
+    narration: "Beside the app: a Postgres database, a Redis store and a volume, each a click away."
+
+  - action: capture
+    name: resources
+    description: The processes, and the database, store and volume beside them.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add beside the application, until a menu lists A volume, A Postgres database and A Redis or Valkey store
+
+  - action: wait
+    text: A volume
+
+  - action: capture
+    name: add-menu
+    description: What can be added beside an application.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/resources
+
+  - action: wait
+    text: Beside the application
+
+  - action: capture
+    name: resources-again
+    description: The resources page, again.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a Postgres database: click Add, then A Postgres database, until the New Postgres database dialog opens"
+
+  - action: wait
+    text: New Postgres database
+
+  - action: capture
+    name: postgres-dialog
+    description: A new Postgres database, with its size, version and backups.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/resources
+
+  - action: wait
+    text: Beside the application
+
+  - action: capture
+    name: resources-before-redis
+    description: The resources page, before adding a store.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a Redis store: click Add, then A Redis or Valkey store, until the New Redis-compatible store dialog opens"
+
+  - action: wait
+    text: New Redis-compatible store
+
+  - action: capture
+    name: redis-dialog
+    description: A new Redis-compatible store.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/resources
+
+  - action: wait
+    text: Beside the application
+
+  - action: capture
+    name: resources-before-volume
+    description: The resources page, before adding a volume.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a volume: click Add, then A volume, until the New volume dialog opens"
+
+  - action: wait
+    text: New volume
+
+  - action: capture
+    name: volume-dialog
+    description: A new volume.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/resources
+
+  - action: wait
+    text: Beside the application
+
+  - action: capture
+    name: resources-before-resize
+    description: The resources page, before resizing the database.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Resize on the row of the database db, until the Resize db dialog opens
+
+  - action: wait
+    text: Resize db
+
+  - action: capture
+    name: resize-dialog
+    description: Resizing a database.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/domains
+
+  - action: wait
+    text: shop.acme.test
+    narration: Bring your own domain; the certificate is made for you.
+
+  - action: capture
+    name: domains
+    description: The project's domains and their certificates.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Add a domain dialog opens
+
+  - action: wait
+    text: Add a domain
+
+  - action: capture
+    name: domain-dialog
+    description: Adding a domain.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/drains
+
+  - action: wait
+    text: papertrail
+    narration: And send its logs wherever your team reads them.
+
+  - action: capture
+    name: drains
+    description: Log drains, sending the project's lines elsewhere.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Add a drain dialog opens
+
+  - action: wait
+    text: Add a drain
+
+  - action: capture
+    name: drain-dialog
+    description: Adding a log drain.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false
