@@ -890,6 +890,18 @@ func (s *Server) deployApp(c *gin.Context) {
 						p.Size = cur.Size
 					}
 				}
+				// Sleep and autoscale are the project's settings, not the
+				// release's: shpyrd.yaml cannot declare them, so a deploy
+				// keeps what the cluster has (#341). They change through
+				// PATCH .../processes.
+				if cur, ok := a.Spec.Processes[name]; ok {
+					if p.Sleep == nil {
+						p.Sleep = cur.Sleep
+					}
+					if p.Autoscale == nil {
+						p.Autoscale = cur.Autoscale
+					}
+				}
 				req.Processes[name] = p
 			}
 			a.Spec.Processes = req.Processes
