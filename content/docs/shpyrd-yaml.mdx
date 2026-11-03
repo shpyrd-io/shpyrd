@@ -46,7 +46,7 @@ processes:
 
 # Build settings.
 build:
-  strategy: buildpacks  # or dockerfile; without it, dockerfile when the directory has a Dockerfile (or build.dockerfile/target is set)
+  strategy: buildpacks  # the default; dockerfile only when buildpacks cannot build the app. Without it, dockerfile when the directory has a Dockerfile (or build.dockerfile/target is set)
   env:
     BP_GO_TARGETS: ./cmd/web:./cmd/worker   # buildpacks: any BP_* variable of the buildpack in use
     BP_NODE_VERSION: "22.*"                 # Dockerfile: build arguments
@@ -90,7 +90,7 @@ exposure: external
 | `processes.<type>.healthCheck` | Readiness and liveness check. Default: HTTP `GET /` on `PORT` for `web`, TCP for other processes with a port, none for workers. One of `path`, `tcp: true` or `command`; tune with `interval` (10s), `timeout` (5s), `gracePeriod` (30s, also the minimum) and `shutdownDelay` (5s); `disabled: true` turns it off. See [Deploying › Health checks](/docs/deploying#health-checks). |
 | `processes.<type>.volumes` | Project volumes to mount: `name` (created with `shpyrd volumes create`) and `path`. A single-instance volume pins the process to one instance; see [Resources](/docs/resources#volumes). |
 | `processes.release` | The command that runs before every rollout (`command: ["python", "manage.py", "migrate"]`). Needed for Dockerfile images; for buildpack images it replaces the `Procfile`'s `release:` line. It runs at the `web` size unless it sets its own. |
-| `build.strategy` | `buildpacks` (default) or `dockerfile`. Without it, `shpyrd deploy` picks `dockerfile` when the deployed directory has a `Dockerfile`, or when `build.dockerfile` or `build.target` is set. |
+| `build.strategy` | `buildpacks` (default, and the one to use) or `dockerfile`, only for what buildpacks cannot build ([When a Dockerfile is justified](/docs/deploying#when-a-dockerfile-is-justified)). Without it, `shpyrd deploy` picks `dockerfile` when the deployed directory has a `Dockerfile`, or when `build.dockerfile` or `build.target` is set. |
 | `build.env` | Environment for the build: buildpack configuration such as `BP_GO_TARGETS`, `BP_JVM_VERSION`, `BP_NODE_RUN_SCRIPTS`, or `ARG` values for a Dockerfile. Runtime config vars are set with `shpyrd secrets` or `env:`, not here; a buildpack build sees those too, below `build.env` ([At build time](/docs/deploying#at-build-time)). |
 | `build.buildpacks` | Explicit buildpack group from the platform catalog, in order (`[deb-packages, ruby]`). When set, the project gets a builder of its own instead of the platform's detection. Names: `java`, `node`/`nodejs`, `go`, `python`, `ruby`, `php`, `dotnet`/`dotnet-core`, `web-servers`/`nginx`/`httpd`, `procfile`, `deb-packages`/`apt`; a platform buildpack's own name (`paketo-…`, `heroku-…`) works too. |
 | `build.stack` | Base image for the build and run: `base` (default, Ubuntu jammy minimal) or `full` (jammy full, more system libraries). Use `full` when a native extension needs a library present on Ubuntu but absent from the minimal image. |
