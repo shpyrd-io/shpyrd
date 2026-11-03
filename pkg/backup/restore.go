@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -40,8 +41,13 @@ type Restorer struct {
 	// ImportStore puts a control-plane dump back (POST
 	// /api/workspace/import): the implicit workspace's when workspace is
 	// "", an explicit workspace's otherwise (recreated when gone); nil
-	// skips teams and grants.
-	ImportStore func(ctx context.Context, workspace string, dump *store.Dump, overwrite bool) error
+	// skips teams and grants. restoreDeleted says the workspace is to come
+	// back although the cluster holds its tombstone (#274).
+	ImportStore func(ctx context.Context, workspace string, dump *store.Dump, overwrite, restoreDeleted bool) error
+	// RestoreDeleted names workspaces to bring back on purpose although
+	// they were deleted (#274): by the archive's own tombstones, or by the
+	// cluster's. Any other deleted workspace is skipped and said so.
+	RestoreDeleted []string
 	// Log receives one line per step.
 	Log func(format string, args ...any)
 }
@@ -52,6 +58,7 @@ type Result struct {
 	Sources                   int
 	Projects                  []string // restored
 	SkippedProjects           []string // namespace existed
+	SkippedWorkspaces         []string // deleted on purpose (#274)
 	Warnings                  []string
 }
 
@@ -180,19 +187,47 @@ func (r *Restorer) restoreWorkspaces(ctx context.Context, res *Result) error {
 	if r.ImportStore == nil {
 		return nil
 	}
+	bringBack := map[string]bool{}
+	for _, slug := range r.RestoreDeleted {
+		bringBack[slug] = true
+	}
+	dead := r.Archive.DeletedWorkspaces()
 	for _, path := range r.Archive.Paths("cluster/workspaces/") {
 		slug := strings.TrimSuffix(strings.TrimPrefix(path, "cluster/workspaces/"), ".json")
+		if t, gone := dead[slug]; gone && !bringBack[slug] {
+			when := ""
+			if t.DeletedAt != nil {
+				when = " on " + t.DeletedAt.UTC().Format("2006-01-02")
+			}
+			r.Log("Skipped workspace %s: deleted%s (--restore-deleted %s brings it back)", slug, when, slug)
+			res.SkippedWorkspaces = append(res.SkippedWorkspaces, slug)
+			continue
+		}
 		var dump store.Dump
 		if err := json.Unmarshal(r.Archive.Files[path], &dump); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		if err := r.ImportStore(ctx, slug, &dump, r.Overwrite); err != nil {
+		err := r.ImportStore(ctx, slug, &dump, r.Overwrite, bringBack[slug])
+		var skipped *ErrWorkspaceDeleted
+		if errors.As(err, &skipped) {
+			r.Log("Skipped workspace %s: %s (--restore-deleted %s brings it back)", slug, skipped.Error(), slug)
+			res.SkippedWorkspaces = append(res.SkippedWorkspaces, slug)
+			continue
+		}
+		if err != nil {
 			return fmt.Errorf("workspace %s: %w", slug, err)
 		}
 		r.Log("Restored workspace %s: %d teams, %d grants, %d people", slug, len(dump.Teams), len(dump.Grants), len(dump.Identities))
 	}
 	return nil
 }
+
+// ErrWorkspaceDeleted is what ImportStore returns when the cluster holds
+// the workspace's tombstone and the restore did not ask for it back: the
+// workspace is skipped, not failed.
+type ErrWorkspaceDeleted struct{ Detail string }
+
+func (e *ErrWorkspaceDeleted) Error() string { return e.Detail }
 
 // restoreStore imports teams and grants: from cluster/store.json, or, for
 // archives made before the control-plane store, from the Team and
@@ -228,7 +263,7 @@ func (r *Restorer) restoreStore(ctx context.Context, res *Result) error {
 	if len(dump.Teams) == 0 && len(dump.Grants) == 0 && len(dump.Identities) == 0 {
 		return nil
 	}
-	if err := r.ImportStore(ctx, "", &dump, r.Overwrite); err != nil {
+	if err := r.ImportStore(ctx, "", &dump, r.Overwrite, false); err != nil {
 		return fmt.Errorf("teams and grants: %w", err)
 	}
 	res.Created += len(dump.Teams) + len(dump.Grants)

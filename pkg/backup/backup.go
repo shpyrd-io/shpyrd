@@ -233,6 +233,17 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			}
 			man.Objects += 1 + len(dump.Teams) + len(dump.Grants)
 		}
+		// The tombstones (#274), so a restore of this archive knows which
+		// workspaces were deleted on purpose and does not bring them back.
+		if dead, err := e.Store.ListDeletedWorkspaces(ctx); err == nil && len(dead) > 0 {
+			raw, err := json.MarshalIndent(dead, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			if err := add(DeletedWorkspacesPath, raw); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Projects: every namespace carrying the project label.
@@ -494,6 +505,27 @@ func (a *Archive) Objects(path string) ([]unstructured.Unstructured, error) {
 }
 
 // Paths lists files with a prefix, sorted.
+// DeletedWorkspacesPath is where an archive lists the workspaces deleted
+// before it was made (#274): the tombstones, as store.Workspace rows.
+const DeletedWorkspacesPath = "cluster/deleted-workspaces.json"
+
+// DeletedWorkspaces reads the tombstones the archive carries, by slug.
+func (a *Archive) DeletedWorkspaces() map[string]store.Workspace {
+	out := map[string]store.Workspace{}
+	raw, ok := a.Files[DeletedWorkspacesPath]
+	if !ok {
+		return out
+	}
+	var dead []store.Workspace
+	if json.Unmarshal(raw, &dead) != nil {
+		return out
+	}
+	for _, w := range dead {
+		out[w.Slug] = w
+	}
+	return out
+}
+
 func (a *Archive) Paths(prefix string) []string {
 	var out []string
 	for p := range a.Files {

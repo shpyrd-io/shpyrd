@@ -248,8 +248,9 @@ func (s *Server) gateOpen(c *gin.Context) {
 		return
 	}
 	suspended := ws.Status == store.WorkspaceSuspended
-	if suspended && !g.OpenWhenSuspended {
-		s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended.", nil)
+	if ws.Gone() || (suspended && !g.OpenWhenSuspended) {
+		status, title, text := OffPage(ws)
+		s.edgePage(c, status, title, text, nil)
 		return
 	}
 	if _, ok := s.gateAdmits(ctx, g, v, roles); !ok {
@@ -323,7 +324,7 @@ func (s *Server) atAddressBehindDomain(c *gin.Context) (*store.Workspace, bool) 
 	if err != nil || t.Workspace == nil || t.Workspace.Address == "" {
 		return nil, false
 	}
-	if _, gated := s.suspendedGate(); t.Workspace.Status == store.WorkspaceSuspended && !gated {
+	if _, gated := s.suspendedGate(); t.Workspace.Gone() || (t.Workspace.Status == store.WorkspaceSuspended && !gated) {
 		return nil, false
 	}
 	ws := t.Workspace
@@ -374,7 +375,7 @@ func (s *Server) gateSignIn(c *gin.Context, app *application) bool {
 		}
 		// A suspended workspace signs in only on the way to the gate that
 		// receives it; its other gates are closed.
-		if g, _ := s.suspendedGate(); ws.Status == store.WorkspaceSuspended && u.Query().Get("name") != g.Name {
+		if g, _ := s.suspendedGate(); ws.Gone() || (ws.Status == store.WorkspaceSuspended && u.Query().Get("name") != g.Name) {
 			return false
 		}
 		if _, ok := s.gateSession(c, ws); ok {
@@ -564,8 +565,9 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 		signIn()
 		return
 	}
-	if ws.Status == store.WorkspaceSuspended && !g.OpenWhenSuspended {
-		c.JSON(http.StatusForbidden, gin.H{"error": "this workspace is suspended"})
+	if ws.Gone() || (ws.Status == store.WorkspaceSuspended && !g.OpenWhenSuspended) {
+		status, err := offError(ws)
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	v, roles, err := s.visitorIn(ctx, ws, sess.Identity)

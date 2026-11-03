@@ -76,6 +76,9 @@ type Options struct {
 	// additions may load scripts from, connect to and show images from.
 	// The core adds nothing.
 	Pages api.PageAdditions
+	// WorkspaceDeleteAllowed is asked before an owner schedules their own
+	// workspace's deletion (#274); nil allows. The cloud asks billing.
+	WorkspaceDeleteAllowed func(ctx context.Context, ws *store.Workspace) error
 }
 
 // Main parses flags and the environment, runs the server and exits on
@@ -313,14 +316,15 @@ func run(o runOptions, logger *slog.Logger) error {
 		}
 	}
 	srv, err := api.New(k, api.Options{
-		Addr:             o.addr,
-		Store:            st,
-		Tenancy:          resolver,
-		Layout:           layoutFromEnv(),
-		SignInHost:       hostOf(envOr("SHPYRD_AUTH_URL", "")),
-		Realms:           o.opts.Realms,
-		Capabilities:     o.opts.Capabilities,
-		InternalExposure: o.opts.InternalExposure,
+		Addr:                   o.addr,
+		Store:                  st,
+		Tenancy:                resolver,
+		Layout:                 layoutFromEnv(),
+		SignInHost:             hostOf(envOr("SHPYRD_AUTH_URL", "")),
+		Realms:                 o.opts.Realms,
+		Capabilities:           o.opts.Capabilities,
+		InternalExposure:       o.opts.InternalExposure,
+		WorkspaceDeleteAllowed: o.opts.WorkspaceDeleteAllowed,
 		MembershipChanged: func() {
 			if o.controller {
 				memberships.Notify()
@@ -656,6 +660,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	workspaces.Forget = workspaceCache.Forget
 	workspaces.NamesChanged = rec.RequeueWorkspace
+	workspaces.Kube, workspaces.Registry = k.Kube, rec.Registry // the lifecycle's audit and image cleanup (#274)
 	githubApp.SetRequeue(rec.RequeueGitHub)
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)

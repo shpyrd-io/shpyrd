@@ -139,6 +139,10 @@ type Options struct {
 	// ("workspaces", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
 	Capabilities []string
+	// WorkspaceDeleteAllowed is asked before an owner schedules their own
+	// workspace's deletion (#274); an error refuses with its words (the
+	// cloud: a paid subscription must be cancelled first). Nil allows.
+	WorkspaceDeleteAllowed func(ctx context.Context, ws *store.Workspace) error
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -484,6 +488,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	}
 	s.githubUsers = newGitHubUserTokens(s.store, s.githubBox, s.log)
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
+	sessions.claimed = s.claimOnSignIn
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
 	// runs get a fresh one.
@@ -770,6 +775,7 @@ func (s *Server) routes() error {
 	api.GET("/cluster/oom-kills", console, s.require(authz.ClusterView), s.clusterOOMKills) // #119
 	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo)    // RFC-0059
 	api.POST("/cluster/registry/gc", console, s.require(authz.ClusterAdmin), s.registryGC)
+	api.GET("/cluster/orphans", console, s.require(authz.ClusterAdmin), s.orphans)     // #274: what a cascade or destroy left
 	api.GET("/cluster/backups", console, s.require(authz.ClusterAdmin), s.listBackups) // RFC-0037
 	api.POST("/cluster/backups", console, s.require(authz.ClusterAdmin), s.runBackup)
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
@@ -784,6 +790,7 @@ func (s *Server) routes() error {
 		// The console lists the workspaces it hosts (RFC-0080); with the
 		// workspaces capability the cloud layer serves the full routes.
 		api.GET("/workspaces", console, s.require(authz.ClusterAdmin), s.listWorkspacesCore)
+		api.DELETE("/workspaces/:slug", console, s.require(authz.ClusterAdmin), s.deleteWorkspace) // #274
 	}
 	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016: the default workspace's, for the dashboard of before
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
@@ -825,6 +832,7 @@ func (s *Server) routes() error {
 	api.PUT("/workspace/project-caps", s.require(authz.ClusterAdmin), s.putProjectCaps)
 	api.GET("/workspace/usage", s.require(authz.ClusterAdmin), s.workspaceUsageLedger)
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
+	api.DELETE("/workspace", s.require(authz.WorkspaceOwner), s.deleteOwnWorkspace) // #274: an owner schedules the deletion
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)
 	api.POST("/workspace/principals/:id/bind", s.require(authz.WorkspaceOwner), s.bindPrincipal)
