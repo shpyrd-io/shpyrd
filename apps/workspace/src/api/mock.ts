@@ -6,6 +6,7 @@ import type { Api } from "./api";
 import type {
   Globals,
   AllowEntry,
+  CallerCalls,
   APIToken,
   AuditEntry,
   BuildInfo,
@@ -69,6 +70,7 @@ type ProjectThings = {
   drains: Drain[];
   members: Member[];
   allow: AllowEntry[];
+  calls?: CallerCalls[];
 };
 type Things = {
   projects: Record<string, ProjectThings>;
@@ -1824,6 +1826,7 @@ export const mock: Api = {
     await thingsOf.set(all);
   },
   allow: async (slug) => (await ofProject(slug))[1].allow,
+  calls: async (slug) => ({ available: true, callers: (await ofProject(slug))[1].calls ?? [] }),
   setAllow: async (slug, entries) => {
     const [all, p] = await ofProject(slug);
     p.allow = entries;

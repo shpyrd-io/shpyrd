@@ -4,6 +4,7 @@ import type {
   ConvertInfo,
   Access,
   AllowEntry,
+  ProjectCalls,
   APIToken,
   AuditEntry,
   BuildInfo,
@@ -353,6 +354,7 @@ export type Api = {
   removeMember: (slug: string, name: string) => Promise<void>;
   allow: (slug: string) => Promise<AllowEntry[]>;
   setAllow: (slug: string, entries: AllowEntry[]) => Promise<AllowEntry[]>;
+  calls: (slug: string) => Promise<ProjectCalls>;
   // The lines of the project as they come; with `follow` they keep coming.
   streamLogs: (
     slug: string,

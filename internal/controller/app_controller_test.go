@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
@@ -717,16 +718,57 @@ func TestInternalNameIngress(t *testing.T) {
 	r, c := newTestReconciler(t, app)
 	r.Config.SystemNamespace = "shpyrd-system"
 	r.Config.IngressClassInternal = "nginx-internal"
+	r.Config.CABundle = "shpyrd-ca-bundle"
 	runReconcile(t, r, app)
 
 	ing := &networkingv1.Ingress{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm-internal"}, ing); err != nil {
 		t.Fatalf("internal ingress: %v", err)
 	}
-	// On the internal front door, for the qualified name, plain HTTP, to
-	// the web process; the server is asked about every call, by caller.
-	if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != "nginx-internal" || len(ing.Spec.TLS) != 0 {
+	// On the internal front door, for the qualified name, http and https
+	// with the platform CA's certificate, to the web process; the server
+	// is asked about every call, by caller.
+	certName := certificateSecretName(app, "crm.acme.internal")
+	if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != "nginx-internal" || len(ing.Spec.TLS) != 1 || ing.Spec.TLS[0].SecretName != certName || ing.Spec.TLS[0].Hosts[0] != "crm.acme.internal" {
 		t.Errorf("class = %v, tls = %v", ing.Spec.IngressClassName, ing.Spec.TLS)
+	}
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(CertificateGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: certName}, cert); err != nil {
+		t.Fatalf("internal certificate: %v", err)
+	}
+	if issuer, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name"); issuer != install.CAClusterIssuer {
+		t.Errorf("the internal name is signed by the platform CA, not %q", issuer)
+	}
+	if names, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames"); len(names) != 1 || names[0] != "crm.acme.internal" {
+		t.Errorf("dnsNames = %v", names)
+	}
+	// Every process is given the CA to trust, by file and for Node by name.
+	dep := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm-web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if env["SHPYRD_CA_FILE"] != "/etc/shpyrd/ca/ca-certificates.crt" || env["NODE_EXTRA_CA_CERTS"] != env["SHPYRD_CA_FILE"] {
+		t.Errorf("CA env = %v", env)
+	}
+	var mounted bool
+	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.Name == caBundleVolume && m.MountPath == "/etc/shpyrd/ca" && m.ReadOnly {
+			mounted = true
+		}
+	}
+	var volume bool
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == caBundleVolume && v.ConfigMap != nil && v.ConfigMap.Name == r.Config.CABundle && v.ConfigMap.Optional != nil && *v.ConfigMap.Optional {
+			volume = true
+		}
+	}
+	if !mounted || !volume {
+		t.Errorf("CA bundle mounted = %v, volume = %v: %+v", mounted, volume, dep.Spec.Template.Spec.Volumes)
 	}
 	rule := ing.Spec.Rules[0]
 	if rule.Host != "crm.acme.internal" || rule.HTTP.Paths[0].Backend.Service.Name != "crm-web" {

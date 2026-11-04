@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
 // Custom domains (RFC-0034). A project is always served at
@@ -168,19 +169,18 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 			}
 			name := certificateSecretName(app, h)
 			wanted[name] = true
-			cert := &unstructured.Unstructured{}
-			cert.SetGroupVersionKind(CertificateGVK)
-			cert.SetName(name)
-			cert.SetNamespace(app.Namespace)
-			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
-				cert.SetLabels(mergeMaps(cert.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/host": name}))
-				_ = unstructured.SetNestedField(cert.Object, name, "spec", "secretName")
-				_ = unstructured.SetNestedStringSlice(cert.Object, []string{h}, "spec", "dnsNames")
-				_ = unstructured.SetNestedMap(cert.Object, map[string]interface{}{"kind": "ClusterIssuer", "name": r.Config.ClusterIssuer}, "spec", "issuerRef")
-				return controllerutil.SetControllerReference(app, cert, r.Scheme)
-			}); err != nil {
-				return fmt.Errorf("certificate for %s: %w", h, err)
+			if err := r.ensureCertificate(ctx, app, name, h, r.Config.ClusterIssuer); err != nil {
+				return err
 			}
+		}
+		// The internal name (#311), for a caller that insists on TLS: a
+		// public CA cannot sign it, the platform's own does, and every
+		// process trusts that CA through the bundle it is given.
+		internal := internalHost(app)
+		name := certificateSecretName(app, internal)
+		wanted[name] = true
+		if err := r.ensureCertificate(ctx, app, name, internal, install.CAClusterIssuer); err != nil {
+			return err
 		}
 	}
 	// Before RFC-0034 the Ingress annotation made cert-manager's ingress-shim
@@ -205,6 +205,25 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 		if err := r.Delete(ctx, cert); err != nil && !apierrors.IsNotFound(err) {
 			log.FromContext(ctx).Info("could not remove certificate", "name", cert.GetName(), "err", err.Error())
 		}
+	}
+	return nil
+}
+
+// ensureCertificate keeps one Certificate of the app: a Secret of the
+// given name for one host, signed by the ClusterIssuer named.
+func (r *AppReconciler) ensureCertificate(ctx context.Context, app *shpyrdv1.App, name, host, issuer string) error {
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(CertificateGVK)
+	cert.SetName(name)
+	cert.SetNamespace(app.Namespace)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
+		cert.SetLabels(mergeMaps(cert.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/host": name}))
+		_ = unstructured.SetNestedField(cert.Object, name, "spec", "secretName")
+		_ = unstructured.SetNestedStringSlice(cert.Object, []string{host}, "spec", "dnsNames")
+		_ = unstructured.SetNestedMap(cert.Object, map[string]interface{}{"kind": "ClusterIssuer", "name": issuer}, "spec", "issuerRef")
+		return controllerutil.SetControllerReference(app, cert, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("certificate for %s: %w", host, err)
 	}
 	return nil
 }

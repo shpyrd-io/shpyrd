@@ -171,9 +171,21 @@ From any instance of a project let in, the callee answers at **`http://<project>
 const res = await fetch("http://crm.internal/api/customers");
 ```
 
-Nothing to configure and no token to keep: the name resolves inside the cluster to the platform's internal front door, which knows which project is calling from the address the call comes from, checks the callee's allow list, and passes the call on. `http://crm.acme.internal` — the project, then the workspace — is the same name written in full, and always valid. The names never leave the cluster and are plain HTTP; the callee's public hostname still works too, through the front door and the callee's access mode, for a person's identity rather than a project's.
+Nothing to configure and no token to keep: the name resolves inside the cluster to the platform's internal front door, which knows which project is calling from the address the call comes from, checks the callee's allow list, and passes the call on. `http://crm.acme.internal` — the project, then the workspace — is the same name written in full, and always valid. The names never leave the cluster; the callee's public hostname still works too, through the front door and the callee's access mode, for a person's identity rather than a project's.
 
-A call that is not admitted is refused at the front door with a JSON body saying why — `crm does not let shop in` — and counted among the project's denials with the reason `service`. A callee with no instance ready answers 503 with `Retry-After`; a sleeping callee is woken by the call like by a visit.
+A call that is not admitted is refused at the front door with a JSON body saying why — `crm does not let shop in` — and counted among the project's denials with the reason `service`. A callee with no instance ready answers 503 with `Retry-After`; a sleeping callee is woken by the call like by a visit. The callee's **Connections** page shows, beside each project let in, how many calls it made in the last day and when the last one was.
+
+### Over TLS
+
+Plain HTTP is enough inside the cluster, but a client that insists on `https://crm.internal` gets it: the name carries a certificate signed by the platform's own CA, which every process is given to trust. The bundle — the public roots plus that CA — is mounted in every process at the path `SHPYRD_CA_FILE` names (`/etc/shpyrd/ca/ca-certificates.crt`); Node reads it by itself, through `NODE_EXTRA_CA_CERTS`. Elsewhere, point the client at the file:
+
+| Runtime | How |
+| --- | --- |
+| Node | nothing: `NODE_EXTRA_CA_CERTS` is set |
+| Go | `SSL_CERT_FILE=$SHPYRD_CA_FILE` in the process's config vars, or load the file into the client's root pool |
+| Python (requests, httpx) | `REQUESTS_CA_BUNDLE=$SHPYRD_CA_FILE`, `SSL_CERT_FILE=$SHPYRD_CA_FILE` |
+| curl | `curl --cacert $SHPYRD_CA_FILE https://crm.internal/` |
+| Ruby, Java | `SSL_CERT_FILE` for OpenSSL-based clients; Java imports the file into a truststore |
 
 ### Who is calling
 

@@ -730,6 +730,9 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 	}
 	applyProbes(&container, p, port, scaledExternally)
 	container.Env = append(container.Env, c.platformEnv(app, revision, p.Name, release)...)
+	if c.CABundle != "" {
+		container.Env = append(container.Env, caBundleEnv()...)
+	}
 	container.Env = append(container.Env, app.Spec.Env...)
 
 	d.Spec.Template.Labels = mergeMaps(d.Spec.Template.Labels, labels)
@@ -754,6 +757,11 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 	}
 	d.Spec.Template.Spec.Containers = []corev1.Container{container}
 	applyMounts(d, mounts)
+	if c.CABundle != "" {
+		vol, mount := c.caBundleVolumes()
+		d.Spec.Template.Spec.Volumes = append(d.Spec.Template.Spec.Volumes, vol)
+		d.Spec.Template.Spec.Containers[0].VolumeMounts = append(d.Spec.Template.Spec.Containers[0].VolumeMounts, mount)
+	}
 }
 
 // rolloutStrategy returns the Deployment strategy for a process. Processes
@@ -1169,6 +1177,35 @@ func imageSecurityContext(app *shpyrdv1.App, image string) *corev1.SecurityConte
 	return sc
 }
 
+// The platform's CA, for processes calling internal names over https
+// (#311): the trust bundle trust-manager puts in every namespace (the
+// public roots and the platform's CA), mounted read-only, named to the
+// process by SHPYRD_CA_FILE and, for Node, NODE_EXTRA_CA_CERTS, which adds
+// to its roots. Optional: a namespace the bundle has not reached yet still
+// starts its pods.
+const (
+	caBundleVolume = "shpyrd-ca"
+	caBundleDir    = "/etc/shpyrd/ca"
+	caBundleFile   = caBundleDir + "/" + install.CABundleKey
+)
+
+// caBundleEnv names the CA file to the process.
+func caBundleEnv() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "SHPYRD_CA_FILE", Value: caBundleFile},
+		{Name: "NODE_EXTRA_CA_CERTS", Value: caBundleFile},
+	}
+}
+
+// caBundleVolumes are the volume and the mount of the bundle.
+func (c Config) caBundleVolumes() (corev1.Volume, corev1.VolumeMount) {
+	vol := corev1.Volume{Name: caBundleVolume, VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+		LocalObjectReference: corev1.LocalObjectReference{Name: c.CABundle},
+		Optional:             ptr.To(true),
+	}}}
+	return vol, corev1.VolumeMount{Name: caBundleVolume, MountPath: caBundleDir, ReadOnly: true}
+}
+
 // Internal names (#311): a project's instances call another project of the
 // workspace at http://<project>.internal, and the callee learns who called.
 // Every project with a web process has an Ingress on the internal front door
@@ -1219,14 +1256,18 @@ func (c Config) mutateInternalIngress(app *shpyrdv1.App, ing *networkingv1.Ingre
 		class = c.IngressClassInternal
 	}
 	ing.Spec.IngressClassName = ptr.To(class)
-	ing.Spec.TLS = nil
+	// https too, for a caller that insists (#311): the certificate the
+	// platform's CA signs for the name (reconcileCertificates); http stays
+	// (ssl-redirect is off).
+	host := internalHost(app)
+	ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{host}, SecretName: certificateSecretName(app, host)}}
 	backend := workloadName(app, "web")
 	if interceptor {
 		backend = webInterceptorService
 	}
 	pathType := networkingv1.PathTypePrefix
 	ing.Spec.Rules = []networkingv1.IngressRule{{
-		Host: internalHost(app),
+		Host: host,
 		IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
 			Paths: []networkingv1.HTTPIngressPath{{
 				Path:     "/",

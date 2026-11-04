@@ -642,6 +642,11 @@ export type Member = {
 // person). Nothing may, until it is listed.
 export type AllowEntry = { project?: string; platform?: "actions" | "mcp" };
 
+// The calls the project received at its internal name in the last day,
+// by calling project (#311); available is false where there are no metrics.
+export type CallerCalls = { caller: string; calls: number; lastAt?: string };
+export type ProjectCalls = { available: boolean; callers: CallerCalls[] };
+
 // Software connected to the workspace as a person: an assistant through
 // MCP. Each may be cut without touching the person.
 export type Connection = {

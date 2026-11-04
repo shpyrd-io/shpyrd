@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import projects from "../../../mock/projects.json";
-import { Connections } from "./access";
+import { callsWords, Connections } from "./access";
 
 // The queries answer from the Mock's files, by the first word of their key.
 const state = vi.hoisted(() => ({ answers: {} as Record<string, unknown> }));
@@ -40,6 +40,29 @@ describe("the Connections card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy the internal address" }));
     expect(writeText).toHaveBeenCalledWith("http://hello-world.internal");
     expect(toast.success).toHaveBeenCalledWith("Copied", { description: "http://hello-world.internal" });
+  });
+  it("says each caller's day beside it, when there are metrics", () => {
+    state.answers = {
+      allow: [{ project: "docs" }, { project: "billing" }, { platform: "mcp" }],
+      calls: { available: true, callers: [{ caller: "docs", calls: 1204, lastAt: "2026-10-15T09:05:00Z" }] },
+      projects,
+    };
+    render(<Connections project={project} perms={perms} />);
+    expect(screen.getByText("Calls, last 24 hours")).toBeTruthy();
+    expect(screen.getByText(/1,204 · last/)).toBeTruthy();
+    expect(screen.getByText("none")).toBeTruthy(); // billing is let in and has not called
+    expect(screen.getByText("—")).toBeTruthy(); // the platform's calls are not counted here
+  });
+  it("shows no calls column where there are no metrics", () => {
+    state.answers = { allow: [{ project: "docs" }], calls: { available: false, callers: [] }, projects };
+    render(<Connections project={project} perms={perms} />);
+    expect(screen.queryByText("Calls, last 24 hours")).toBeNull();
+  });
+  it("callsWords says the count and the last call, or none", () => {
+    expect(callsWords(undefined)).toBe("none");
+    expect(callsWords({ caller: "docs", calls: 0 })).toBe("none");
+    expect(callsWords({ caller: "docs", calls: 7 })).toBe("7");
+    expect(callsWords({ caller: "docs", calls: 1204, lastAt: new Date(Date.now() - 120_000).toISOString() })).toMatch(/^1,204 · last /);
   });
   it("shows the address even while nothing is let in", () => {
     state.answers = { allow: [], projects };

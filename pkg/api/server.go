@@ -917,6 +917,7 @@ func (s *Server) routes() error {
 	api.PUT("/projects/:slug/maintenance", s.require(authz.ProjectDeploy), s.setMaintenance) // RFC-0020: the page in front of the app
 	api.GET("/projects/:slug/allow", s.require(authz.ProjectView), s.listAllow)              // RFC-0033: who may reach from inside
 	api.PUT("/projects/:slug/allow", s.require(authz.ProjectMembers), s.setAllow)
+	api.GET("/projects/:slug/calls", s.require(authz.ProjectView), s.projectCalls)    // #311: who called at the internal name
 	api.POST("/projects/:slug/preview", s.require(authz.ProjectDeploy), s.previewApp) // "Open as"
 	api.GET("/launcher", s.launcher)                                                  // the apps the caller may open
 	api.GET("/tokens", s.listTokens)                                                  // RFC-0031: the caller's tokens

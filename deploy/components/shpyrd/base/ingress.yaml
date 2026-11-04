@@ -123,6 +123,20 @@ spec:
 # qualified name, <project>.<workspace>.internal, served by the project's
 # own Ingress on the same controller. Plain HTTP: nothing here leaves the
 # cluster.
+# https too, for a caller that insists: a certificate for every bare name
+# from the platform's own CA, which every process is given to trust.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: shpyrd-internal-names-tls
+spec:
+  secretName: shpyrd-internal-names-tls
+  dnsNames:
+    - "*.internal"
+  issuerRef:
+    kind: ClusterIssuer
+    name: shpyrd-ca
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -134,6 +148,10 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
   ingressClassName: ${SHPYRD_INTERNAL_NAMES_INGRESS_CLASS}
+  tls:
+    - hosts:
+        - "*.internal"
+      secretName: shpyrd-internal-names-tls
   rules:
     - host: "*.internal"
       http:
