@@ -114,3 +114,34 @@ spec:
                 name: shpyrd-server
                 port:
                   name: http
+---
+# Internal names (#311): a project calls another of its workspace at
+# http://<project>.internal. The name resolves to the internal front door
+# (CoreDNS, the internal-names-dns hook), where this Ingress catches every
+# bare name and hands it to the server, which knows the caller's workspace
+# from the address the call came from and forwards the request to the
+# qualified name, <project>.<workspace>.internal, served by the project's
+# own Ingress on the same controller. Plain HTTP: nothing here leaves the
+# cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shpyrd-server-internal-names
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: ${SHPYRD_INTERNAL_NAMES_INGRESS_CLASS}
+  rules:
+    - host: "*.internal"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: shpyrd-server
+                port:
+                  name: http

@@ -250,6 +250,9 @@ export type ProjectSummary = {
   description?: string;
   featured?: boolean;
   namespace: string;
+  // Its name inside the cluster, <slug>.<workspace>.internal, for the
+  // projects it lets in; <slug>.internal is the short form (#311).
+  internalHost?: string;
   phase: string;
   message?: string;
   url?: string;

@@ -1230,6 +1230,20 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			return nil, 0, err
 		}
 	}
+	// The internal name (#311): one more Ingress, on the internal front door,
+	// for the project's web process, with the allow list enforced at its
+	// auth subrequest.
+	internalIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: internalIngressName(app), Namespace: app.Namespace}}
+	if serving {
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, internalIng, func() error {
+			r.Config.mutateInternalIngress(app, internalIng, scaling.interceptor)
+			return controllerutil.SetControllerReference(app, internalIng, r.Scheme)
+		}); err != nil {
+			return nil, 0, fmt.Errorf("internal ingress: %w", err)
+		}
+	} else if err := r.deleteIfExists(ctx, internalIng); err != nil {
+		return nil, 0, err
+	}
 	if err := r.reconcileCertificates(ctx, app); err != nil {
 		return nil, 0, err
 	}

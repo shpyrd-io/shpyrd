@@ -1,0 +1,9 @@
+---
+title: "Projects call each other by name"
+description: "A project let in reaches another at http://<project>.internal, and the callee learns which project is calling, in a header and a signed token."
+date: "2026-11-04"
+type: feature
+draft: false
+---
+
+A project on another's allow list now calls it at `http://<project>.internal` — `http://crm.internal` from expenses, with nothing to configure and no token to keep. The name resolves inside the cluster to the platform's internal front door, which knows the calling project from the address the call comes from, checks the callee's allow list, and passes the call on with the caller's identity: `X-Shpyrd-Service: svc:acme/expenses`, and a JWT with `realm: service` signed with the same keys as a person's. A call that is not admitted is refused with a JSON body saying who was refused by whom, and counted with the project's denials. The Connections page shows the address to copy, and `shpyrd allow` prints it. See [Between projects](/docs/app-access#between-projects).

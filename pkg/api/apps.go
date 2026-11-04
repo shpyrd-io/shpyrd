@@ -134,21 +134,25 @@ func Digest(image string) string {
 
 // AppDetail is the App with image references replaced by digests.
 type AppDetail struct {
-	ID          string                            `json:"id,omitempty"`
-	Slug        string                            `json:"slug"`
-	DisplayName string                            `json:"displayName"`
-	Description string                            `json:"description,omitempty"`
-	Featured    bool                              `json:"featured,omitempty"`
-	Icon        string                            `json:"icon,omitempty"`
-	IconColor   string                            `json:"iconColor,omitempty"`
-	IconURL     string                            `json:"iconUrl,omitempty"`
-	IconType    string                            `json:"iconType,omitempty"`
-	Domain      string                            `json:"domain,omitempty"`
-	Namespace   string                            `json:"namespace"`
-	CreatedAt   time.Time                         `json:"createdAt"`
-	Spec        AppDetailSpec                     `json:"spec"`
-	Status      AppDetailStatus                   `json:"status"`
-	Processes   map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description,omitempty"`
+	Featured    bool   `json:"featured,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	IconColor   string `json:"iconColor,omitempty"`
+	IconURL     string `json:"iconUrl,omitempty"`
+	IconType    string `json:"iconType,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	Namespace   string `json:"namespace"`
+	// InternalHost is the project's qualified internal name (#311),
+	// <slug>.<workspace>.internal; <slug>.internal is the short form from
+	// inside the workspace.
+	InternalHost string                            `json:"internalHost,omitempty"`
+	CreatedAt    time.Time                         `json:"createdAt"`
+	Spec         AppDetailSpec                     `json:"spec"`
+	Status       AppDetailStatus                   `json:"status"`
+	Processes    map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
 	// GitHubFeatures: the GitHub App covers the repository, so watch paths
 	// and wait for CI apply (RFC-0054). SourceNote says when they are set
 	// and do not.

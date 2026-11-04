@@ -351,6 +351,12 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "this workspace is suspended"})
 		return
 	}
+	if c.Query("realm") == realmService {
+		// A project calling at an internal name (#311): the caller is a
+		// pod, not a person.
+		s.serviceAuth(c, ws, slug)
+		return
+	}
 	mode := c.DefaultQuery("mode", shpyrdv1.AccessAuthenticated)
 	caller, err := s.edgeIdentify(c, slug)
 	if err != nil {

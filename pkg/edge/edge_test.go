@@ -335,3 +335,40 @@ func TestKeysRotate(t *testing.T) {
 		t.Error("a generated ring rotated")
 	}
 }
+
+func TestCallerTicketNamesOneProjectForAMinute(t *testing.T) {
+	keys, err := GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := keys.SignCallerTicket(CallerTicket{Workspace: "acme", Project: "expenses"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := keys.VerifyCallerTicket(v)
+	if err != nil || got.Workspace != "acme" || got.Project != "expenses" {
+		t.Fatalf("ticket = %+v, %v", got, err)
+	}
+	if left := time.Until(time.Unix(got.ExpiresAt, 0)); left > CodeTTL || left < CodeTTL-5*time.Second {
+		t.Errorf("a ticket lives CodeTTL, not %s", left)
+	}
+	// A cookie is not a ticket, and a ticket is not a cookie.
+	if _, err := keys.VerifyCallerTicket(mustSign(t, keys, cookieTyp, CallerTicket{Workspace: "acme", Project: "expenses", ExpiresAt: time.Now().Add(time.Minute).Unix()})); err == nil {
+		t.Error("a token of another type passed as a ticket")
+	}
+	if _, err := keys.VerifyCallerTicket(mustSign(t, keys, callerTicketTyp, CallerTicket{Workspace: "acme", Project: "expenses", ExpiresAt: time.Now().Add(-time.Second).Unix()})); err == nil {
+		t.Error("an expired ticket passed")
+	}
+	if _, err := keys.VerifyCallerTicket(mustSign(t, keys, callerTicketTyp, CallerTicket{ExpiresAt: time.Now().Add(time.Minute).Unix()})); err == nil {
+		t.Error("a ticket naming nobody passed")
+	}
+}
+
+func mustSign(t *testing.T, keys *Keys, typ string, claims any) string {
+	t.Helper()
+	v, err := keys.Sign(typ, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}

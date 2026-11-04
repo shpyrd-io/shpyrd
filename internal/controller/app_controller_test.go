@@ -703,3 +703,63 @@ func TestAllowList(t *testing.T) {
 		t.Errorf("base peers = %d, want 2", len(np.Spec.Ingress[0].From))
 	}
 }
+
+func TestInternalNameIngress(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: "app-acme-crm", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}},
+		Spec: shpyrdv1.AppSpec{
+			Image:     "ghcr.io/acme/crm:1",
+			Access:    shpyrdv1.AccessPublic,
+			Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080)}},
+			Allow:     []shpyrdv1.AllowEntry{{Project: "expenses"}},
+		},
+	}
+	r, c := newTestReconciler(t, app)
+	r.Config.SystemNamespace = "shpyrd-system"
+	r.Config.IngressClassInternal = "nginx-internal"
+	runReconcile(t, r, app)
+
+	ing := &networkingv1.Ingress{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm-internal"}, ing); err != nil {
+		t.Fatalf("internal ingress: %v", err)
+	}
+	// On the internal front door, for the qualified name, plain HTTP, to
+	// the web process; the server is asked about every call, by caller.
+	if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != "nginx-internal" || len(ing.Spec.TLS) != 0 {
+		t.Errorf("class = %v, tls = %v", ing.Spec.IngressClassName, ing.Spec.TLS)
+	}
+	rule := ing.Spec.Rules[0]
+	if rule.Host != "crm.acme.internal" || rule.HTTP.Paths[0].Backend.Service.Name != "crm-web" {
+		t.Errorf("rule = %+v", rule)
+	}
+	ann := ing.Annotations
+	if ann["nginx.ingress.kubernetes.io/auth-url"] != "http://shpyrd-server.shpyrd-system.svc.cluster.local/edge/auth?project=crm&workspace=acme&realm=service" {
+		t.Errorf("auth-url = %q", ann["nginx.ingress.kubernetes.io/auth-url"])
+	}
+	if ann["nginx.ingress.kubernetes.io/ssl-redirect"] != "false" || ann["nginx.ingress.kubernetes.io/custom-http-errors"] != "403,503" || !strings.Contains(ann["nginx.ingress.kubernetes.io/auth-cache-key"], "$remote_addr") {
+		t.Errorf("annotations = %v", ann)
+	}
+	for _, h := range []string{"X-Shpyrd-Service", "X-Shpyrd-Caller-Project", "X-Shpyrd-User", "X-Shpyrd-Operator"} {
+		if !strings.Contains(ann["nginx.ingress.kubernetes.io/auth-response-headers"], h) {
+			t.Errorf("auth-response-headers lacks %s: %q", h, ann["nginx.ingress.kubernetes.io/auth-response-headers"])
+		}
+	}
+	// A public app has the internal name too: the allow list, not the
+	// access mode, decides who calls.
+	main := &networkingv1.Ingress{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm"}, main); err != nil || main.Annotations["nginx.ingress.kubernetes.io/auth-url"] != "" {
+		t.Errorf("the public Ingress stays public: %v %v", err, main.Annotations)
+	}
+
+	// Without a web process there is nothing to call: the Ingress goes.
+	cur := &shpyrdv1.App{}
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm"}, cur)
+	cur.Spec.Processes = map[string]shpyrdv1.Process{"worker": {}}
+	if err := c.Update(context.Background(), cur); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, cur)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-crm", Name: "crm-internal"}, ing); !kerrors.IsNotFound(err) {
+		t.Errorf("internal ingress should be gone without a web process: %v", err)
+	}
+}

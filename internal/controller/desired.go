@@ -1168,3 +1168,75 @@ func imageSecurityContext(app *shpyrdv1.App, image string) *corev1.SecurityConte
 	}
 	return sc
 }
+
+// Internal names (#311): a project's instances call another project of the
+// workspace at http://<project>.internal, and the callee learns who called.
+// Every project with a web process has an Ingress on the internal front door
+// for its qualified name, <project>.<workspace>.internal, whose auth
+// subrequest asks the server about the address the call came from; the
+// server decides by the callee's allow list and answers with the caller's
+// identity. The bare name is one Ingress of the platform's, which the server
+// forwards here. Plain HTTP: these names never leave the cluster.
+
+// InternalNamesTLD is the zone of internal names.
+const InternalNamesTLD = ".internal"
+
+// internalIngressName is the Ingress of the project's internal name.
+func internalIngressName(app *shpyrdv1.App) string { return ingressName(app) + "-internal" }
+
+// internalHost is the project's qualified internal name.
+func internalHost(app *shpyrdv1.App) string {
+	return projectSlug(app) + "." + workspaceOf(app) + InternalNamesTLD
+}
+
+// mutateInternalIngress renders the Ingress of the internal name.
+// interceptor says the backend is the KEDA interceptor (sleep or autoscaling
+// is on): a call wakes a sleeping callee like a visit does.
+func (c Config) mutateInternalIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, interceptor bool) {
+	ing.Labels = mergeMaps(ing.Labels, processLabels(app, "web"))
+	for _, k := range edgeAnnotationKeys {
+		delete(ing.Annotations, k)
+	}
+	server := fmt.Sprintf("http://shpyrd-server.%s.svc.cluster.local/edge/auth?project=%s&workspace=%s&realm=service", c.SystemNamespace, projectSlug(app), workspaceOf(app))
+	ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
+		"nginx.ingress.kubernetes.io/ssl-redirect":    "false",
+		"nginx.ingress.kubernetes.io/proxy-body-size": "50m",
+		"nginx.ingress.kubernetes.io/auth-url":        server,
+		// The caller's identity, and every header a person's edge can set,
+		// so a project sends none of them to another.
+		"nginx.ingress.kubernetes.io/auth-response-headers": "Authorization,X-Shpyrd-Service,X-Shpyrd-Caller-Project,X-Shpyrd-User,X-Shpyrd-Email,X-Shpyrd-Name,X-Shpyrd-Teams,X-Shpyrd-Roles,X-Shpyrd-Workspace,X-Shpyrd-Operator",
+		// The decision is about who calls: the address, and the ticket the
+		// server attaches when it forwards a bare name.
+		"nginx.ingress.kubernetes.io/auth-cache-key":      "$remote_addr$http_x_shpyrd_internal_caller",
+		"nginx.ingress.kubernetes.io/auth-cache-duration": "200 10s, 403 5s",
+		// A refusal and a callee with no ready instance are said by the
+		// server, in JSON (the caller is a program), not by nginx's page.
+		"nginx.ingress.kubernetes.io/custom-http-errors":             "403,503",
+		"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors": "true",
+	})
+	class := c.IngressClass
+	if c.IngressClassInternal != "" {
+		class = c.IngressClassInternal
+	}
+	ing.Spec.IngressClassName = ptr.To(class)
+	ing.Spec.TLS = nil
+	backend := workloadName(app, "web")
+	if interceptor {
+		backend = webInterceptorService
+	}
+	pathType := networkingv1.PathTypePrefix
+	ing.Spec.Rules = []networkingv1.IngressRule{{
+		Host: internalHost(app),
+		IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+			Paths: []networkingv1.HTTPIngressPath{{
+				Path:     "/",
+				PathType: &pathType,
+				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+					Name: backend,
+					Port: networkingv1.ServiceBackendPort{Name: "http"},
+				}},
+			}},
+		}},
+	}}
+	maintenanceIngress(app, ing)
+}

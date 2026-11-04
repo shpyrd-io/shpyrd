@@ -60,6 +60,7 @@ var hooks = map[string]Hook{
 	"autoscaler-credentials":       autoscalerCredentialsHook,
 	"image-pull-secret":            imagePullSecretHook,
 	"dns-credentials":              dnsCredentialsHook,
+	"internal-names-dns":           internalNamesDNSHook,
 }
 
 // RegisterHook lets extensions add hooks their components reference.

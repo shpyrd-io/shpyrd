@@ -420,6 +420,12 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	out[VarDNSDomains] = "[" + strings.Join(domains, ", ") + "]"
 	out[VarPlatformIngressClass] = vars[VarIngressClassExternal]
 	out[VarPlatformIngressSvc] = "ingress-nginx-controller.ingress-nginx.svc:443"
+	// Internal names (#311) are caught by the internal front door, the only
+	// one on a cluster without a second controller.
+	out[VarInternalNamesIngressClass] = vars[VarIngressClassInternal]
+	if out[VarInternalNamesIngressClass] == "" {
+		out[VarInternalNamesIngressClass] = vars[VarIngressClassExternal]
+	}
 	if vars[VarPlatformExposure] == "internal" {
 		out[VarPlatformIngressClass] = vars[VarIngressClassInternal]
 		out[VarPlatformIngressSvc] = "ingress-nginx-internal-controller.ingress-nginx-internal.svc:443"

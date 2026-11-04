@@ -269,6 +269,12 @@ type Server struct {
 	edgeKeys  *edge.Keys
 	edgeCodes *edge.Codes
 	hostCache hostCache
+	// Internal names (#311): who a pod address belongs to, and where a bare
+	// name is forwarded; tests inject both.
+	callers        callerIndex
+	podIndex       *podIndex
+	internalDoorFn func() string
+	doorCache      doorCache
 	// Redirect Ingresses by host (#133).
 	redirects redirectCache
 	// lookupTXT resolves TXT records for domain claims; nil uses the system
@@ -453,7 +459,9 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.githubRepos = &githubRepoCache{}
 	s.githubDeliveries = newRateLimiter(githubHooksPerMinute)
 	s.engine = gin.New()
-	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
+	// Internal names come before the security headers: what the server
+	// forwards for a bare name is the callee's answer, headers included.
+	s.engine.Use(gin.Recovery(), s.requestLogger(), s.internalNames(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}
@@ -501,6 +509,10 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		s.edgeKeys = keys
 	}
 	s.edgeCodes = edge.NewCodes(opts.Store)
+	if kubeIface != nil {
+		s.podIndex = newPodIndex(kubeIface, systemNS)
+		s.callers = s.podIndex
+	}
 	s.rp = newRelyingParty(sessions, opts.Public.DashboardURL, opts.Public.Domain, opts.IngressService, opts.Logger)
 	s.rp.SetClusterCA(s.clusterCA(context.Background()))
 
@@ -566,6 +578,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// follow each other through the Secret.
 	go s.edgeKeys.Run(ctx)
 	go s.keepOIDCClient(ctx) // the identity provider's redirect URIs (RFC-0080)
+	if s.podIndex != nil {
+		go s.podIndex.Run(ctx) // the pod addresses behind internal names (#311)
+	}
 
 	errCh := make(chan error, 4)
 	go func() {

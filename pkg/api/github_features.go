@@ -49,6 +49,7 @@ type SourceWatchView struct {
 // without it.
 func (s *Server) projectDetail(ctx context.Context, app *shpyrdv1.App) AppDetail {
 	d := detail(app, s.buildsByDigest(ctx, app))
+	d.InternalHost = internalHostOf(workspaceOf(app), d.Slug)
 	d.GitHubFeatures = s.githubCovers(ctx, app)
 	if src := app.Spec.Source; src != nil && src.Git != nil && !d.GitHubFeatures && (len(src.Git.WatchPaths) > 0 || src.Git.WaitForChecks) {
 		d.SourceNote = githubSourceNote

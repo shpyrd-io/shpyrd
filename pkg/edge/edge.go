@@ -669,3 +669,39 @@ func (c *Codes) DropPass(ctx context.Context, pass string) error {
 	}
 	return nil
 }
+
+// CallerTicket is how the platform's server vouches for a project when it
+// forwards a bare internal name, crm.internal, to the qualified one at the
+// front door (#311): the auth subrequest there sees the server's own
+// address, and the ticket, signed with the edge's key for a minute, names
+// the project the call really came from.
+type CallerTicket struct {
+	Workspace string `json:"ws"`
+	Project   string `json:"project"`
+	ExpiresAt int64  `json:"exp"`
+}
+
+const callerTicketTyp = "shpyrd-caller"
+
+// SignCallerTicket mints a ticket, good for CodeTTL unless it says otherwise.
+func (k *Keys) SignCallerTicket(t CallerTicket) (string, error) {
+	if t.ExpiresAt == 0 {
+		t.ExpiresAt = time.Now().Add(CodeTTL).Unix()
+	}
+	return k.Sign(callerTicketTyp, t)
+}
+
+// VerifyCallerTicket checks a ticket: its type, a caller, and its expiry.
+func (k *Keys) VerifyCallerTicket(value string) (*CallerTicket, error) {
+	var t CallerTicket
+	if err := k.Verify(value, callerTicketTyp, &t); err != nil {
+		return nil, err
+	}
+	if t.Workspace == "" || t.Project == "" {
+		return nil, errors.New("ticket names no caller")
+	}
+	if time.Now().Unix() >= t.ExpiresAt {
+		return nil, errors.New("ticket expired")
+	}
+	return &t, nil
+}

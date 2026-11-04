@@ -1019,6 +1019,7 @@ allow list. Changes apply within seconds; no release needed.
 					fmt.Fprintln(out, "No allow entries: only platform infrastructure (ingress, monitoring) may reach this app. Add with `shpyrd allow add project <slug>`.")
 					return
 				}
+				fmt.Fprintf(out, "The projects listed reach it at http://%s.internal and are named to it in X-Shpyrd-Service.\n", name)
 				for _, e := range entries {
 					if e.Project != "" {
 						fmt.Fprintf(out, "project: %s\n", e.Project)

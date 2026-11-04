@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Plus, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
@@ -330,6 +330,12 @@ const callers: Record<NonNullable<AllowEntry["platform"]>, string> = { mcp: "the
 
 export function Connections({ project, perms }: { project: Project; perms: Perms }) {
   const queries = useQueryClient();
+  // What a project let in calls: the short name from inside the workspace.
+  const internalURL = `http://${project.slug}.internal`;
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text);
+    toast.success("Copied", { description: text });
+  };
   const allow = useQuery({ queryKey: ["allow", project.slug], queryFn: () => api.allow(project.slug) });
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects, enabled: perms.members });
   const [kind, setKind] = useState<"project" | "platform">("project");
@@ -358,6 +364,16 @@ export function Connections({ project, perms }: { project: Project; perms: Perms
       </CardHeader>
       <CardContent>
         <Stack gap="normal">
+          <p className="text-sm text-muted-foreground">
+            A project let in calls this one at <InlineCode>{internalURL}</InlineCode>
+            <Button variant="ghost" size="icon-xs" icon={<Copy />} aria-label="Copy the internal address" onClick={() => copy(internalURL)} />
+            {project.internalHost && (
+              <>
+                {" "}
+                (or <InlineCode>http://{project.internalHost}</InlineCode>) and reads who called in <InlineCode>X-Shpyrd-Service</InlineCode>.
+              </>
+            )}
+          </p>
           {allow.isLoading ? (
             <Loading />
           ) : allow.error ? (
