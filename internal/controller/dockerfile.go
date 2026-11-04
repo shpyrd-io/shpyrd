@@ -236,6 +236,10 @@ func (r *AppReconciler) reconcileSupersededBuilds(ctx context.Context, app *shpy
 	return nil
 }
 
+// overlayNeedsDockerfile is what a buildpacks build with an overlay is
+// told: the files laid over the source go with a Dockerfile build.
+const overlayNeedsDockerfile = "The files laid over the source (the catalog entry's overlay) go with a Dockerfile build: the buildpacks builder reads one source. Set build.strategy: dockerfile, or deploy without the overlay."
+
 // buildKey identifies the source and build settings a Job builds.
 func buildKey(app *shpyrdv1.App) string {
 	h := sha256.New()
@@ -248,6 +252,9 @@ func buildKey(app *shpyrdv1.App) string {
 			h.Write([]byte("git:" + src.Git.URL + "#" + app.BuildRevision()))
 		}
 		h.Write([]byte("subpath:" + src.SubPath))
+		if src.Overlay != nil {
+			h.Write([]byte("overlay:" + firstNonEmpty(src.Overlay.SHA256, src.Overlay.URL)))
+		}
 	}
 	if b := app.Spec.Build; b != nil {
 		raw, _ := json.Marshal(b)
@@ -563,6 +570,34 @@ const gitAuthDir = "/git-auth"
 // it reads it from gitAuthDir: never inlined, so a value with quotes or a
 // newline cannot change the script.
 func (c Config) fetchScript(app *shpyrdv1.App, git gitauth.Build) string {
+	return c.sourceScript(app, git) + c.overlayScript(app)
+}
+
+// overlayScript lays the overlay over the checkout (the catalog's files
+// over the upstream repository), once the source is in place; "" without
+// one. The archive's digest is checked before anything is written.
+func (c Config) overlayScript(app *shpyrdv1.App) string {
+	ov := app.Spec.Source.Overlay
+	if ov == nil {
+		return ""
+	}
+	dst := workspaceDir + "/src"
+	if app.Spec.Source.SubPath != "" {
+		dst = path.Join(dst, strings.TrimPrefix(path.Clean(app.Spec.Source.SubPath), "/"))
+	}
+	check := ""
+	if ov.SHA256 != "" {
+		check = fmt.Sprintf(`echo %s | sha256sum -c - >/dev/null || { echo 'the overlay is not the archive the project names' >&2; exit 1; }
+`, shellQuote(ov.SHA256+"  /tmp/overlay.tgz"))
+	}
+	return fmt.Sprintf(`
+wget -qO /tmp/overlay.tgz %[1]s
+%[2]smkdir -p %[3]s
+tar xzf /tmp/overlay.tgz -C %[3]s
+echo "overlay laid over the source"`, shellQuote(c.sourceURL(ov.URL)), check, dst)
+}
+
+func (c Config) sourceScript(app *shpyrdv1.App, git gitauth.Build) string {
 	src := app.Spec.Source
 	dst := workspaceDir + "/src"
 	switch {

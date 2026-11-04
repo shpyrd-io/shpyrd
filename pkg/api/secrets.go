@@ -113,22 +113,34 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 	if !ok {
 		return
 	}
-	ctx := c.Request.Context()
+	sec, status, err := s.writeConfigVars(c.Request.Context(), app, req)
+	if err != nil {
+		abort(c, status, err)
+		return
+	}
+	s.audit(c, project.SlugOf(app), "config.set", project.SlugOf(app), configChangeDetail(req))
+	c.JSON(http.StatusOK, configResponse(sec, true))
+}
+
+// writeConfigVars applies the updates to the project's pending config
+// vars, each of its kind, and answers the Secret written, or the HTTP
+// status a refusal takes and why.
+func (s *Server) writeConfigVars(ctx context.Context, app *shpyrdv1.App, updates ...ConfigVarsUpdate) (*corev1.Secret, int, error) {
 	key := types.NamespacedName{Namespace: app.Namespace, Name: configvars.PendingName(app)}
 	for attempt := 0; attempt < 5; attempt++ {
 		sec, pending, err := configvars.Read(ctx, s.apps, app)
 		if err != nil {
-			abort(c, http.StatusBadGateway, err)
-			return
+			return nil, http.StatusBadGateway, err
 		}
 		create := !pending
 		if create {
 			data, annotations := sec.Data, sec.Annotations
 			sec = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{shpyrdv1.LabelApp: app.Name}, Annotations: annotations}, Type: corev1.SecretTypeOpaque, Data: data}
 		}
-		if err := configvars.ApplyKind(sec, req.Set, req.Unset, req.Convert, req.Kind == "variable", req.ConfirmPlain, time.Now()); err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
+		for _, req := range updates {
+			if err := configvars.ApplyKind(sec, req.Set, req.Unset, req.Convert, req.Kind == "variable", req.ConfirmPlain, time.Now()); err != nil {
+				return nil, http.StatusBadRequest, err
+			}
 		}
 		if sec.Annotations == nil {
 			sec.Annotations = map[string]string{}
@@ -140,16 +152,13 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 			err = s.apps.Update(ctx, sec)
 		}
 		if err == nil {
-			s.audit(c, project.SlugOf(app), "config.set", project.SlugOf(app), configChangeDetail(req))
-			c.JSON(http.StatusOK, configResponse(sec, true))
-			return
+			return sec, http.StatusOK, nil
 		}
 		if !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) && !apierrors.IsNotFound(err) {
-			abort(c, http.StatusBadGateway, err)
-			return
+			return nil, http.StatusBadGateway, err
 		}
 	}
-	abort(c, http.StatusConflict, errors.New("too many conflicts"))
+	return nil, http.StatusConflict, errors.New("too many conflicts")
 }
 
 // configChangeDetail names the variables touched, never their values.

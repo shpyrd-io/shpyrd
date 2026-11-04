@@ -26,6 +26,20 @@ The name is free text. The slug derived from it (lowercase letters, digits and d
 
 A new project asks its visitors to sign in: only people with a role on it can open the app, and the app receives who they are. For a site anyone may open, create it with `--public` or switch later with `shpyrd access set public`. See [Sign-in for your app](/docs/app-access).
 
+### From the catalog
+
+A project can also be made from the **catalog**: applications ready to run, such as an agent framework or a CRM, each described by an entry that says where its code lives, how it runs and what it asks at install.
+
+```shell
+shpyrd catalog list
+shpyrd catalog show fluxyr
+shpyrd catalog install fluxyr --input OPENROUTER_API_KEY=sk-or-...   # --slug, --name, --revision v1.2.0
+```
+
+The install makes the project with what the entry says (processes, build settings, plain variables), its disks and resources, sets the inputs as config vars (secrets as secrets, a value marked `generate` made at install), and sets the source: the upstream repository on the entry's branch, which the project follows from then on as any git project does, or the tag `--revision` pins. An entry may lay files over the upstream checkout before the build, a Dockerfile for a project that has none; that goes with a Dockerfile build, since the buildpacks builder reads one source. The project is marked with the entry it came from (`catalogEntry` in its summary).
+
+The catalog is a repository of entry folders ([shpyrd-io/catalog](https://github.com/shpyrd-io/catalog)), each a `shpyrd.yaml` with the keys of a project's own under a `catalog` block, published by its CI as an index over HTTPS. A server reads shpyrd's unless `SHPYRD_CATALOG_URL` names another, a fork or a private catalog, or `off`. `shpyrd catalog validate <dir>` checks a folder of entries and `shpyrd catalog publish <dir> --out public` writes the index.
+
 ## Deploy
 
 From inside your repository:
