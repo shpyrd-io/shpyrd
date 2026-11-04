@@ -54,7 +54,7 @@ it("offers an empty project, GitHub and the catalog", async () => {
   show();
   expect(await screen.findByRole("menuitem", { name: "Empty project" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "From GitHub" })).toBeTruthy();
-  await pick("From the catalog");
+  await pick("From templates");
   expect(await screen.findByText("the catalog")).toBeTruthy();
 });
 

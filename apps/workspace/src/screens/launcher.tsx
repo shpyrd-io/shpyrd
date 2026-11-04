@@ -97,7 +97,7 @@ export function Launcher() {
             secondaryAction={
               config.data?.catalog ? (
                 <Button variant="outline" icon={<Store />} asChild>
-                  <Link to="/catalog">From the catalog</Link>
+                  <Link to="/catalog">From templates</Link>
                 </Button>
               ) : undefined
             }
@@ -163,7 +163,7 @@ export function AddMenu() {
             <GitBranch /> From GitHub
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => navigate("/catalog")}>
-            <Store /> From the catalog
+            <Store /> From templates
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
