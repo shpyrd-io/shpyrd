@@ -38,7 +38,7 @@ What happens:
 
 1. **Archive.** The committed tree of the current directory (`git archive HEAD`) is packed; run it from a subdirectory to deploy just that service of a monorepo. Uncommitted changes are not included unless you pass `--working-tree` (also chosen automatically when nothing in the directory is committed yet). Outside a Git repository the directory is tarred, without `.git` and `node_modules`.
 2. **Upload.** The archive is sent to your workspace over its API (self-hosted, with `--context`: through the Kubernetes API server).
-3. **Build.** In the cluster, with the Paketo buildpacks (kpack) or, when the directory has a `Dockerfile`, with BuildKit; the CLI streams every step.
+3. **Build.** In the cluster, with the Paketo buildpacks (kpack), the default, or, when the directory has a `Dockerfile`, with BuildKit ([When a Dockerfile is justified](#when-a-dockerfile-is-justified)); the CLI streams every step.
 4. **Release.** The controller rolls the new image out process by process and prints the release number and URL.
 
 ```
@@ -261,7 +261,7 @@ Watch paths and wait for CI work through the GitHub App. On a repository the Git
 
 <Callout title="Which languages?">
 
-Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, PHP, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
+Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, PHP, .NET Core and static sites served by nginx or httpd. Build with buildpacks by default: no `Dockerfile` to write or keep up to date, and the image follows the platform's security updates. Repositories with a `Dockerfile` are built with BuildKit instead; write one only for what buildpacks cannot do ([When a Dockerfile is justified](#when-a-dockerfile-is-justified)). `--image` runs anything already built.
 
 </Callout>
 
@@ -414,7 +414,21 @@ processes:
 
 ## Dockerfile builds
 
-When the deployed directory contains a `Dockerfile`, `shpyrd deploy` builds it instead of using buildpacks:
+Buildpacks are the default and the recommended way to build. A `Dockerfile` is one more file to maintain: its base image, its toolchain and its security updates are yours, where a buildpack image takes the platform's. Add one only when buildpacks cannot build what the app needs.
+
+### When a Dockerfile is justified
+
+- **A language or runtime the builder does not have**: Rust, Elixir or Erlang, Deno, Bun, Crystal, Haskell, Swift, Zig, or C/C++ compiled from source. The builder has Go, Node.js, Java (and other JVM languages), Python, Ruby, PHP, .NET and static sites.
+- **A language version the buildpacks do not offer yet**, when waiting for it is not an option ([Language versions](#language-versions)).
+- **A system package that is not in Ubuntu's archive**: a vendor's installer, a PPA, a library compiled from source. A package Ubuntu ships goes in an [Aptfile](#system-packages-aptfile) instead.
+- **A base image the app must run on**, such as a vendor's image that comes with the software preinstalled.
+- **An existing project that already builds with a Dockerfile** its team maintains: keep it rather than rewrite the build.
+
+Not reasons for a Dockerfile, each has a buildpack answer: the start command or several processes (a `Procfile`), a language version (the app's own files, or `build.env`), an Ubuntu package or a C library (an `Aptfile`, `build.stack: full`), migrations (a `release:` line in the `Procfile`), a static site or a Vite build (the [web-servers buildpack](#static-sites)), a monorepo package ([Monorepos and workspaces](#monorepos-and-workspaces)), build variables (`build.env`), or running as non-root (buildpack images already do).
+
+### How a Dockerfile build runs
+
+When the deployed directory contains a `Dockerfile`, `shpyrd deploy` builds it instead of using buildpacks. A `Dockerfile` left over in the repository therefore wins: delete it, or set `build.strategy: buildpacks` in `shpyrd.yaml`, to build with buildpacks.
 
 ```
 ==> Archiving working tree (c26f84642501)

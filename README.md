@@ -84,7 +84,7 @@ shpyrd scale web=3                        # reload: another instance answers
 Then your own code:
 
 ```sh
-cd my-service                       # any repo a Paketo buildpack understands (Go, Node, Java, Python, Ruby, .NET, static) or with a Dockerfile
+cd my-service                       # any repo a Paketo buildpack understands (Go, Node, Java, Python, Ruby, PHP, .NET, static); a Dockerfile only for what buildpacks cannot build
 shpyrd projects create "My Service" --save # slug my-service: namespace app-my-service, App resource, shpyrd.yaml
 shpyrd deploy                       # archive HEAD, build in-cluster (buildpacks, or the Dockerfile when there is one), roll out
 shpyrd deploy --working-tree        # ...or the directory as is, uncommitted changes included

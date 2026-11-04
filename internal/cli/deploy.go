@@ -58,6 +58,13 @@ at https://<app>.<domain>.
   shpyrd deploy --git ... --dockerfile Dockerfile   build the repository's Dockerfile
   shpyrd deploy --image ghcr.io/o/r:tag       run a prebuilt image (no build)
 
+Buildpacks are the default and the recommended build. A Dockerfile is for
+what they cannot build: a language or runtime the builder lacks (Rust,
+Elixir, Deno...), a language version not offered yet, a system package
+outside Ubuntu's archive, a required base image. An Ubuntu package goes in
+an Aptfile instead, and a leftover Dockerfile wins detection: delete it or
+pin build.strategy: buildpacks.
+
 The build strategy can be pinned in shpyrd.yaml (build.strategy: buildpacks
 or dockerfile, plus build.dockerfile, build.target and build.env).
 
