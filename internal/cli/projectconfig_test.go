@@ -87,3 +87,21 @@ func TestProjectEnvKey(t *testing.T) {
 		}
 	}
 }
+
+// shpyrd.yaml cannot declare sleep or autoscale: redeclaring a process
+// keeps what the cluster has (#341).
+func TestProcessesKeepSleepAndAutoscale(t *testing.T) {
+	var pc projectConfig
+	if err := yaml.Unmarshal([]byte("project: x\nprocesses:\n  web:\n    size: shared-s\n"), &pc); err != nil {
+		t.Fatal(err)
+	}
+	off := &shpyrdv1.SleepSpec{After: "off"}
+	bounds := &shpyrdv1.AutoscaleSpec{Min: 1, Max: 4}
+	app := &shpyrdv1.App{Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {Sleep: off, Autoscale: bounds}}}}
+	if err := pc.applyTo(app); err != nil {
+		t.Fatal(err)
+	}
+	if web := app.Spec.Processes["web"]; web.Sleep != off || web.Autoscale != bounds || web.Size != "shared-s" {
+		t.Errorf("web = %+v", web)
+	}
+}

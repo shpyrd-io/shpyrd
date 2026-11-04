@@ -414,3 +414,27 @@ func TestGitHookAtTheConsoleAddressReachesTheDefaultWorkspace(t *testing.T) {
 		t.Errorf("wrong token at the console address: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Sleep and autoscale are the project's settings: a deploy that redeclares
+// the processes from shpyrd.yaml, which cannot say either, keeps them (#341).
+func TestADeployKeepsSleepAndAutoscale(t *testing.T) {
+	app := sampleApp("web1", shpyrdv1.PhaseRunning)
+	app.Spec.Processes = map[string]shpyrdv1.Process{"web": {
+		Sleep:     &shpyrdv1.SleepSpec{After: "15m0s", Resuming: "page"},
+		Autoscale: &shpyrdv1.AutoscaleSpec{Min: 1, Max: 3},
+	}}
+	s, cr := newTestServer(t, nil, []client.Object{app})
+	if rec := do(t, s, "POST", "/api/projects/web1/deploy", `{"git":{"url":"https://example.test/web1","revision":"main"},"processes":{"web":{"port":3000},"worker":{}}}`, true); rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", rec.Code, rec.Body.String())
+	}
+	web := appNamed(t, cr, "web1").Spec.Processes["web"]
+	if web.Port == nil || *web.Port != 3000 {
+		t.Errorf("the file's port applies: %+v", web.Port)
+	}
+	if web.Sleep == nil || web.Sleep.After != "15m0s" || web.Sleep.Resuming != "page" {
+		t.Errorf("a deploy keeps the sleep policy, got %+v", web.Sleep)
+	}
+	if web.Autoscale == nil || web.Autoscale.Min != 1 || web.Autoscale.Max != 3 {
+		t.Errorf("a deploy keeps the autoscale bounds, got %+v", web.Autoscale)
+	}
+}

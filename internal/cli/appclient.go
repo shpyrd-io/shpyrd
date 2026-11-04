@@ -290,7 +290,10 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 					return fmt.Errorf("shpyrd.yaml: process %s: volumes need name and path", name)
 				}
 			}
-			proc := shpyrdv1.Process{Replicas: cur.Replicas, Port: pp.Port, Command: pp.Command, Args: pp.Args, Size: firstNonEmpty(pp.Size, cur.Size), Resources: res, Volumes: pp.Volumes}
+			// Sleep and autoscale are set on the cluster (shpyrd sleep,
+			// shpyrd autoscale, the dashboard), never in the file: they
+			// survive a redeclared process (#341).
+			proc := shpyrdv1.Process{Replicas: cur.Replicas, Port: pp.Port, Command: pp.Command, Args: pp.Args, Size: firstNonEmpty(pp.Size, cur.Size), Resources: res, Volumes: pp.Volumes, Sleep: cur.Sleep, Autoscale: cur.Autoscale}
 			if pp.Replicas != nil {
 				proc.Replicas = pp.Replicas
 			}
