@@ -41,9 +41,14 @@ const (
 	// EnvVar is the Go runtime variable naming the root certificates file.
 	EnvVar = "SSL_CERT_FILE"
 	// PriorityClass is the class of an image build (deploy/components/shpyrd,
-	// step-priorities.yaml): the same priority as a pod with none and never
-	// preempting, named so the compute quota can leave builds out.
+	// step-priorities.yaml): the same priority as a pod with none, 0, and
+	// never preempting, named so the compute quota can leave builds out.
 	PriorityClass = "shpyrd-build"
+	// PriorityClassPreemption is that class's preemption policy. The
+	// webhook writes it on the pod with the class (Patch says why), so the
+	// manifest and this constant must agree; pkg/install's tests hold them
+	// together.
+	PriorityClassPreemption = corev1.PreemptNever
 )
 
 // Options configure the webhook server.
@@ -181,15 +186,23 @@ type Operation struct {
 // already carry the volume keep their containers as they are; containers
 // that already set the variable keep their value.
 //
-// The class is a name only. The API server resolved the pod's priority
-// number before any webhook ran (its Priority plugin comes earlier in the
-// chain), so the pod keeps the number it had with no class, 0, which is
-// the class's value too; the quota plugin, which comes after the webhooks,
-// matches its scope on the name.
+// The API server's Priority plugin ran before the webhooks: the pod came
+// with no class, so it holds priority 0 and the default preemption policy,
+// PreemptLowerPriority. After a webhook changes a pod the plugin runs
+// again, and it refuses a pod whose priority or policy differ from what
+// its class says (Kubernetes 1.37 on kind: "the string value of
+// PreemptionPolicy (PreemptLowerPriority) must not be provided in pod
+// spec; priority admission controller computed Never"). The class's value
+// is 0, so the priority stands; the policy is written here to the
+// class's. The quota plugin, last in the chain, matches its scope on the
+// name.
 func Patch(pod *corev1.Pod, bundle string) []Operation {
 	var ops []Operation
 	if pod.Spec.PriorityClassName == "" {
-		ops = append(ops, Operation{Op: "add", Path: "/spec/priorityClassName", Value: PriorityClass})
+		ops = append(ops,
+			Operation{Op: "add", Path: "/spec/priorityClassName", Value: PriorityClass},
+			Operation{Op: "add", Path: "/spec/preemptionPolicy", Value: PriorityClassPreemption},
+		)
 	}
 	return append(ops, trustOps(pod, bundle)...)
 }

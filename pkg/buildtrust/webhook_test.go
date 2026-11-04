@@ -85,28 +85,38 @@ func TestPatchAppliesToEveryContainer(t *testing.T) {
 }
 
 // A build is a step of a deploy, outside the workspace's ceiling: the pod
-// gets the build PriorityClass the project's compute quota leaves out.
-// Since every build asks for its place on a machine (#340), a pod without
-// it was refused by a small plan's quota and never ran. A pod that names a
-// class already keeps it, and one that carries the trust volume but no
-// class still gets the class.
+// gets the build PriorityClass the project's compute quota leaves out,
+// with the class's preemption policy, since the API server's Priority
+// plugin refuses a pod whose policy differs from its class's when it runs
+// again after the webhook. Since every build asks for its place on a
+// machine (#340), a pod without the class was refused by a small plan's
+// quota and never ran. A pod that names a class already keeps it and its
+// policy, and one that carries the trust volume but no class still gets
+// the class.
 func TestPatchPutsTheBuildOutsideTheWorkspaceCeiling(t *testing.T) {
-	out := applyPatch(t, buildPod())
+	pod := buildPod()
+	policy := corev1.PreemptLowerPriority // what the Priority plugin wrote for a pod with no class
+	pod.Spec.PreemptionPolicy = &policy
+	out := applyPatch(t, pod)
 	if out.Spec.PriorityClassName != PriorityClass {
 		t.Errorf("priorityClassName = %q, want %q", out.Spec.PriorityClassName, PriorityClass)
+	}
+	if out.Spec.PreemptionPolicy == nil || *out.Spec.PreemptionPolicy != PriorityClassPreemption {
+		t.Errorf("preemptionPolicy = %v, want %s, the class's", out.Spec.PreemptionPolicy, PriorityClassPreemption)
 	}
 
 	named := buildPod()
 	named.Spec.PriorityClassName = "kpack-build-high-priority"
-	if out := applyPatch(t, named); out.Spec.PriorityClassName != "kpack-build-high-priority" {
-		t.Errorf("a class the pod names is replaced: %q", out.Spec.PriorityClassName)
+	named.Spec.PreemptionPolicy = &policy
+	if out := applyPatch(t, named); out.Spec.PriorityClassName != "kpack-build-high-priority" || *out.Spec.PreemptionPolicy != policy {
+		t.Errorf("a class the pod names is replaced: %q %s", out.Spec.PriorityClassName, *out.Spec.PreemptionPolicy)
 	}
 
 	trusted := buildPod()
 	trusted.Spec.Volumes = append(trusted.Spec.Volumes, corev1.Volume{Name: VolumeName})
 	ops := Patch(trusted, "shpyrd-ca-bundle")
-	if len(ops) != 1 || ops[0].Path != "/spec/priorityClassName" || ops[0].Value != PriorityClass {
-		t.Errorf("a trusted pod without a class: ops = %+v, want the class alone", ops)
+	if len(ops) != 2 || ops[0].Path != "/spec/priorityClassName" || ops[0].Value != PriorityClass || ops[1].Path != "/spec/preemptionPolicy" {
+		t.Errorf("a trusted pod without a class: ops = %+v, want the class and its policy alone", ops)
 	}
 }
 
