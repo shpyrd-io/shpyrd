@@ -120,11 +120,17 @@ func TestOverviewPaginationIsBoundedSortedAndPinned(t *testing.T) {
 	if page.Nodes[0].Name != "node-099949" {
 		t.Fatal("refresh changed page ordering")
 	}
-	for _, q := range []string{"limit=101", "limit=-1", "offset=50", "snapshot=expired", "sort=invalid", "view=invalid"} {
+	for _, q := range []string{"limit=101", "limit=-1", "offset=50", "snapshot=expired&offset=50", "sort=invalid", "view=invalid"} {
 		r := do(t, s, "GET", "/api/cluster/overview/nodes?"+q, "", true)
 		if r.Code < 400 {
 			t.Errorf("accepted %s", q)
 		}
+	}
+	// A first page with an id this replica never built (another replica's, or
+	// expired) is served from the latest snapshot instead of a conflict.
+	r := do(t, s, "GET", "/api/cluster/overview/nodes?snapshot=expired&pool=apps", "", true)
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"snapshot":"new"`) {
+		t.Fatalf("unknown snapshot on page one: %d %s", r.Code, r.Body.String())
 	}
 	if first.Body.Len() > 100000 {
 		t.Fatalf("oversized response: %d", first.Body.Len())
@@ -197,5 +203,58 @@ func TestOverviewChartRequestsHaveBoundedSeriesAndPoints(t *testing.T) {
 	r := do(t, s, "GET", "/api/cluster/overview/charts?nodes=a,b,c,d,e,f", "", true)
 	if r.Code != 400 {
 		t.Fatal("accepted too many comparisons")
+	}
+}
+
+func TestOverviewServesFreshSnapshotAtOnceAndWaitsForAnOldOne(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "apps-1", Labels: map[string]string{install.PoolLabel: "apps"}}}
+	s, _ := newTestServer(t, nil, nil, node)
+	kube := s.kube.Kube.(*kubefake.Clientset)
+	release := make(chan struct{})
+	var fail atomic.Bool
+	kube.PrependReactor("list", "nodes", func(a ktesting.Action) (bool, runtime.Object, error) {
+		<-release
+		if fail.Load() {
+			return true, nil, fmt.Errorf("nodes are forbidden")
+		}
+		return false, nil, nil
+	})
+	// A fresh snapshot is served without waiting for the refresh it starts.
+	fresh := &overviewSnapshot{ID: "fresh", At: time.Now(), Errors: []string{}}
+	s.overview.snapshots = []*overviewSnapshot{fresh}
+	got, err := s.overviewSnapshot(context.Background(), "")
+	if err != nil || got.ID != "fresh" {
+		t.Fatalf("fresh snapshot: %v %+v", err, got)
+	}
+	pending := s.overview.pending
+	if pending == nil {
+		t.Fatal("no refresh started")
+	}
+	close(release)
+	<-pending
+	// An old snapshot makes the viewer wait for the refresh.
+	old := &overviewSnapshot{ID: "old", At: time.Now().Add(-17 * time.Hour), Errors: []string{}}
+	s.overview.snapshots = []*overviewSnapshot{old}
+	s.overview.attempted = time.Time{}
+	got, err = s.overviewSnapshot(context.Background(), "")
+	if err != nil || got.ID == "old" || time.Since(got.At) > time.Minute {
+		t.Fatalf("old snapshot was served: %v %+v", err, got)
+	}
+	// When the refresh fails, the old snapshot is served and says why.
+	fail.Store(true)
+	s.overview.snapshots = []*overviewSnapshot{old}
+	s.overview.attempted = time.Time{}
+	got, err = s.overviewSnapshot(context.Background(), "")
+	if err != nil || got.ID != "old" || len(got.Errors) != 1 || !strings.Contains(got.Errors[0], "could not be refreshed: nodes are forbidden") {
+		t.Fatalf("failed refresh: %v %+v", err, got)
+	}
+	if len(old.Errors) != 0 {
+		t.Fatal("cached snapshot was mutated")
+	}
+	// With no snapshot at all, the failure is the answer.
+	s.overview.snapshots = nil
+	s.overview.attempted = time.Time{}
+	if _, err = s.overviewSnapshot(context.Background(), ""); err == nil {
+		t.Fatal("empty cache with a failed refresh returned a snapshot")
 	}
 }
