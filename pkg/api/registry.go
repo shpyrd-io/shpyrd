@@ -213,13 +213,7 @@ func (s *Server) registryImages(ctx context.Context, host string) *RegistryImage
 		return s.regCache.images
 	}
 	out := &RegistryImages{}
-	var data []byte
-	if name := s.vars(install.VarRegistrySecret); name != "" {
-		if sec, err := s.kube.Kube.CoreV1().Secrets(s.kube.Namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
-			data = sec.Data[corev1.DockerConfigJsonKey]
-		}
-	}
-	cl := registry.FromDockerConfig(host, data)
+	cl := s.registryClientFor(ctx, host)
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	repos, err := cl.Catalog(cctx, 500)
@@ -243,6 +237,17 @@ func (s *Server) registryImages(ctx context.Context, host string) *RegistryImage
 	}
 	s.regCache.images, s.regCache.at = out, time.Now()
 	return out
+}
+
+// registryClientFor is the registry's client with the platform credential.
+func (s *Server) registryClientFor(ctx context.Context, host string) *registry.Client {
+	var data []byte
+	if name := s.vars(install.VarRegistrySecret); name != "" && s.kube != nil && s.kube.Kube != nil {
+		if sec, err := s.kube.Kube.CoreV1().Secrets(s.kube.Namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			data = sec.Data[corev1.DockerConfigJsonKey]
+		}
+	}
+	return registry.FromDockerConfig(host, data)
 }
 
 // vars reads an install variable from the configured lookup.

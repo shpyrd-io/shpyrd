@@ -509,10 +509,10 @@ func (a *Addresses) ID(slug string) string {
 	return ""
 }
 
-// Suspended says whether a workspace is suspended; an unknown one is not.
+// Suspended says whether a workspace is off: suspended, or being deleted
+// or deleted (#274), when nothing of it runs; an unknown one is not.
 func (a *Addresses) Suspended(slug string) bool {
-	ws := a.Workspace(slug)
-	return ws != nil && ws.Status == store.WorkspaceSuspended
+	return a.Workspace(slug).Off()
 }
 
 // Limits are a workspace's ceilings; nil when it has none, or when the

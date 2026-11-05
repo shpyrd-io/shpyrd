@@ -312,6 +312,10 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.msg }
 
+// Status is the HTTP status the error answers with, for a layer that
+// mounts its own routes on the same functions (the cloud).
+func (e *apiError) Status() int { return e.status }
+
 // ---- custom domains ------------------------------------------------------------
 
 // DomainView is one custom domain of the workspace, with the DNS records

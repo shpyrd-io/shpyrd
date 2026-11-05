@@ -184,7 +184,7 @@ func TestRestore(t *testing.T) {
 			uploaded[sha] += len(data)
 			return "http://new-cluster/api/sources/" + sha + ".tgz?token=new-capability", nil
 		},
-		ImportStore: func(_ context.Context, ws string, d *store.Dump, _ bool) error {
+		ImportStore: func(_ context.Context, ws string, d *store.Dump, _, _ bool) error {
 			if ws == "" {
 				imported = d
 			} else {

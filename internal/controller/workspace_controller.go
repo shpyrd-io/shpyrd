@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -25,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/registry"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
@@ -51,10 +53,19 @@ type WorkspaceReconciler struct {
 	// so its apps' hosts follow (AppReconciler.RequeueWorkspace). Nil:
 	// nobody is told.
 	NamesChanged func(ctx context.Context, slug string)
+	// Kube writes the audit entries of the lifecycle (#274): a workspace
+	// expired, a workspace deleted; nil records nothing.
+	Kube kubernetes.Interface
+	// Registry is the in-cluster registry's client, for the images of a
+	// deleted workspace; nil (or no RegistryHost) skips that step.
+	Registry func(ctx context.Context) (*registry.Client, error)
 
 	// names remembers each workspace's names as last seen (namesOf), to
 	// tell a change.
 	names map[string]string
+	// activityAt is when the reaper last recomputed the workspaces' last
+	// activity (#274).
+	activityAt time.Time
 
 	events  chan event.GenericEvent
 	checker readinessChecker
@@ -110,6 +121,10 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err := r.ensureSharedFrontDoors(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
+	// The lifecycle (#274): expiries, scheduled deletions and their
+	// cascades, tombstones to scrub. A workspace that moved to deleting
+	// here is gone for the doors below.
+	deleting := r.reap(ctx, all)
 	// First what every workspace should have, then away with what nobody
 	// should, then the doors themselves: a door left from before (the
 	// address a workspace just moved from the old layout) would hold the
@@ -119,8 +134,8 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	hostsOf := map[string][]store.WorkspaceHost{}
 	for i := range all {
 		ws := &all[i]
-		if ws.Address == "" {
-			continue // no address yet: nothing to publish (RFC-0080: every workspace gets one)
+		if ws.Address == "" || ws.Gone() {
+			continue // no address yet: nothing to publish (RFC-0080: every workspace gets one); gone: its doors come down
 		}
 		if _, shared := r.Config.Layout.Label(ws.Address); !shared {
 			wanted[workspaceFrontDoorName(ws.Slug)] = true
@@ -168,7 +183,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	var failed error
 	for i := range all {
 		ws := &all[i]
-		if ws.Address == "" {
+		if ws.Address == "" || ws.Gone() {
 			continue
 		}
 		if err := r.reconcileDoors(ctx, ws, hostsOf[ws.Slug], &pending); err != nil {
@@ -187,6 +202,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	}
 	if failed != nil {
 		return ctrl.Result{RequeueAfter: readinessRetry}, failed
+	}
+	if deleting {
+		return ctrl.Result{RequeueAfter: deletionRetry}, nil
 	}
 	if pending {
 		return ctrl.Result{RequeueAfter: readinessRetry}, nil
@@ -219,7 +237,7 @@ func (r *WorkspaceReconciler) reconcileDoors(ctx context.Context, ws *store.Work
 	// door not yet answering is looked at again soon. A workspace of the
 	// shared layout that answered once is not looked at again: its door is
 	// everyone's.
-	if ws.Status != store.WorkspaceSuspended && !(shared && ws.ReadyAt != nil) && !r.checkReadiness(ctx, ws) {
+	if !ws.Off() && !(shared && ws.ReadyAt != nil) && !r.checkReadiness(ctx, ws) {
 		*pending = true
 	}
 	// The workspace's other names (RFC-0033 names): a verified custom

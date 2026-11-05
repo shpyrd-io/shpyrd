@@ -916,14 +916,33 @@ func (s *Server) importWorkspace(c *gin.Context) {
 			abort(c, http.StatusBadRequest, fmt.Errorf("the dump is of workspace %q, not %q", dump.Workspace.Slug, ws))
 			return
 		}
-		if _, err := s.store.Workspace(ctx, ws); errors.Is(err, store.ErrNotFound) {
-			created, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: ws, Name: firstNonEmpty(dump.Workspace.Name, ws), Address: dump.Workspace.Address, Settings: dump.Workspace.Settings})
+		existing, err := s.store.Workspace(ctx, ws)
+		if err == nil && existing.Status == store.WorkspaceDeleted {
+			// The cluster holds its tombstone (#274): a restore brings it
+			// back only on purpose; the tombstone's names are freed first.
+			if c.Query("restoreDeleted") != "true" {
+				when := "earlier"
+				if existing.DeletedAt != nil {
+					when = "on " + existing.DeletedAt.UTC().Format("2006-01-02")
+				}
+				abort(c, http.StatusConflict, fmt.Errorf("workspace %s was deleted %s; restoreDeleted=true brings it back", ws, when))
+				return
+			}
+			if _, err := s.store.ScrubWorkspace(ctx, ws); err != nil {
+				storeErr(c, err, "workspace")
+				return
+			}
+			s.audit(c, "", "workspace.restore-deleted", ws, "the tombstone's names were freed for the restore")
+			err = store.ErrNotFound
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			created, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: ws, Name: firstNonEmpty(dump.Workspace.Name, ws), Address: dump.Workspace.Address, Settings: dump.Workspace.Settings, Origin: store.OriginRestore})
 			if err != nil {
 				storeErr(c, err, "workspace")
 				return
 			}
 			if dump.Workspace.Status == store.WorkspaceSuspended {
-				_, _ = s.store.SetWorkspaceStatus(ctx, created.Slug, store.WorkspaceSuspended)
+				_, _ = s.store.SuspendWorkspace(ctx, created.Slug, firstNonEmpty(dump.Workspace.SuspendReason, store.SuspendReasonOperator))
 			}
 			s.workspacesChanged()
 		} else if err != nil {
@@ -991,6 +1010,22 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 // listWorkspacesCore is GET /api/workspaces on the open-source platform: the
 // workspaces this cluster hosts, as the console lists them (RFC-0080). The
 // cloud layer replaces it with the full workspace routes.
+// workspaceSummaryCore is one workspace as the open-source console lists
+// it; the cloud layer adds what it knows.
+func (s *Server) workspaceSummaryCore(ctx context.Context, w *store.Workspace) WorkspaceSummary {
+	sum := WorkspaceSummary{ID: w.ID, Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
+	sum.Limits, sum.Sleep = w.Settings.Limits, w.Settings.Sleep
+	FillLifecycle(&sum, w)
+	if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
+		for _, m := range roles {
+			if m.Role == store.WorkspaceRoleOwner {
+				sum.Owners = append(sum.Owners, m.Email)
+			}
+		}
+	}
+	return sum
+}
+
 func (s *Server) listWorkspacesCore(c *gin.Context) {
 	ctx := c.Request.Context()
 	all, err := s.store.ListWorkspaces(ctx)
@@ -1000,17 +1035,7 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 	}
 	out := make([]WorkspaceSummary, 0, len(all))
 	for i := range all {
-		w := &all[i]
-		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
-		sum.Limits, sum.Sleep = w.Settings.Limits, w.Settings.Sleep
-		if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
-			for _, m := range roles {
-				if m.Role == store.WorkspaceRoleOwner {
-					sum.Owners = append(sum.Owners, m.Email)
-				}
-			}
-		}
-		out = append(out, sum)
+		out = append(out, s.workspaceSummaryCore(ctx, &all[i]))
 	}
 	c.JSON(http.StatusOK, out)
 }

@@ -346,9 +346,10 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "no workspace answers at this address"})
 		return
 	}
-	if ws.Status == store.WorkspaceSuspended {
+	if ws.Off() {
 		countDenial(ws.Slug, slug, denialWorkspace)
-		c.JSON(http.StatusForbidden, gin.H{"error": "this workspace is suspended"})
+		status, err := offError(ws)
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	mode := c.DefaultQuery("mode", shpyrdv1.AccessAuthenticated)
@@ -763,8 +764,13 @@ func (s *Server) customError(c *gin.Context) bool {
 		if s.foreignHost(c) {
 			// A suspended workspace's apps have no Ingress: their hosts
 			// land here and say why (RFC-0033).
-			if ws, err := s.tenant(c); err == nil && ws.Status == store.WorkspaceSuspended {
-				s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended; its apps are not available.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
+			if ws, err := s.tenant(c); err == nil && ws.Off() {
+				status, title, text := OffPage(ws)
+				links := map[string]string{"Dashboard": s.dashboardURLFor(c)}
+				if ws.Gone() {
+					links = nil
+				}
+				s.edgePage(c, status, title, text+" Its apps are not available.", links)
 				return true
 			}
 			s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
