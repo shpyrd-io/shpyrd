@@ -55,22 +55,15 @@ func TestExportEncryptReadRoundTrip(t *testing.T) {
 		"spec":     map[string]interface{}{"source": map[string]interface{}{"blob": map[string]interface{}{"sha256": "abc123", "url": "http://shpyrd-server.shpyrd-system.svc/api/sources/abc123.tgz"}}},
 		"status":   map[string]interface{}{"phase": "Running"},
 	}}
-	team := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "shpyrd.io/v1alpha1", "kind": "Team",
-		"metadata": map[string]interface{}{"name": "platform"},
-		"spec":     map[string]interface{}{"members": []interface{}{"ops@example.test"}},
-	}}
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "apps"}:           "AppList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "volumes"}:        "VolumeList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "postgres"}:       "PostgresList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "redis"}:          "RedisList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "logdrains"}:      "LogDrainList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "teams"}:          "TeamList",
-		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "projectmembers"}: "ProjectMemberList",
-		{Group: "dex.coreos.com", Version: "v1", Resource: "passwords"}:       "PasswordList",
-		{Group: "dex.coreos.com", Version: "v1", Resource: "connectors"}:      "ConnectorList",
-	}, app, team)
+		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "apps"}:      "AppList",
+		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "volumes"}:   "VolumeList",
+		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "postgres"}:  "PostgresList",
+		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "redis"}:     "RedisList",
+		{Group: "shpyrd.io", Version: "v1alpha1", Resource: "logdrains"}: "LogDrainList",
+		{Group: "dex.coreos.com", Version: "v1", Resource: "passwords"}:  "PasswordList",
+		{Group: "dex.coreos.com", Version: "v1", Resource: "connectors"}: "ConnectorList",
+	}, app)
 
 	st := store.NewMemory()
 	if _, err := st.TouchIdentity(context.Background(), store.DefaultWorkspace, store.Identity{Email: "ops@example.test", Issuer: "https://idp.test", Subject: "ops"}); err != nil {
@@ -326,5 +319,37 @@ func TestExportEncryptedSpoolsToDiskAndStreamsSources(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(failed); len(left) != 0 {
 		t.Errorf("files left after a failed export: %v", left)
+	}
+}
+
+// An archive from before the control-plane store carries teams and project
+// members as Team and ProjectMember objects. They go straight into the
+// store, with neither definition on the cluster (#249), and a grant to a
+// person nobody has signed in as yet restores too: as an unbound principal,
+// the way any email-only permission from an old backup does.
+func TestRestoreLegacyMembershipWithoutTheDefinitions(t *testing.T) {
+	a := &Archive{Files: map[string][]byte{
+		"cluster/teams.yaml":          []byte("---\napiVersion: shpyrd.io/v1alpha1\nkind: Team\nmetadata: {name: platform}\nspec: {members: [ops@example.test], platformRole: platform-admin}\n"),
+		"cluster/projectmembers.yaml": []byte("---\napiVersion: shpyrd.io/v1alpha1\nkind: ProjectMember\nmetadata: {name: shop-developer-user-dev}\nspec: {project: shop, role: developer, user: dev@example.test}\n---\napiVersion: shpyrd.io/v1alpha1\nkind: ProjectMember\nmetadata: {name: shop-admin-team-platform}\nspec: {project: shop, role: admin, team: platform}\n"),
+	}}
+	st := store.NewMemory()
+	r := &Restorer{Dynamic: dynfake.NewSimpleDynamicClient(runtime.NewScheme()), Archive: a, System: true,
+		ImportStore: func(ctx context.Context, _ string, d *store.Dump, overwrite bool) error {
+			_, err := st.Import(ctx, store.DefaultWorkspace, d, overwrite)
+			return err
+		}}
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if team, err := st.GetTeam(ctx, store.DefaultWorkspace, "platform"); err != nil || team.PlatformRole != "platform-admin" {
+		t.Errorf("team platform = %+v, %v", team, err)
+	}
+	grants, err := st.ListGrants(ctx, store.DefaultWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 2 {
+		t.Errorf("grants = %+v, want the user's and the team's", grants)
 	}
 }
