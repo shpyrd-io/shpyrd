@@ -105,7 +105,8 @@ func TestDomainsCertificatesAndStatus(t *testing.T) {
 	for _, it := range list.Items {
 		names[it.GetName()] = true
 	}
-	if len(names) != 2 || !names[certificateSecretName(app, "www.myprod.com")] || !names[certificateSecretName(app, "myprod.com")] {
+	// One per custom domain, and the internal name's (#311).
+	if len(names) != 3 || !names[certificateSecretName(app, "www.myprod.com")] || !names[certificateSecretName(app, "myprod.com")] || !names[certificateSecretName(app, internalHost(app))] {
 		t.Errorf("certificates = %v", names)
 	}
 
@@ -132,8 +133,13 @@ func TestDomainsCertificatesAndStatus(t *testing.T) {
 	if err := c.List(context.Background(), list, client.InNamespace("app-shop")); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Items) != 1 || list.Items[0].GetName() != certificateSecretName(app, "www.myprod.com") {
-		t.Errorf("after removal: %d certificates", len(list.Items))
+	// The removed domain's goes; the one kept and the internal name's stay.
+	left := map[string]bool{}
+	for _, it := range list.Items {
+		left[it.GetName()] = true
+	}
+	if len(left) != 2 || !left[certificateSecretName(app, "www.myprod.com")] || !left[certificateSecretName(app, internalHost(app))] {
+		t.Errorf("after removal: %v", left)
 	}
 }
 

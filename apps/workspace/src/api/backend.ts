@@ -549,6 +549,7 @@ export const backend: Api = {
   removeMember: (slug, name) =>
     request(`${project(slug)}/members/${encodeURIComponent(name)}`, gone),
   allow: (slug) => request(`${project(slug)}/allow`),
+  calls: (slug) => request(`${project(slug)}/calls`),
   setAllow: (slug, entries) =>
     request(`${project(slug)}/allow`, json("PUT", entries)),
   streamLogs: (slug, query, signal, onLine) => {

@@ -145,13 +145,17 @@ type AppDetail struct {
 	Featured    bool   `json:"featured,omitempty"`
 	// CatalogEntry names the catalog entry the project was installed
 	// from, when it was (pkg/catalog).
-	CatalogEntry string                            `json:"catalogEntry,omitempty"`
-	Icon         string                            `json:"icon,omitempty"`
-	IconColor    string                            `json:"iconColor,omitempty"`
-	IconURL      string                            `json:"iconUrl,omitempty"`
-	IconType     string                            `json:"iconType,omitempty"`
-	Domain       string                            `json:"domain,omitempty"`
-	Namespace    string                            `json:"namespace"`
+	CatalogEntry string `json:"catalogEntry,omitempty"`
+	Icon         string `json:"icon,omitempty"`
+	IconColor    string `json:"iconColor,omitempty"`
+	IconURL      string `json:"iconUrl,omitempty"`
+	IconType     string `json:"iconType,omitempty"`
+	Domain       string `json:"domain,omitempty"`
+	Namespace    string `json:"namespace"`
+	// InternalHost is the project's qualified internal name (#311),
+	// <slug>.<workspace>.internal; <slug>.internal is the short form from
+	// inside the workspace.
+	InternalHost string                            `json:"internalHost,omitempty"`
 	CreatedAt    time.Time                         `json:"createdAt"`
 	Spec         AppDetailSpec                     `json:"spec"`
 	Status       AppDetailStatus                   `json:"status"`

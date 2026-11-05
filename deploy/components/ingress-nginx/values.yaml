@@ -28,6 +28,10 @@ controller:
     X-Shpyrd-Name: ""
     X-Shpyrd-Teams: ""
     X-Shpyrd-Roles: ""
+    # A service identity (#311) is the edge's to set too: a missing header
+    # means a person or nobody.
+    X-Shpyrd-Service: ""
+    X-Shpyrd-Caller-Project: ""
 
   metrics:
     enabled: true

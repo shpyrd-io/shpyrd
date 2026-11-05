@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Plus, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
@@ -18,7 +18,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
 import { api, type ProjectRole } from "@/api/api";
-import type { Access as AccessMode, AllowEntry, Member, Project } from "@/api/types";
+import type { Access as AccessMode, AllowEntry, CallerCalls, Member, Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import { ago, openUrl } from "@/lib/project";
 import { Failed, Loading, when } from "./shared";
@@ -328,9 +328,26 @@ function AddMember({ onAdd }: { onAdd: (m: Member) => void }) {
 // another project, or a caller of the platform, is let in here.
 const callers: Record<NonNullable<AllowEntry["platform"]>, string> = { mcp: "the MCP connector", actions: "the server, acting for a person" };
 
+// callsWords says a caller's day in one line: "1,204 · last 2m ago", or "none".
+export function callsWords(c: CallerCalls | undefined): string {
+  if (!c || c.calls === 0) return "none";
+  const count = c.calls.toLocaleString("en-US");
+  return c.lastAt ? `${count} · last ${ago(c.lastAt)}` : count;
+}
+
 export function Connections({ project, perms }: { project: Project; perms: Perms }) {
   const queries = useQueryClient();
+  // What a project let in calls: the short name from inside the workspace.
+  const internalURL = `http://${project.slug}.internal`;
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text);
+    toast.success("Copied", { description: text });
+  };
   const allow = useQuery({ queryKey: ["allow", project.slug], queryFn: () => api.allow(project.slug) });
+  // The calls of the last day, by caller, when there are metrics.
+  const calls = useQuery({ queryKey: ["calls", project.slug], queryFn: () => api.calls(project.slug), refetchInterval: 30_000 });
+  const callsBy = new Map((calls.data?.callers ?? []).map((c) => [c.caller, c]));
+  const showCalls = calls.data?.available ?? false;
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects, enabled: perms.members });
   const [kind, setKind] = useState<"project" | "platform">("project");
   const [value, setValue] = useState("");
@@ -358,6 +375,16 @@ export function Connections({ project, perms }: { project: Project; perms: Perms
       </CardHeader>
       <CardContent>
         <Stack gap="normal">
+          <p className="text-sm text-muted-foreground">
+            A project let in calls this one at <InlineCode>{internalURL}</InlineCode>
+            <Button variant="ghost" size="icon-xs" icon={<Copy />} aria-label="Copy the internal address" onClick={() => copy(internalURL)} />
+            {project.internalHost && (
+              <>
+                {" "}
+                (or <InlineCode>http://{project.internalHost}</InlineCode>) and reads who called in <InlineCode>X-Shpyrd-Service</InlineCode>.
+              </>
+            )}
+          </p>
           {allow.isLoading ? (
             <Loading />
           ) : allow.error ? (
@@ -370,6 +397,7 @@ export function Connections({ project, perms }: { project: Project; perms: Perms
                 <TableRow>
                   <TableHead>Let in</TableHead>
                   <TableHead>What it is</TableHead>
+                  {showCalls && <TableHead>Calls, last 24 hours</TableHead>}
                   <TableHead className="text-right" />
                 </TableRow>
               </TableHeader>
@@ -380,6 +408,7 @@ export function Connections({ project, perms }: { project: Project; perms: Perms
                       <InlineCode>{e.project ?? e.platform}</InlineCode>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{e.project ? "a project of the workspace" : callers[e.platform!]}</TableCell>
+                    {showCalls && <TableCell className="text-xs text-muted-foreground">{e.project ? callsWords(callsBy.get(e.project)) : "—"}</TableCell>}
                     <TableCell className="text-right">
                       {perms.members && (
                         <Button variant="ghost" size="icon-xs" icon={<Trash2 />} aria-label={`Shut out ${e.project ?? e.platform}`} disabled={set.isPending} onClick={() => set.mutate(entries.filter((x) => !same(x, e)))} />

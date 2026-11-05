@@ -154,13 +154,70 @@ shpyrd members list expenses       # what a team would get
 
 ## Between projects
 
-Projects are network-isolated by default: nothing else running on the cluster may reach an app, even from the same workspace, except the front door, the platform and monitoring. A project opens itself to another with its allow list — on its **Connections** page, with `shpyrd allow add project crm --project expenses`, or in `shpyrd.yaml`:
+Projects are network-isolated by default: nothing else running on the cluster may reach an app, even from the same workspace, except the front door, the platform and monitoring. A project opens itself to another with its allow list — on its **Connections** page, with `shpyrd allow add project expenses --project crm`, or in `shpyrd.yaml`:
 
 ```yaml
 allow:
-  - project: crm       # crm may call expenses through expenses' Service or hostname
+  - project: expenses   # expenses may call crm at http://crm.internal
 ```
 
-The listed project must be one of the workspace's own: allows never cross a workspace, and the platform refuses a name that is not there. Changes apply within seconds and create no release. The caller reaches the callee at `http://<callee>-web.<callee namespace>.svc` inside the cluster (or through its public hostname, which goes through the front door and the callee's access mode).
+The listed project must be one of the workspace's own: allows never cross a workspace, and the platform refuses a name that is not there. Changes apply within seconds and create no release.
 
-The platform's own callers are let in the same way: `shpyrd allow add platform mcp --project expenses` lets the MCP connector call the app directly, and `shpyrd allow add platform actions --project expenses` lets the shpyrd server call it on a person's behalf.
+### Calling by name
+
+From any instance of a project let in, the callee answers at **`http://<project>.internal`**:
+
+```js
+const res = await fetch("http://crm.internal/api/customers");
+```
+
+Nothing to configure and no token to keep: the name resolves inside the cluster to the platform's internal front door, which knows which project is calling from the address the call comes from, checks the callee's allow list, and passes the call on. `http://crm.acme.internal` — the project, then the workspace — is the same name written in full, and always valid. The names never leave the cluster; the callee's public hostname still works too, through the front door and the callee's access mode, for a person's identity rather than a project's.
+
+A call that is not admitted is refused at the front door with a JSON body saying why — `crm does not let shop in` — and counted among the project's denials with the reason `service`. A callee with no instance ready answers 503 with `Retry-After`; a sleeping callee is woken by the call like by a visit. The callee's **Connections** page shows, beside each project let in, how many calls it made in the last day and when the last one was.
+
+### Over TLS
+
+Plain HTTP is enough inside the cluster, but a client that insists on `https://crm.internal` gets it: the name carries a certificate signed by the platform's own CA, which every process is given to trust. The bundle — the public roots plus that CA — is mounted in every process at the path `SHPYRD_CA_FILE` names (`/etc/shpyrd/ca/ca-certificates.crt`); Node reads it by itself, through `NODE_EXTRA_CA_CERTS`. Elsewhere, point the client at the file:
+
+| Runtime | How |
+| --- | --- |
+| Node | nothing: `NODE_EXTRA_CA_CERTS` is set |
+| Go | `SSL_CERT_FILE=$SHPYRD_CA_FILE` in the process's config vars, or load the file into the client's root pool |
+| Python (requests, httpx) | `REQUESTS_CA_BUNDLE=$SHPYRD_CA_FILE`, `SSL_CERT_FILE=$SHPYRD_CA_FILE` |
+| curl | `curl --cacert $SHPYRD_CA_FILE https://crm.internal/` |
+| Ruby, Java | `SSL_CERT_FILE` for OpenSSL-based clients; Java imports the file into a truststore |
+
+### Who is calling
+
+The callee receives the caller's identity the way it receives a person's: in headers it can read, and in a JWT it can verify.
+
+| Header | Example | Meaning |
+| --- | --- | --- |
+| `X-Shpyrd-Service` | `svc:acme/expenses` | the calling project, as `svc:<workspace>/<project>` |
+| `X-Shpyrd-Caller-Project` | `expenses` | the calling project's slug alone |
+| `Authorization` | `Bearer eyJ…` | a JWT about the caller, five minutes long |
+
+The JWT is signed with the same keys as a person's, published at `<iss>/.well-known/jwks.json`, and tells the two apart by its realm:
+
+```json
+{
+  "iss": "https://acme.shpyrd.cloud",
+  "sub": "svc:acme/expenses",
+  "aud": "crm",
+  "ws": "acme",
+  "project": "crm",
+  "realm": "service",
+  "roles": [],
+  "teams": [],
+  "iat": 1790000000,
+  "exp": 1790000300
+}
+```
+
+So an app telling people and projects apart reads `X-Shpyrd-Service` — or verifies the token and reads `realm` — and treats a request with neither as a person's, or nobody's: the headers are the platform's to set and are dropped from every request that did not go through its edge, so a project cannot claim another's name, and a person cannot claim a project's. The person headers (`X-Shpyrd-User` and the rest) are never set on a service call.
+
+The platform's own callers are let in the same way: `shpyrd allow add platform mcp --project expenses` lets the MCP connector call the app directly, and `shpyrd allow add platform actions --project expenses` lets the shpyrd server call it on a person's behalf. They reach the app by its Service inside the cluster for now; a service identity for them comes with app actions and the MCP server calling apps.
+
+<Callout title="Self-hosted" type="note">
+The names come from CoreDNS. `shpyrd cluster apply` writes an `internal` zone into the `coredns` ConfigMap of `kube-system`, answering every `*.internal` with the internal ingress controller's address (the external one on a cluster with a single front door). Where the cluster's DNS is managed by the provider and the Corefile is overwritten (an EKS add-on updated with `OVERWRITE`), run `shpyrd cluster apply` again, or add the zone to the provider's own configuration.
+</Callout>

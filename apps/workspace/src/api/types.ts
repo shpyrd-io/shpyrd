@@ -255,6 +255,9 @@ export type ProjectSummary = {
   // The catalog entry it was installed from, when it was.
   catalogEntry?: string;
   namespace: string;
+  // Its name inside the cluster, <slug>.<workspace>.internal, for the
+  // projects it lets in; <slug>.internal is the short form (#311).
+  internalHost?: string;
   phase: string;
   message?: string;
   url?: string;
@@ -643,6 +646,11 @@ export type Member = {
 // a caller of the platform (the MCP connector, the server acting for a
 // person). Nothing may, until it is listed.
 export type AllowEntry = { project?: string; platform?: "actions" | "mcp" };
+
+// The calls the project received at its internal name in the last day,
+// by calling project (#311); available is false where there are no metrics.
+export type CallerCalls = { caller: string; calls: number; lastAt?: string };
+export type ProjectCalls = { available: boolean; callers: CallerCalls[] };
 
 // Software connected to the workspace as a person: an assistant through
 // MCP. Each may be cut without touching the person.

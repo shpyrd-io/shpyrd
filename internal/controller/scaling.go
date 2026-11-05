@@ -218,7 +218,9 @@ func (r *AppReconciler) reconcileWebScaling(ctx context.Context, app *shpyrdv1.A
 	ir := makeUnstructured(InterceptorRouteGVK, app.Name, app.Namespace)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ir, func() error {
 		ir.SetLabels(mergeMaps(ir.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd"}))
-		hosts := r.Config.domains(app)
+		// The internal name too (#311): a call from another project wakes
+		// the app like a visit does.
+		hosts := append(r.Config.domains(app), internalHost(app))
 		rules := make([]interface{}, 0, len(hosts))
 		for _, h := range hosts {
 			rules = append(rules, map[string]interface{}{"hosts": []interface{}{h}})

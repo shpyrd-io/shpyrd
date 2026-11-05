@@ -259,8 +259,18 @@
       ],
       "allow": [
         {
+          "project": "docs"
+        },
+        {
+          "project": "billing"
+        },
+        {
           "platform": "mcp"
         }
+      ],
+      "calls": [
+        { "caller": "docs", "calls": 1204, "lastAt": "2026-10-15T09:05:00Z" },
+        { "caller": "billing", "calls": 7, "lastAt": "2026-10-14T22:41:00Z" }
       ],
       "volumes": [
         {

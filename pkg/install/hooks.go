@@ -33,6 +33,11 @@ type Hook func(ctx context.Context, e *Engine, c *Component) error
 // LocalCASecretName is the Secret holding the local root CA for cert-manager.
 const LocalCASecretName = "shpyrd-root-ca"
 
+// CAClusterIssuer is the ClusterIssuer backed by the platform's own CA
+// (the ca-issuers component): what signs names the public CAs cannot, the
+// internal names (#311) among them.
+const CAClusterIssuer = "shpyrd-ca"
+
 // CABundleName is the ConfigMap trust-manager distributes to every namespace
 // with the cluster CA (key CABundleKey).
 const (
@@ -60,6 +65,7 @@ var hooks = map[string]Hook{
 	"autoscaler-credentials":       autoscalerCredentialsHook,
 	"image-pull-secret":            imagePullSecretHook,
 	"dns-credentials":              dnsCredentialsHook,
+	"internal-names-dns":           internalNamesDNSHook,
 }
 
 // RegisterHook lets extensions add hooks their components reference.
