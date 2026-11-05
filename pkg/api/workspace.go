@@ -363,30 +363,63 @@ func brandingView(w *store.Workspace) *BrandingView {
 	b := w.Settings.Branding
 	out := &BrandingView{Color: b.Color}
 	if b.Logo != "" {
-		sum := sha256.Sum256([]byte(b.Logo))
-		out.LogoURL = "/api/workspace/logo?v=" + hex.EncodeToString(sum[:6])
+		out.LogoURL = "/api/workspace/logo?v=" + logoVersion(b.Logo)
 	}
 	return out
 }
 
+// logoVersion names a logo by what it holds: the v of its address, so a
+// browser keeps one for a day and asks for a new logo at a new address.
+func logoVersion(logo string) string {
+	sum := sha256.Sum256([]byte(logo))
+	return hex.EncodeToString(sum[:6])
+}
+
 // workspaceLogo is GET /api/workspace/logo (public): the image itself,
-// cacheable by its version.
+// kept by the browser for a day when the address names its version. It
+// serves the version the address names, never another under that name:
+// the server runs as more than one replica, and the one that did not take
+// a change still remembers the workspace as it was for a few seconds; what
+// it served then would be kept for a day, and the logo could not change.
 func (s *Server) workspaceLogo(c *gin.Context) {
 	w, err := s.tenant(c)
-	if err != nil || w.Settings.Branding == nil || w.Settings.Branding.Logo == "" {
-		c.Status(http.StatusNotFound)
-		return
-	}
-	raw, err := base64.StdEncoding.DecodeString(w.Settings.Branding.Logo)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=86400")
+	want := c.Query("v")
+	b := w.Settings.Branding
+	if want != "" && (b == nil || logoVersion(b.Logo) != want) {
+		// Not what this server remembers: read the workspace as it is.
+		// When that is the version asked for, the memory was stale, and
+		// is dropped so the next answer about the workspace is right too.
+		if fresh, err := s.store.Workspace(c.Request.Context(), w.Slug); err == nil {
+			b = fresh.Settings.Branding
+			if b != nil && logoVersion(b.Logo) == want {
+				s.forgetTenants()
+			}
+		}
+	}
+	if b == nil || b.Logo == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(b.Logo)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if want == logoVersion(b.Logo) {
+		c.Header("Cache-Control", "public, max-age=86400")
+	} else {
+		// An address of a logo that is gone, or none: what is there now,
+		// not to be kept under that name.
+		c.Header("Cache-Control", "no-store")
+	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	// An SVG opened as a document must not run scripts on this origin.
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	c.Data(http.StatusOK, w.Settings.Branding.LogoType, raw)
+	c.Data(http.StatusOK, b.LogoType, raw)
 }
 
 // hasOwnMethod reports whether the workspace configured a login method of
