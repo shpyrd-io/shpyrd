@@ -317,6 +317,9 @@ export const backend: Api = {
         exposure,
       }),
     ),
+  catalog: () => request("/api/catalog"),
+  catalogEntry: (name) => request(`/api/catalog/entries/${encodeURIComponent(name)}`),
+  installFromCatalog: (name, body) => request(`/api/catalog/entries/${encodeURIComponent(name)}/install`, json("POST", body)),
   updateProject: async (slug, body) =>
     toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
   projectGitHooks: (slug) => request(`${project(slug)}/git-hooks`),

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -631,5 +632,57 @@ func TestKeptOutputIsTheEnd(t *testing.T) {
 	got := keptOutput(b.String())
 	if len(got) > keptOutputBytes || !strings.HasSuffix(got, "the last line") || !strings.HasPrefix(got, "line ") {
 		t.Errorf("kept %d bytes, starts %q, ends %q", len(got), got[:10], got[len(got)-13:])
+	}
+}
+
+// The overlay (pkg/catalog): the files a catalog entry adds to an
+// upstream repository, laid over the checkout before the build.
+func TestTheOverlayIsLaidOverTheSourceAfterTheClone(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	app.Spec.Source.Overlay = &shpyrdv1.BlobSource{URL: "http://shpyrd-server.shpyrd-system.svc/api/sources/ov.tgz?token=t", SHA256: "deadbeef"}
+	script := Config{SystemNamespace: "shpyrd-system"}.fetchScript(app, gitauth.Build{})
+	clone := strings.Index(script, "git clone")
+	lay := strings.Index(script, "wget -qO /tmp/overlay.tgz")
+	if clone < 0 || lay < clone {
+		t.Fatalf("the overlay comes after the source:\n%s", script)
+	}
+	if !strings.Contains(script, "'deadbeef  /tmp/overlay.tgz' | sha256sum -c") || !strings.Contains(script, "tar xzf /tmp/overlay.tgz -C /workspace/src\n") {
+		t.Errorf("the overlay is checked and extracted over the source:\n%s", script)
+	}
+	if !strings.Contains(script, "shpyrd-server.shpyrd-system.svc:"+strconv.Itoa(SourcesPort)) {
+		t.Errorf("the overlay is read from the sources port, as a blob is:\n%s", script)
+	}
+	// With a sub-path the overlay lands in the application's folder.
+	app.Spec.Source.SubPath = "apps/agent"
+	if script := (Config{}).fetchScript(app, gitauth.Build{}); !strings.Contains(script, "tar xzf /tmp/overlay.tgz -C /workspace/src/apps/agent\n") {
+		t.Errorf("the overlay lands in the sub-path:\n%s", script)
+	}
+	// Without one, nothing is added.
+	app.Spec.Source.Overlay = nil
+	if script := (Config{}).fetchScript(app, gitauth.Build{}); strings.Contains(script, "overlay") {
+		t.Errorf("no overlay, no step:\n%s", script)
+	}
+}
+
+func TestANewOverlayIsANewBuild(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	pinGit(app, testCommit)
+	before := buildKey(app)
+	app.Spec.Source.Overlay = &shpyrdv1.BlobSource{URL: "http://x/ov.tgz", SHA256: "aaa"}
+	with := buildKey(app)
+	app.Spec.Source.Overlay.SHA256 = "bbb"
+	if before == with || with == buildKey(app) {
+		t.Fatal("the overlay's digest is part of the build key")
+	}
+}
+
+func TestABuildpacksBuildWithAnOverlayIsRefusedInWords(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	app.Spec.Build = nil
+	app.Spec.Source.Overlay = &shpyrdv1.BlobSource{URL: "http://x/ov.tgz", SHA256: "aaa"}
+	r, _ := newTestReconciler(t, pinGit(app, testCommit))
+	got := runReconcile(t, r, app)
+	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "go with a Dockerfile build") {
+		t.Fatalf("phase %q: %s", got.Status.Phase, got.Status.Message)
 	}
 }

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "@shpyrd/ui/components/sonner";
 import { TooltipProvider } from "@shpyrd/ui/components/tooltip";
+import { Catalog, CatalogEntryPage } from "@/screens/catalog";
 import { Launcher } from "@/screens/launcher";
 import { Invite } from "@/screens/invite";
 import { Login, useDoor } from "@/screens/login";
@@ -52,6 +53,8 @@ function Door() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Launcher />} />
+        <Route path="/catalog" element={<Catalog />} />
+        <Route path="/catalog/:name" element={<CatalogEntryPage />} />
         <Route path="/projects/:slug/*" element={<ProjectPages />} />
         <Route path="/workspace/*" element={<WorkspacePages />} />
         <Route path="*" element={<Navigate to="/" replace />} />

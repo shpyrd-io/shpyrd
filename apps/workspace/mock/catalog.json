@@ -1,0 +1,99 @@
+{
+  "url": "https://shpyrd-io.github.io/catalog/index.json",
+  "fetchedAt": "2026-11-04T09:00:00Z",
+  "categories": ["agents", "automation", "crm"],
+  "entries": [
+    {
+      "name": "fluxyr",
+      "digest": "sha256:4f1c7e2a9b8d6c3e1f0a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
+      "displayName": "Fluxyr",
+      "description": "A Python framework for agents, skills and durable execution, with its own web UI.",
+      "category": "agents",
+      "tags": ["agent", "python", "llm"],
+      "icon": "message-square",
+      "iconColor": "teal",
+      "publisher": "shpyrd",
+      "license": "MPL-2.0",
+      "homepage": "https://github.com/shpyrd-io/fluxyr",
+      "source": { "git": "https://github.com/shpyrd-io/fluxyr", "revision": "main" },
+      "inputs": [
+        { "name": "FLUXYR_MODEL", "label": "Model", "help": "The model the agent answers with, as the provider names it.", "default": "minimax/minimax-m3" },
+        { "name": "OPENROUTER_API_KEY", "label": "OpenRouter API key", "help": "From openrouter.ai/keys. Kept as a secret of the project.", "secret": true, "required": true },
+        { "name": "VAULT_ENCRYPTION_KEY", "label": "Vault key", "secret": true, "generate": 32 }
+      ],
+      "volumes": [{ "name": "data", "size": "5Gi" }],
+      "resources": [],
+      "processes": ["web"],
+      "build": "dockerfile",
+      "readme": "# Fluxyr\n\nFlask-compatible Python framework for agents, skills and durable execution.\n\nThe agent builds, tests and saves Python skills through chat. It keeps its state on the project's disk; an OpenRouter key is enough to start."
+    },
+    {
+      "name": "hermes-agent",
+      "digest": "sha256:9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+      "displayName": "Hermes Agent",
+      "description": "An open-source agent with tools, memory and a chat interface, run on your own keys.",
+      "category": "agents",
+      "tags": ["agent", "python"],
+      "icon": "headset",
+      "iconColor": "violet",
+      "publisher": "community",
+      "license": "MIT",
+      "homepage": "https://github.com/example/hermes-agent",
+      "source": { "git": "https://github.com/example/hermes-agent", "revision": "main" },
+      "inputs": [
+        { "name": "ANTHROPIC_API_KEY", "label": "Anthropic API key", "secret": true, "required": true }
+      ],
+      "volumes": [{ "name": "state", "size": "2Gi" }],
+      "resources": [],
+      "processes": ["web"],
+      "build": "dockerfile",
+      "overlay": ["Dockerfile"],
+      "readme": "# Hermes Agent\n\nA chat agent with tools and memory."
+    },
+    {
+      "name": "twenty",
+      "digest": "sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+      "displayName": "Twenty CRM",
+      "description": "An open-source CRM: contacts, companies and deals, with a Postgres of its own.",
+      "category": "crm",
+      "tags": ["crm", "typescript"],
+      "icon": "briefcase",
+      "iconColor": "blue",
+      "publisher": "community",
+      "license": "AGPL-3.0",
+      "homepage": "https://twenty.com",
+      "source": { "git": "https://github.com/twentyhq/twenty", "revision": "main" },
+      "inputs": [
+        { "name": "APP_SECRET", "label": "Application secret", "secret": true, "generate": 32 }
+      ],
+      "volumes": [{ "name": "storage", "size": "10Gi" }],
+      "resources": [{ "kind": "postgres", "name": "db" }, { "kind": "redis", "name": "cache" }],
+      "processes": ["web", "worker"],
+      "build": "dockerfile",
+      "overlay": ["Dockerfile", "entrypoint.sh"],
+      "readme": "# Twenty\n\nThe CRM, with its database and its cache made in the project."
+    },
+    {
+      "name": "n8n",
+      "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "displayName": "n8n",
+      "description": "Workflow automation: connect services with a visual editor and run them on a schedule.",
+      "category": "automation",
+      "tags": ["automation", "workflows", "node"],
+      "icon": "workflow",
+      "iconColor": "orange",
+      "publisher": "community",
+      "license": "Sustainable Use",
+      "homepage": "https://n8n.io",
+      "source": { "git": "https://github.com/n8n-io/n8n", "revision": "n8n@1.120.0" },
+      "inputs": [
+        { "name": "N8N_ENCRYPTION_KEY", "label": "Encryption key", "secret": true, "generate": 32 }
+      ],
+      "volumes": [{ "name": "data", "size": "5Gi" }],
+      "resources": [{ "kind": "postgres", "name": "db" }],
+      "processes": ["web"],
+      "build": "dockerfile",
+      "readme": "# n8n\n\nPinned to a release tag: a new tag is a new install or a change of revision."
+    }
+  ]
+}

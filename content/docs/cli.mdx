@@ -191,6 +191,16 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd projects info <slug>` | Phase and message, URL, build digest, source, the commit waiting for CI or not deployed and why, processes (with sizes and failing reasons), recent releases, and every resource of the project (app, attached resources, volumes). |
 | `shpyrd projects destroy <name>` | Delete the project and its namespace (`--yes`). |
 
+## Catalog
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd catalog list` | The entries of the catalog: name, category, what each needs at install. |
+| `shpyrd catalog show <entry>` | One entry: its source and build, what it runs and needs, the inputs asked at install, its readme. |
+| `shpyrd catalog install <entry>` | Make a project from the entry: `--input NAME=value` for each input, `--slug`, `--name`, `--revision` to pin a tag instead of following the branch, `--access`, `--exposure`. |
+| `shpyrd catalog validate <dir>` | Check a folder of entries, one per sub-folder (the catalog repository's own check; no server). |
+| `shpyrd catalog publish <dir> --out <folder>` | Write the index a catalog repository serves: `index.json` and the entries' files (its CI runs this). |
+
 ## Deploying and running
 
 | Command | What it does |

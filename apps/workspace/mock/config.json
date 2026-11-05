@@ -3,6 +3,7 @@
   "domain": "acme.shpyrd.cloud",
   "authRequired": true,
   "metrics": true,
+  "catalog": true,
   "auth": {
     "token": false,
     "providers": [

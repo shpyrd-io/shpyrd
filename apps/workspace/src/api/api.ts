@@ -1,6 +1,10 @@
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { ProjectArchiveStatus } from "@shpyrd/shared/api/project-archives";
 import type {
+  CatalogEntry,
+  CatalogInstall,
+  CatalogInstallResult,
+  CatalogView,
   ConvertInfo,
   Access,
   AllowEntry,
@@ -176,6 +180,11 @@ export type Api = {
   projects: () => Promise<ProjectSummary[]>;
   project: (slug: string) => Promise<Project>;
   createProject: (body: NewProject) => Promise<ProjectSummary>;
+  // The catalog of applications a project can be made from, one of its
+  // entries with its readme, and the install of one.
+  catalog: () => Promise<CatalogView>;
+  catalogEntry: (name: string) => Promise<CatalogEntry>;
+  installFromCatalog: (name: string, body: CatalogInstall) => Promise<CatalogInstallResult>;
   updateProject: (
     slug: string,
     body: {

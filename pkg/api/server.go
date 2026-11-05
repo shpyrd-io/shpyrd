@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/catalog"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -70,6 +71,9 @@ type Options struct {
 	// Sources stores uploaded application archives. Nil disables deploys
 	// from local checkouts.
 	Sources *SourceStore
+	// AppCatalog is the catalog of applications a project can be made
+	// from (pkg/catalog); nil reads none.
+	AppCatalog *catalog.Fetcher
 	// Token protects the API. Empty disables authentication (development).
 	Token string
 	// TokenDisabled refuses the admin token: sign-in through accounts only
@@ -162,6 +166,9 @@ type PublicConfig struct {
 	// Capabilities beyond the core this server offers (RFC-0033): empty on
 	// the open-source platform.
 	Capabilities []string `json:"capabilities"`
+	// Catalog says this server reads a catalog of applications
+	// (pkg/catalog): the launcher offers it.
+	Catalog bool `json:"catalog"`
 	// Workspace is the one answering at this host: its slug and name, for
 	// the sign-in page.
 	Workspace *WorkspaceRef `json:"workspace,omitempty"`
@@ -261,6 +268,7 @@ type Server struct {
 	archiveActive    sync.Map           // namespace -> active request; the server runs one replica
 	helm             *action.Configuration
 	sources          *SourceStore
+	appCatalog       *catalog.Fetcher
 	prom             *PromClient
 	rp               *relyingParty
 	authz            *authz.Resolver
@@ -427,7 +435,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	if opts.Public.Capabilities == nil {
 		opts.Public.Capabilities = append([]string{}, opts.Capabilities...)
 	}
-	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
+	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, appCatalog: opts.AppCatalog, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
 	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
 	s.execTickets = newTicketStore(execTicketTTL)
@@ -912,7 +920,12 @@ func (s *Server) routes() error {
 	api.PUT("/projects/:slug/allow", s.require(authz.ProjectMembers), s.setAllow)
 	api.POST("/projects/:slug/preview", s.require(authz.ProjectDeploy), s.previewApp) // "Open as"
 	api.GET("/launcher", s.launcher)                                                  // the apps the caller may open
-	api.GET("/tokens", s.listTokens)                                                  // RFC-0031: the caller's tokens
+	// The catalog (pkg/catalog): browsed and installed from by whoever
+	// may make a project.
+	api.GET("/catalog", s.require(authz.ClusterCreate), s.catalogIndex)
+	api.GET("/catalog/entries/:name", s.require(authz.ClusterCreate), s.catalogEntry)
+	api.POST("/catalog/entries/:name/install", s.require(authz.ClusterCreate), s.catalogInstall)
+	api.GET("/tokens", s.listTokens) // RFC-0031: the caller's tokens
 	api.POST("/tokens", s.createToken)
 	api.DELETE("/tokens/:id", s.deleteToken)
 	api.GET("/projects/:slug/domains", s.require(authz.ProjectView), s.listDomains) // RFC-0034
@@ -1104,6 +1117,7 @@ func (s *Server) auth() gin.HandlerFunc {
 func (s *Server) config(c *gin.Context) {
 	pub := s.opts.Public
 	pub.Auth = s.authConfigFor(c)
+	pub.Catalog = s.appCatalog != nil
 	pub.Door = tenancy.RealmWorkspace
 	if s.atConsole(c) {
 		pub.Door = tenancy.RealmConsole // the console application, at the console host and for internal callers

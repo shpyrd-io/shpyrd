@@ -29,6 +29,9 @@ export type PublicConfig = {
   // What the server offers beyond the core: "workspaces". The
   // open-source core adds nothing.
   capabilities?: string[];
+  // Whether the server reads a catalog of applications a project can be
+  // made from: the launcher offers it.
+  catalog?: boolean;
   workspace?: {
     capabilities?: WorkspaceCapabilities;
     slug: string;
@@ -249,6 +252,8 @@ export type ProjectSummary = {
   displayName: string;
   description?: string;
   featured?: boolean;
+  // The catalog entry it was installed from, when it was.
+  catalogEntry?: string;
   namespace: string;
   phase: string;
   message?: string;
@@ -836,3 +841,55 @@ export type OOMKill = {
   size?: string;
   release?: number;
 };
+
+// The catalog: applications a project can be made from. An entry says
+// what it is, where its code lives and what it asks at install; installing
+// it makes a project with all of that.
+export type CatalogInput = {
+  name: string;
+  label: string;
+  help?: string;
+  secret?: boolean;
+  required?: boolean;
+  default?: string;
+  // Made at install, that many random bytes: never asked.
+  generate?: number;
+};
+export type CatalogEntry = {
+  name: string;
+  digest: string;
+  displayName: string;
+  description: string;
+  category: string;
+  tags?: string[];
+  icon?: string;
+  iconColor?: string;
+  iconUrl?: string;
+  publisher?: string;
+  license?: string;
+  homepage?: string;
+  source: { git: string; revision: string; subPath?: string };
+  inputs: CatalogInput[];
+  volumes: { name: string; size: string }[];
+  resources: { kind: string; name: string }[];
+  processes: string[];
+  build: "buildpacks" | "dockerfile";
+  overlay?: string[];
+  // The readme, Markdown; only when one entry is asked for.
+  readme?: string;
+};
+export type CatalogView = {
+  url: string;
+  fetchedAt?: string;
+  categories: string[];
+  entries: CatalogEntry[];
+};
+export type CatalogInstall = {
+  slug?: string;
+  name?: string;
+  inputs?: Record<string, string>;
+  revision?: string;
+  access?: Access;
+  exposure?: Exposure;
+};
+export type CatalogInstallResult = { project: ProjectSummary; notes?: string[] };

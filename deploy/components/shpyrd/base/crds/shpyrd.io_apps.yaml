@@ -855,6 +855,30 @@ spec:
                     required:
                     - url
                     type: object
+                  overlay:
+                    description: |-
+                      Overlay is an archive laid over the checkout before the build: the
+                      files a catalog entry adds to an upstream repository (a Dockerfile,
+                      a config file). It goes with a Dockerfile build; the buildpacks
+                      builder reads one source, and a build with both is refused in
+                      words. The build key and the deploy token take it in: a new overlay
+                      is a new build.
+                    properties:
+                      ref:
+                        description: Ref is a human readable origin such as the git
+                          commit.
+                        type: string
+                      sha256:
+                        description: SHA256 of the archive; identifies the release
+                          source.
+                        type: string
+                      url:
+                        description: URL is reachable from inside the cluster (served
+                          by shpyrd-server).
+                        type: string
+                    required:
+                    - url
+                    type: object
                   subPath:
                     description: SubPath is a directory inside the source that holds
                       the application.

@@ -4,6 +4,7 @@ import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
 import { buildFailed } from "./types";
 import type { Api } from "./api";
 import type {
+  CatalogView,
   Globals,
   AllowEntry,
   APIToken,
@@ -39,6 +40,7 @@ import type {
 } from "./types";
 import { buildOutput, liveLine, logsOf, metricsOf } from "@/lib/samples";
 import audit from "../../mock/audit.json";
+import catalog from "../../mock/catalog.json";
 import config from "../../mock/config.json";
 import me from "../../mock/me.json";
 import projects from "../../mock/projects.json";
@@ -791,6 +793,43 @@ export const mock: Api = {
     };
     await projectsOf.set(created);
     return summary(created);
+  },
+  // The catalog, from its file; an install is a project made from the
+  // entry, with the entry's symbol and its mark.
+  catalog: async () => {
+    await wait();
+    const view = structuredClone(catalog) as CatalogView;
+    for (const e of view.entries) delete e.readme;
+    return view;
+  },
+  catalogEntry: async (name) => {
+    await wait();
+    const e = (catalog as CatalogView).entries.find((x) => x.name === name);
+    if (!e) throw new ApiError(404, `the catalog has no entry "${name}"`);
+    return structuredClone(e);
+  },
+  installFromCatalog: async (name, body) => {
+    const e = (catalog as CatalogView).entries.find((x) => x.name === name);
+    if (!e) throw new ApiError(404, `the catalog has no entry "${name}"`);
+    const missing = e.inputs.filter((i) => i.required && !body.inputs?.[i.name]?.trim()).map((i) => `${i.label} (${i.name})`);
+    if (missing.length) throw new ApiError(422, `the install needs ${missing.join(", ")}`);
+    const slug = body.slug?.trim() || e.name;
+    const made = await mock.createProject({
+      slug,
+      displayName: body.name?.trim() || e.displayName,
+      description: e.description,
+      git: { url: e.source.git, revision: body.revision?.trim() || e.source.revision },
+      subPath: e.source.subPath,
+      exposure: body.exposure,
+    });
+    const p = await projectsOf.find(slug);
+    p.icon = e.icon;
+    p.iconColor = e.iconColor;
+    p.catalogEntry = e.name;
+    p.phase = "Building";
+    p.status.phase = "Building";
+    await projectsOf.set(p);
+    return { project: { ...made, icon: e.icon, iconColor: e.iconColor, catalogEntry: e.name, phase: "Building" } };
   },
   updateProject: async (slug, body) => {
     const p = await projectsOf.find(slug);

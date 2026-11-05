@@ -42,17 +42,20 @@ type AppSummary struct {
 	// DisplayName is the human name; the slug when none was given.
 	DisplayName string `json:"displayName"`
 	// Description and Featured are the launcher's (RFC-0033).
-	Description string                            `json:"description,omitempty"`
-	Featured    bool                              `json:"featured,omitempty"`
-	Namespace   string                            `json:"namespace"`
-	Phase       string                            `json:"phase"`
-	Message     string                            `json:"message,omitempty"`
-	URL         string                            `json:"url,omitempty"`
-	Digest      string                            `json:"digest,omitempty"`
-	Release     int                               `json:"release"`
-	Source      string                            `json:"source,omitempty"`
-	Processes   map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
-	CreatedAt   time.Time                         `json:"createdAt"`
+	Description string `json:"description,omitempty"`
+	Featured    bool   `json:"featured,omitempty"`
+	// CatalogEntry names the catalog entry the project was installed
+	// from, when it was (pkg/catalog).
+	CatalogEntry string                            `json:"catalogEntry,omitempty"`
+	Namespace    string                            `json:"namespace"`
+	Phase        string                            `json:"phase"`
+	Message      string                            `json:"message,omitempty"`
+	URL          string                            `json:"url,omitempty"`
+	Digest       string                            `json:"digest,omitempty"`
+	Release      int                               `json:"release"`
+	Source       string                            `json:"source,omitempty"`
+	Processes    map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
+	CreatedAt    time.Time                         `json:"createdAt"`
 	// Exposure is "external" (public LB, default) or "internal" (private LB,
 	// RFC-0036). Empty means external.
 	Exposure string `json:"exposure,omitempty"`
@@ -80,23 +83,24 @@ type AppSummary struct {
 
 func summarize(a *shpyrdv1.App) AppSummary {
 	s := AppSummary{
-		Exposure:    a.Spec.Exposure,
-		Access:      a.EffectiveAccess(),
-		ID:          a.Spec.ID,
-		Slug:        project.SlugOf(a),
-		DisplayName: project.DisplayName(a),
-		Description: project.Description(a),
-		Featured:    project.Featured(a),
-		Namespace:   a.Namespace,
-		Phase:       a.Status.Phase,
-		Message:     a.Status.Message,
-		URL:         a.Status.URL,
-		Digest:      Digest(a.Status.Image),
-		Processes:   a.Status.Processes,
-		CreatedAt:   a.CreationTimestamp.Time,
-		Icon:        project.Icon(a),
-		IconColor:   project.IconColor(a),
-		Domain:      domainOf(a),
+		Exposure:     a.Spec.Exposure,
+		Access:       a.EffectiveAccess(),
+		ID:           a.Spec.ID,
+		Slug:         project.SlugOf(a),
+		DisplayName:  project.DisplayName(a),
+		Description:  project.Description(a),
+		CatalogEntry: a.Annotations[shpyrdv1.AnnotationCatalogEntry],
+		Featured:     project.Featured(a),
+		Namespace:    a.Namespace,
+		Phase:        a.Status.Phase,
+		Message:      a.Status.Message,
+		URL:          a.Status.URL,
+		Digest:       Digest(a.Status.Image),
+		Processes:    a.Status.Processes,
+		CreatedAt:    a.CreationTimestamp.Time,
+		Icon:         project.Icon(a),
+		IconColor:    project.IconColor(a),
+		Domain:       domainOf(a),
 	}
 	s.IconURL, s.IconType = iconURL(a)
 	if m := a.Spec.Maintenance; m != nil && m.Enabled {
@@ -134,21 +138,24 @@ func Digest(image string) string {
 
 // AppDetail is the App with image references replaced by digests.
 type AppDetail struct {
-	ID          string                            `json:"id,omitempty"`
-	Slug        string                            `json:"slug"`
-	DisplayName string                            `json:"displayName"`
-	Description string                            `json:"description,omitempty"`
-	Featured    bool                              `json:"featured,omitempty"`
-	Icon        string                            `json:"icon,omitempty"`
-	IconColor   string                            `json:"iconColor,omitempty"`
-	IconURL     string                            `json:"iconUrl,omitempty"`
-	IconType    string                            `json:"iconType,omitempty"`
-	Domain      string                            `json:"domain,omitempty"`
-	Namespace   string                            `json:"namespace"`
-	CreatedAt   time.Time                         `json:"createdAt"`
-	Spec        AppDetailSpec                     `json:"spec"`
-	Status      AppDetailStatus                   `json:"status"`
-	Processes   map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description,omitempty"`
+	Featured    bool   `json:"featured,omitempty"`
+	// CatalogEntry names the catalog entry the project was installed
+	// from, when it was (pkg/catalog).
+	CatalogEntry string                            `json:"catalogEntry,omitempty"`
+	Icon         string                            `json:"icon,omitempty"`
+	IconColor    string                            `json:"iconColor,omitempty"`
+	IconURL      string                            `json:"iconUrl,omitempty"`
+	IconType     string                            `json:"iconType,omitempty"`
+	Domain       string                            `json:"domain,omitempty"`
+	Namespace    string                            `json:"namespace"`
+	CreatedAt    time.Time                         `json:"createdAt"`
+	Spec         AppDetailSpec                     `json:"spec"`
+	Status       AppDetailStatus                   `json:"status"`
+	Processes    map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
 	// GitHubFeatures: the GitHub App covers the repository, so watch paths
 	// and wait for CI apply (RFC-0054). SourceNote says when they are set
 	// and do not.
@@ -233,16 +240,17 @@ func releaseKind(prev *shpyrdv1.Release, cur shpyrdv1.Release) string {
 
 func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 	d := AppDetail{
-		ID:          a.Spec.ID,
-		Slug:        project.SlugOf(a),
-		DisplayName: project.DisplayName(a),
-		Description: project.Description(a),
-		Featured:    project.Featured(a),
-		Icon:        project.Icon(a),
-		IconColor:   project.IconColor(a),
-		Domain:      domainOf(a),
-		Namespace:   a.Namespace,
-		CreatedAt:   a.CreationTimestamp.Time,
+		ID:           a.Spec.ID,
+		Slug:         project.SlugOf(a),
+		DisplayName:  project.DisplayName(a),
+		Description:  project.Description(a),
+		Featured:     project.Featured(a),
+		CatalogEntry: a.Annotations[shpyrdv1.AnnotationCatalogEntry],
+		Icon:         project.Icon(a),
+		IconColor:    project.IconColor(a),
+		Domain:       domainOf(a),
+		Namespace:    a.Namespace,
+		CreatedAt:    a.CreationTimestamp.Time,
 		Spec: AppDetailSpec{
 			Source:      a.Spec.Source,
 			PinnedImage: Digest(a.Spec.Image),
@@ -464,9 +472,21 @@ func (s *Server) createApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	app, ok := s.createProject(c, req, nil)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusCreated, summarize(app))
+}
+
+// createProject makes the project the request asks for, and answers the
+// refusal itself when it cannot. decorate, when given, writes into the App
+// before it is created: what a catalog entry says of a project
+// (catalogInstall).
+func (s *Server) createProject(c *gin.Context, req CreateAppRequest, decorate func(*shpyrdv1.App) error) (*shpyrdv1.App, bool) {
 	if err := validateDeployRequest(&DeployRequest{Exposure: req.Exposure}); err != nil {
 		abort(c, http.StatusBadRequest, err)
-		return
+		return nil, false
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	slug := req.Slug
@@ -474,35 +494,35 @@ func (s *Server) createApp(c *gin.Context) {
 		var err error
 		if slug, err = project.Slug(req.Name); err != nil {
 			abort(c, http.StatusBadRequest, err)
-			return
+			return nil, false
 		}
 	} else if err := project.ValidateSlug(slug); err != nil {
 		abort(c, http.StatusBadRequest, err)
-		return
+		return nil, false
 	}
 	if project.Reserved(slug) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("%q is reserved for the platform; pick another name", slug))
-		return
+		return nil, false
 	}
 	ws, err := s.tenant(c)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
-		return
+		return nil, false
 	}
 	ctx := c.Request.Context()
 	if err := s.checkExposure(ctx, ws.Slug, "", req.Exposure); err != nil {
 		exposureError(c, err)
-		return
+		return nil, false
 	}
 	// The slug is unique within the workspace (RFC-0076: it is a label on
 	// the App, the App is named by its id, so the API checks — not the
 	// API server's name uniqueness).
 	if _, err := s.findApp(ctx, ws.Slug, slug); err == nil {
 		abort(c, http.StatusConflict, fmt.Errorf("project %q already exists; choose another slug, for example %s-2", slug, slug))
-		return
+		return nil, false
 	} else if !errors.Is(err, store.ErrNotFound) {
 		abort(c, http.StatusBadGateway, err)
-		return
+		return nil, false
 	}
 	access := req.Access
 	if access == "" {
@@ -510,14 +530,14 @@ func (s *Server) createApp(c *gin.Context) {
 	}
 	if !validAccess(access) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("access must be public, authenticated or identified"))
-		return
+		return nil, false
 	}
 	// From a GitHub repository: someone who can read it (RFC-0054).
 	var linkedBy string
 	if req.Git != nil && req.Git.URL != "" {
 		var ok bool
 		if linkedBy, ok = s.githubAccess(c, req.Git.URL); !ok {
-			return
+			return nil, false
 		}
 	}
 	// Identity (RFC-0076): a UUID, the App named by its short form in its
@@ -538,6 +558,12 @@ func (s *Server) createApp(c *gin.Context) {
 	if req.Git != nil && req.Git.URL != "" {
 		app.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
 	}
+	if decorate != nil {
+		if err := decorate(app); err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	// One more project, with the instances its processes ask for, judged
 	// against the workspace's ceilings and made under its lock.
 	err = s.admit(ctx, ws.Slug, change{newProject: true, app: app, project: slug}, func(ctx context.Context) error {
@@ -548,11 +574,11 @@ func (s *Server) createApp(c *gin.Context) {
 	})
 	if err != nil {
 		abortAdmission(c, err, http.StatusBadRequest)
-		return
+		return nil, false
 	}
 	s.audit(c, slug, "project.create", project.Label(app), "")
 	s.grantCreator(c, short) // grant key = short base36 id (RFC-0076)
-	c.JSON(http.StatusCreated, summarize(app))
+	return app, true
 }
 
 // grantCreator makes a workspace member the admin of the project they

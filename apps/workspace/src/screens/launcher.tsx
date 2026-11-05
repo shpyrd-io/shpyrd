@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Plus, Settings } from "lucide-react";
+import { FolderPlus, GitBranch, LayoutGrid, Plus, Settings, Store } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Blankslate } from "@shpyrd/ui/components/blankslate";
@@ -19,6 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@shpyrd/ui/components/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@shpyrd/ui/components/dropdown-menu";
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
@@ -55,7 +56,7 @@ export function Launcher() {
       <div className="absolute top-5 right-5 flex items-center gap-1">
         <ThemeButton />
         <PersonMenu />
-        {perms.create && <NewProject />}
+        {perms.create && (config.data?.catalog ? <AddMenu /> : <NewProject />)}
         {perms.admin && (
           <Button variant="outline" size="icon-lg" icon={<Settings />} aria-label="Settings of the workspace" onClick={() => navigate("/workspace")} className={perms.create ? undefined : "ml-2"} />
         )}
@@ -93,6 +94,13 @@ export function Launcher() {
             title="No application yet"
             description="A project is an application and everything it needs to run. Make the first one, and it appears here for everyone who may open it."
             action={<NewProject asButton />}
+            secondaryAction={
+              config.data?.catalog ? (
+                <Button variant="outline" icon={<Store />} asChild>
+                  <Link to="/catalog">From templates</Link>
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <Blankslate
@@ -130,12 +138,52 @@ function Card({ project, operator }: { project: ProjectSummary; operator: boolea
   );
 }
 
-// The dialog that makes a project. It is the "+" at the top, or the
-// button of the empty page.
-export function NewProject({ asButton = false }: { asButton?: boolean }) {
-  const queries = useQueryClient();
+// The "+" at the top when the workspace has a catalog: a menu of the
+// ways to make a project. An empty one and one from GitHub open the
+// dialog; the catalog is a page of its own.
+export function AddMenu() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [start, setStart] = useState<"github" | "url">("url");
+  const openDialog = (from: "github" | "url") => {
+    setStart(from);
+    setOpen(true);
+  };
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon-lg" icon={<Plus />} aria-label="New project" className="ml-2" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44 whitespace-nowrap">
+          <DropdownMenuItem onSelect={() => openDialog("url")}>
+            <FolderPlus /> Empty project
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openDialog("github")}>
+            <GitBranch /> From GitHub
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => navigate("/catalog")}>
+            <Store /> From templates
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <NewProject open={open} onOpenChange={setOpen} start={start} />
+    </>
+  );
+}
+
+// The dialog that makes a project. It is the "+" at the top, or the
+// button of the empty page; opened by the menu, it has no trigger of its
+// own and starts on the tab asked for.
+export function NewProject({ asButton = false, open: controlled, onOpenChange, start }: { asButton?: boolean; open?: boolean; onOpenChange?: (open: boolean) => void; start?: "github" | "url" }) {
+  const queries = useQueryClient();
+  const navigate = useNavigate();
+  const [own, setOwn] = useState(false);
+  const open = controlled ?? own;
+  const setOpen = (next: boolean) => {
+    setOwn(next);
+    onOpenChange?.(next);
+  };
   const [slug, setSlug] = useState("");
   const supportsInternal = useInternalExposure();
   const [exposure, setExposure] = useState<Exposure>("external");
@@ -147,7 +195,11 @@ export function NewProject({ asButton = false }: { asButton?: boolean }) {
   // From GitHub (RFC-0054): offered when the workspace's connections reach
   // a repository, or when GitHub failed, so the error shows; asked only
   // while the dialog is open.
-  const [from, setFrom] = useState<"github" | "url">("github");
+  const [from, setFrom] = useState<"github" | "url">(start ?? "github");
+  // Opened by the menu on a tab, it shows that tab.
+  useEffect(() => {
+    if (open && start) setFrom(start);
+  }, [open, start]);
   const [picked, setPicked] = useState<Picked>();
   const perms = usePerms();
   const accounts = useQuery({ queryKey: ["github-accounts"], queryFn: api.githubAccounts, enabled: open, retry: false, staleTime: 60_000 });
@@ -208,13 +260,15 @@ export function NewProject({ asButton = false }: { asButton?: boolean }) {
   );
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {asButton ? (
-          <Button icon={<Plus />}>New project</Button>
-        ) : (
-          <Button size="icon-lg" icon={<Plus />} aria-label="New project" className="ml-2" />
-        )}
-      </DialogTrigger>
+      {controlled === undefined && (
+        <DialogTrigger asChild>
+          {asButton ? (
+            <Button icon={<Plus />}>New project</Button>
+          ) : (
+            <Button size="icon-lg" icon={<Plus />} aria-label="New project" className="ml-2" />
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader divider>
           <DialogTitle>New project</DialogTitle>

@@ -40,6 +40,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
+	"github.com/shpyrd-io/shpyrd/pkg/catalog"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
@@ -345,6 +346,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		UISources:              os.Getenv("SHPYRD_UI_SOURCES"),
 		UICacheDir:             uiCacheDir(o.dataDir),
 		Sources:                sources,
+		AppCatalog:             catalog.New(os.Getenv("SHPYRD_CATALOG_URL")),
 		SourcesAddr:            fmt.Sprintf(":%d", api.SourcesPort),
 		PeerAddr:               peerAddr(os.Getenv("SHPYRD_POD_IP"), api.SourcesPort),
 		InternalAPIAddr:        ":8083",
