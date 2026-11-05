@@ -99,14 +99,29 @@ func (s *Server) createVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if !volumeName.MatchString(req.Name) {
-		abort(c, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)"))
+	ns, ok := s.projectNamespace(c)
+	if !ok {
 		return
+	}
+	view, status, err := s.makeVolume(c, ns, c.Param("slug"), req)
+	if err != nil {
+		abort(c, status, err)
+		return
+	}
+	c.JSON(status, view)
+}
+
+// makeVolume is createVolume for a project named by its namespace and
+// slug (the catalog's install makes volumes in a project the path does
+// not name): the view of the volume and 201, or the status a refusal
+// takes and why.
+func (s *Server) makeVolume(c *gin.Context, ns, slug string, req CreateVolumeRequest) (VolumeView, int, error) {
+	if !volumeName.MatchString(req.Name) {
+		return VolumeView{}, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)")
 	}
 	size, err := parseSize(req.Size)
 	if err != nil {
-		abort(c, http.StatusBadRequest, err)
-		return
+		return VolumeView{}, http.StatusBadRequest, err
 	}
 	// Provider minimum (RFC-0060): the disk would be that size anyway; say
 	// so before it exists instead of after the bill. Shared volumes are
@@ -119,18 +134,13 @@ func (s *Server) createVolume(c *gin.Context) {
 	} else {
 		size, note = s.applyVolumeMinimum(size)
 	}
-	ns, ok := s.projectNamespace(c)
-	if !ok {
-		return
-	}
 	// A plan without disks says so first, before any question of class or
 	// size; the judgement under the lock says it again.
 	if !s.limitsOf(c.Request.Context(), s.workspace(c)).AllowsDisks() {
-		abort(c, http.StatusBadRequest, errors.New(errNoDisks))
-		return
+		return VolumeView{}, http.StatusBadRequest, errors.New(errNoDisks)
 	}
 	vol := &shpyrdv1.Volume{
-		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: c.Param("slug")}},
+		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: slug}},
 		Spec:       shpyrdv1.VolumeSpec{Size: size, StorageClass: req.StorageClass, AccessMode: corev1.ReadWriteOnce, FromSnapshot: req.FromSnapshot},
 	}
 	if req.Shared {
@@ -138,31 +148,30 @@ func (s *Server) createVolume(c *gin.Context) {
 	}
 	if req.FromSnapshot != "" {
 		if err := s.checkSnapshotUsable(c.Request.Context(), vol.Namespace, req.FromSnapshot, &vol.Spec.Size); err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
+			return VolumeView{}, http.StatusBadRequest, err
 		}
 	}
 	if err := s.checkVolumeClass(c.Request.Context(), vol); err != nil {
-		abort(c, http.StatusBadRequest, err)
-		return
+		return VolumeView{}, http.StatusBadRequest, err
 	}
 	// A new disk, judged against the workspace's ceilings (its plan may
 	// include no disks at all) and made under its lock.
-	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: vol.Spec.Size, newDisk: true}, func(ctx context.Context) error {
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: slug, storage: vol.Spec.Size, newDisk: true}, func(ctx context.Context) error {
 		return s.apps.Create(ctx, vol)
 	})
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			abort(c, http.StatusConflict, fmt.Errorf("volume %q already exists", req.Name))
-		} else {
-			abortAdmission(c, err, http.StatusBadRequest)
+			return VolumeView{}, http.StatusConflict, fmt.Errorf("volume %q already exists", req.Name)
 		}
-		return
+		if r, ok := refused(err); ok {
+			return VolumeView{}, http.StatusBadRequest, errors.New(r.msg)
+		}
+		return VolumeView{}, http.StatusBadGateway, err
 	}
-	s.audit(c, c.Param("slug"), "volume.create", vol.Name, vol.Spec.Size.String())
+	s.audit(c, slug, "volume.create", vol.Name, vol.Spec.Size.String())
 	view := volumeView(*vol)
 	view.Note = note
-	c.JSON(http.StatusCreated, view)
+	return view, http.StatusCreated, nil
 }
 
 // applyVolumeMinimum rounds a request up to the profile's minimum volume

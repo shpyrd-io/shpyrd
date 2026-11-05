@@ -190,7 +190,7 @@ func (s *Server) redirectURIs(ctx context.Context) ([]string, error) {
 	_, gated := s.suspendedGate()
 	for i := range all {
 		ws := &all[i]
-		if ws.Address == "" || (ws.Status == store.WorkspaceSuspended && !gated) {
+		if ws.Address == "" || ws.Gone() || (ws.Status == store.WorkspaceSuspended && !gated) {
 			continue
 		}
 		add("https://" + s.withPort(ws.Address) + "/api/auth/callback")

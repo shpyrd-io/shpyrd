@@ -203,6 +203,7 @@ type restoreFlags struct {
 	noSystem        bool
 	overwrite       bool
 	dryRun          bool
+	restoreDeleted  []string
 }
 
 func newClusterRestoreCmd(g *globalFlags) *cobra.Command {
@@ -240,6 +241,7 @@ stay in the cluster's object storage; a restored database starts empty.
 	cmd.Flags().BoolVar(&f.noSystem, "no-system", false, "skip sizes, globals, sign-in users, teams and members")
 	cmd.Flags().BoolVar(&f.overwrite, "overwrite", false, "update objects that already exist (projects too)")
 	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "show what the archive holds and stop")
+	cmd.Flags().StringArrayVar(&f.restoreDeleted, "restore-deleted", nil, "bring back this workspace although it was deleted (repeatable); a deleted workspace is skipped otherwise")
 	return cmd
 }
 
@@ -329,7 +331,7 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 
 	r := &backup.Restorer{
 		Dynamic: k.Dynamic, Archive: a,
-		Projects: f.projects, System: !f.noSystem, Overwrite: f.overwrite,
+		Projects: f.projects, System: !f.noSystem, Overwrite: f.overwrite, RestoreDeleted: f.restoreDeleted,
 		UploadSourceURL: func(ctx context.Context, sha string, data []byte) (string, error) {
 			raw, err := serverRequest(ctx, k, "POST", "api/sources", data, "application/gzip")
 			if err != nil {
@@ -347,7 +349,7 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 			}
 			return info.URL, nil
 		},
-		ImportStore: func(ctx context.Context, workspace string, dump *store.Dump, overwrite bool) error {
+		ImportStore: func(ctx context.Context, workspace string, dump *store.Dump, overwrite, restoreDeleted bool) error {
 			body, err := json.Marshal(dump)
 			if err != nil {
 				return err
@@ -359,11 +361,19 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 			if workspace != "" {
 				q.Set("workspace", workspace)
 			}
+			if restoreDeleted {
+				q.Set("restoreDeleted", "true")
+			}
 			path := "api/workspace/import"
 			if len(q) > 0 {
 				path += "?" + q.Encode()
 			}
 			_, err = serverRequest(ctx, k, "POST", path, body, "application/json")
+			// The server holds the workspace's tombstone (#274): the
+			// restore skips it unless asked, and says so.
+			if err != nil && strings.Contains(err.Error(), "was deleted on") {
+				return &backup.ErrWorkspaceDeleted{Detail: strings.TrimPrefix(err.Error(), "shpyrd-server: ")}
+			}
 			return err
 		},
 		Log: func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) },
@@ -380,6 +390,9 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 		}
 		if len(res.SkippedProjects) > 0 {
 			fmt.Fprintf(out, "Skipped (already exist): %s.\n", strings.Join(res.SkippedProjects, ", "))
+		}
+		if len(res.SkippedWorkspaces) > 0 {
+			fmt.Fprintf(out, "Skipped workspaces (deleted): %s. --restore-deleted <slug> brings one back.\n", strings.Join(res.SkippedWorkspaces, ", "))
 		}
 	}
 	return err

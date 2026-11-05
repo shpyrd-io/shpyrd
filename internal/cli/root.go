@@ -136,6 +136,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newAutoscaleCmd(g)) // RFC-0047
 	root.AddCommand(newResizeCmd(g))
 	root.AddCommand(newSizesCmd(g))
+	root.AddCommand(newCatalogCmd(g))
 	root.AddCommand(newVolumesCmd(g))
 	root.AddCommand(newAttachCmd(g))
 	root.AddCommand(newDetachCmd(g))

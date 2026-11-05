@@ -101,6 +101,10 @@
   --popover-foreground: oklch(0.145 0 0);
   --primary: #ff4f00;
   --primary-foreground: #ffffff;
+  /* The warm light that rises inside the primary button under the pointer.
+     A workspace's brand colour replaces it with a light of its own. */
+  --primary-light: #ffd27a;
+  --primary-light-soft: rgb(255 170 50 / 0.7);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -175,6 +179,10 @@
   --popover-foreground: oklch(0.985 0 0);
   --primary: #ff4f00;
   --primary-foreground: #ffffff;
+  /* The warm light that rises inside the primary button under the pointer.
+     A workspace's brand colour replaces it with a light of its own. */
+  --primary-light: #ffd27a;
+  --primary-light-soft: rgb(255 170 50 / 0.7);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: #1d1d1f;

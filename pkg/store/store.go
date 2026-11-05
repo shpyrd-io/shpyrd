@@ -76,7 +76,138 @@ type Workspace struct {
 	OwnerInvitePending string    `json:"ownerInvitePending,omitempty"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
+
+	// The lifecycle (#274). A workspace is suspended for a reason and at
+	// a time; a deletion is a date (DeleteAfter) one reaper executes, and
+	// activating cancels it; a workspace made for someone who has not
+	// arrived yet expires unless it is claimed; a protected one is never
+	// scheduled by a policy. Deleted workspaces stay as tombstones: the
+	// row with DeletedAt set, its slug and address held for TombstoneHold,
+	// its ledger rows kept.
+	SuspendedAt   *time.Time `json:"suspendedAt,omitempty"`
+	SuspendReason string     `json:"suspendReason,omitempty"`
+	DeleteAfter   *time.Time `json:"deleteAfter,omitempty"`
+	DeleteReason  string     `json:"deleteReason,omitempty"`
+	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
+	// Origin says what made the workspace (OriginSignup, OriginOperator,
+	// OriginAgent, OriginRestore; "" for those made before it was
+	// recorded); CreatedBy is the actor: an email, a token, an agent.
+	Origin    string `json:"origin,omitempty"`
+	CreatedBy string `json:"createdBy,omitempty"`
+	Protected bool   `json:"protected,omitempty"`
+	// LastActivityAt is when someone last used the workspace, as the
+	// daily pass computed it (RefreshWorkspaceActivity); nil until the
+	// first pass.
+	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
+	DeletedAt      *time.Time `json:"deletedAt,omitempty"`
+	// Deletion is the cascade's progress while the workspace is deleting,
+	// and its record after.
+	Deletion *WorkspaceDeletion `json:"deletion,omitempty"`
+	// TombstoneOwners are the owners' emails at deletion, kept for
+	// TombstoneHold so "where did my workspace go" has an answer, then
+	// scrubbed.
+	TombstoneOwners []string `json:"tombstoneOwners,omitempty"`
 }
+
+// Off says nothing of the workspace is served: it is suspended, being
+// deleted or deleted. Each place that turns a suspended workspace away
+// turns these away too, with their own words (OffTitle).
+func (w *Workspace) Off() bool {
+	return w != nil && (w.Status == WorkspaceSuspended || w.Status == WorkspaceDeleting || w.Status == WorkspaceDeleted)
+}
+
+// Gone says the workspace is being deleted or deleted: nothing brings it
+// back but a restore.
+func (w *Workspace) Gone() bool {
+	return w != nil && (w.Status == WorkspaceDeleting || w.Status == WorkspaceDeleted)
+}
+
+// WorkspaceDeletion records the cascade that removes a workspace (#274):
+// when it began and each step's state. The reaper runs the steps until
+// every one is done, then writes the tombstone.
+type WorkspaceDeletion struct {
+	StartedAt  time.Time      `json:"startedAt"`
+	FinishedAt *time.Time     `json:"finishedAt,omitempty"`
+	Steps      []DeletionStep `json:"steps,omitempty"`
+}
+
+// DeletionStep is one step of the cascade: projects, images, doors, rows.
+type DeletionStep struct {
+	Name   string     `json:"name"`
+	Done   bool       `json:"done"`
+	DoneAt *time.Time `json:"doneAt,omitempty"`
+	// Detail says what was done, or what stands in the way.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Step finds a step by name, adding it when missing.
+func (d *WorkspaceDeletion) Step(name string) *DeletionStep {
+	for i := range d.Steps {
+		if d.Steps[i].Name == name {
+			return &d.Steps[i]
+		}
+	}
+	d.Steps = append(d.Steps, DeletionStep{Name: name})
+	return &d.Steps[len(d.Steps)-1]
+}
+
+// AllDone says every step is done, and there is at least one.
+func (d *WorkspaceDeletion) AllDone() bool {
+	if d == nil || len(d.Steps) == 0 {
+		return false
+	}
+	for _, s := range d.Steps {
+		if !s.Done {
+			return false
+		}
+	}
+	return true
+}
+
+// Reasons a workspace is suspended (SuspendReason). The billing app
+// sends its own; the reaper writes SuspendReasonExpired and a policy
+// SuspendReasonIdle. "" means the reason was not recorded (a workspace
+// suspended before reasons existed).
+const (
+	SuspendReasonOperator   = "operator"
+	SuspendReasonOwner      = "owner"
+	SuspendReasonDunning    = "billing-dunning"  // an unpaid invoice
+	SuspendReasonBudget     = "billing-budget"   // the customer's own cap; resumes next month
+	SuspendReasonFreeCap    = "billing-free-cap" // the free plan's cost budget; resumes next month
+	SuspendReasonIdle       = "idle"
+	SuspendReasonExpired    = "expired"
+	SuspendReasonUnrecorded = ""
+)
+
+// Reasons a deletion is scheduled (DeleteReason).
+const (
+	DeleteReasonOperator = "operator"
+	DeleteReasonOwner    = "owner"
+	DeleteReasonDunning  = "dunning"
+	DeleteReasonIdle     = "idle"
+	DeleteReasonExpired  = "expired"
+)
+
+// What made a workspace (Origin).
+const (
+	OriginSignup   = "signup"
+	OriginOperator = "operator"
+	OriginAgent    = "agent"
+	OriginRestore  = "restore"
+)
+
+// TombstoneHold is how long a deleted workspace's slug, address and
+// custom domains stay taken, and its owners' emails kept, before the
+// tombstone is scrubbed: as long as a changed address redirects.
+const TombstoneHold = 30 * 24 * time.Hour
+
+// ExpiredGrace is how long an expired, unclaimed workspace stays suspended
+// before it is deleted: a day for a slow agent to claim it.
+const ExpiredGrace = 24 * time.Hour
+
+// ScrubbedSlug is the slug a tombstone takes when it is scrubbed: not a
+// valid slug, so no workspace can be named the same.
+func ScrubbedSlug(id string) string { return "~" + id }
 
 // WorkspaceReadiness is the state of a workspace's door, as the controller
 // last saw it: whether the address answers, and each thing it checked.
@@ -101,6 +232,8 @@ type ReadinessCheck struct {
 const (
 	WorkspaceActive    = "active"
 	WorkspaceSuspended = "suspended" // answers nothing but the "suspended" page
+	WorkspaceDeleting  = "deleting"  // the cascade runs; answers the "deleted" page
+	WorkspaceDeleted   = "deleted"   // a tombstone: the row, the ledger, the held names
 )
 
 // Workspace owner values (RFC-0078).
@@ -944,6 +1077,54 @@ type Grant struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// Lifecycle is the workspace-lifecycle part of the Store (#274): how a
+// workspace is suspended, scheduled for deletion, deleted and forgotten.
+// Every method takes a slug (or an id) and answers ErrNotFound for a
+// workspace that does not exist; ErrConflict when the state refuses the
+// change (activating a deleted workspace, scheduling one already gone).
+type Lifecycle interface {
+	// SuspendWorkspace suspends with a reason, recording when; on one
+	// already suspended it records the reason when given and keeps the
+	// time. Refused on a workspace that is gone.
+	SuspendWorkspace(ctx context.Context, slug, reason string) (*Workspace, error)
+	// ActivateWorkspace brings a suspended workspace back and cancels its
+	// scheduled deletion. Refused on a workspace that is gone.
+	ActivateWorkspace(ctx context.Context, slug string) (*Workspace, error)
+	// ScheduleWorkspaceDeletion sets the date the reaper deletes the
+	// workspace, and why; the workspace must be suspended (the caller
+	// suspends first). Refused on one that is gone.
+	ScheduleWorkspaceDeletion(ctx context.Context, slug string, after time.Time, reason string) (*Workspace, error)
+	// SetWorkspaceExpiry sets or clears (nil) the time an unclaimed
+	// workspace expires; ClaimWorkspace is clearing it.
+	SetWorkspaceExpiry(ctx context.Context, slug string, at *time.Time) (*Workspace, error)
+	SetWorkspaceProtected(ctx context.Context, slug string, on bool) (*Workspace, error)
+	// RefreshWorkspaceActivity computes when the workspace was last used
+	// from what the store holds (people seen, tokens used, projects woken)
+	// and the time the caller brings from outside (the last deploy), and
+	// records the latest; the time only moves forward.
+	RefreshWorkspaceActivity(ctx context.Context, slug string, seen time.Time) (*Workspace, error)
+	// BeginWorkspaceDeletion moves a workspace whose date has come to
+	// deleting and starts its record; idempotent on one deleting already.
+	BeginWorkspaceDeletion(ctx context.Context, slug string) (*Workspace, error)
+	// SetWorkspaceDeletion records the cascade's progress.
+	SetWorkspaceDeletion(ctx context.Context, slug string, d WorkspaceDeletion) (*Workspace, error)
+	// TombstoneWorkspace is the cascade's last step: the workspace's rows
+	// go (people, memberships, teams, grants, sessions, tokens, invitations,
+	// domain claims, OAuth records, GitHub installations, CLI devices),
+	// its projects are marked deleted, and the row stays as a tombstone
+	// (WorkspaceDeleted, DeletedAt, TombstoneOwners) with its slug, address
+	// and hosts, so the names stay taken. The ledger rows stay: they are a
+	// bill. Idempotent.
+	TombstoneWorkspace(ctx context.Context, slug string) (*Workspace, error)
+	// ScrubWorkspace frees a tombstone's names after TombstoneHold: the
+	// slug becomes ScrubbedSlug, the address and hosts go, the owners'
+	// emails too. Refused on a workspace that is not deleted.
+	ScrubWorkspace(ctx context.Context, slug string) (*Workspace, error)
+	// ListDeletedWorkspaces lists the tombstones, scrubbed or not;
+	// ListWorkspaces never returns them.
+	ListDeletedWorkspaces(ctx context.Context) ([]Workspace, error)
+}
+
 // Store is what the server and the controllers need. Every method is
 // scoped to a workspace by slug; the OSS passes DefaultWorkspace.
 type Store interface {
@@ -1003,8 +1184,10 @@ type Store interface {
 	PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
 	TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
 	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
-	// SetWorkspaceStatus suspends or reactivates a workspace.
+	// SetWorkspaceStatus suspends (with SuspendReasonOperator) or
+	// reactivates a workspace: SuspendWorkspace and ActivateWorkspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)
+	Lifecycle
 	// SetWorkspaceReadiness records what the controller found at the
 	// workspace's door; ReadyAt is set the first time it is ready and kept.
 	SetWorkspaceReadiness(ctx context.Context, slug string, r WorkspaceReadiness) (*Workspace, error)

@@ -318,3 +318,20 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 	}
 	return &BuildMetadata{ImageSize: imageSize, User: user, UserError: userErr, ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
 }
+
+// Digest reads the digest a tag (or a digest) points at, without the
+// manifest: a HEAD on the manifest. Every manifest type is accepted, so
+// an image index answers with its own digest.
+func (c *Client) Digest(ctx context.Context, repo, ref string) (string, error) {
+	const accept = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+	resp, err := c.do(ctx, http.MethodHead, "/v2/"+repo+"/manifests/"+ref, accept)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	digest := resp.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		return "", fmt.Errorf("registry: no digest for %s:%s", repo, ref)
+	}
+	return digest, nil
+}

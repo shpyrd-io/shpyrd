@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -30,15 +31,19 @@ const (
 // are steps of a deploy, not something the workspace keeps running, and
 // counting them refused every deploy of a small workspace whose app was
 // awake. A build is bounded by limits of its own, a release step by the
-// release process's size.
+// release process's size. A Dockerfile build names its class on its Job;
+// a buildpack build's pod is named by the build-pod webhook
+// (pkg/buildtrust), since kpack names none of its own.
 const (
-	BuildPriorityClass   = "shpyrd-build"
+	BuildPriorityClass   = buildtrust.PriorityClass
 	ReleasePriorityClass = "shpyrd-release"
 )
 
 // computeScopes and computeSelector say which pods the compute quota
-// counts: those that ask for resources (buildpack builds ask for none,
-// BestEffort) and are not steps of a deploy.
+// counts: those that ask for resources (NotBestEffort) and are not steps
+// of a deploy. Every build asks for its place since #340; without its
+// class, a build's request against a small plan's ceiling refused the
+// build pod, and kpack retried it forever (production, 30 October 2026).
 var (
 	computeScopes   = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
 	computeSelector = &corev1.ScopeSelector{MatchExpressions: []corev1.ScopedResourceSelectorRequirement{{
@@ -53,11 +58,9 @@ var (
 // quota left behind by ceilings that went away is removed.
 //
 // The compute quota is scoped to pods that ask for resources and are not
-// steps of a deploy: buildpack builds run as pods with none (BestEffort),
-// Dockerfile builds under BuildPriorityClass with limits of their own,
-// release steps under ReleasePriorityClass with the release process's size.
-// It counts
-// requests, the coarse backstop behind
+// steps of a deploy: builds under BuildPriorityClass with a request and
+// limits of their own, release steps under ReleasePriorityClass with the
+// release process's size. It counts requests, the coarse backstop behind
 // the API's count of instance sizes (a shared size requests a share of
 // its CPU); it is not the ceiling itself.
 func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) error {

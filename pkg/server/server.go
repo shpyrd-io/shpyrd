@@ -40,6 +40,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
+	"github.com/shpyrd-io/shpyrd/pkg/catalog"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
@@ -76,6 +77,9 @@ type Options struct {
 	// additions may load scripts from, connect to and show images from.
 	// The core adds nothing.
 	Pages api.PageAdditions
+	// WorkspaceDeleteAllowed is asked before an owner schedules their own
+	// workspace's deletion (#274); nil allows. The cloud asks billing.
+	WorkspaceDeleteAllowed func(ctx context.Context, ws *store.Workspace) error
 }
 
 // Main parses flags and the environment, runs the server and exits on
@@ -313,14 +317,15 @@ func run(o runOptions, logger *slog.Logger) error {
 		}
 	}
 	srv, err := api.New(k, api.Options{
-		Addr:             o.addr,
-		Store:            st,
-		Tenancy:          resolver,
-		Layout:           layoutFromEnv(),
-		SignInHost:       hostOf(envOr("SHPYRD_AUTH_URL", "")),
-		Realms:           o.opts.Realms,
-		Capabilities:     o.opts.Capabilities,
-		InternalExposure: o.opts.InternalExposure,
+		Addr:                   o.addr,
+		Store:                  st,
+		Tenancy:                resolver,
+		Layout:                 layoutFromEnv(),
+		SignInHost:             hostOf(envOr("SHPYRD_AUTH_URL", "")),
+		Realms:                 o.opts.Realms,
+		Capabilities:           o.opts.Capabilities,
+		InternalExposure:       o.opts.InternalExposure,
+		WorkspaceDeleteAllowed: o.opts.WorkspaceDeleteAllowed,
 		MembershipChanged: func() {
 			if o.controller {
 				memberships.Notify()
@@ -341,6 +346,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		UISources:              os.Getenv("SHPYRD_UI_SOURCES"),
 		UICacheDir:             uiCacheDir(o.dataDir),
 		Sources:                sources,
+		AppCatalog:             catalog.New(os.Getenv("SHPYRD_CATALOG_URL")),
 		SourcesAddr:            fmt.Sprintf(":%d", api.SourcesPort),
 		PeerAddr:               peerAddr(os.Getenv("SHPYRD_POD_IP"), api.SourcesPort),
 		InternalAPIAddr:        ":8083",
@@ -656,6 +662,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	workspaces.Forget = workspaceCache.Forget
 	workspaces.NamesChanged = rec.RequeueWorkspace
+	workspaces.Kube, workspaces.Registry = k.Kube, rec.Registry // the lifecycle's audit and image cleanup (#274)
 	githubApp.SetRequeue(rec.RequeueGitHub)
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)

@@ -140,6 +140,15 @@ const (
 	// App's repository (RFC-0054, GitHub access by person): for the trail
 	// and the dashboard ("Connected by …"); nothing depends on it.
 	AnnotationGitHubLinkedBy = "shpyrd.io/github-linked-by"
+	// AnnotationCatalogEntry, AnnotationCatalogDigest and
+	// AnnotationCatalogSource say a project was installed from the
+	// catalog (pkg/catalog): the entry's name, the digest of the entry as
+	// it was then (its version), and the index it was read from. A
+	// project is a copy made at install; the marks are for the dashboard
+	// to say so and, later, to offer the entry's update.
+	AnnotationCatalogEntry  = "shpyrd.io/catalog-entry"
+	AnnotationCatalogDigest = "shpyrd.io/catalog-digest"
+	AnnotationCatalogSource = "shpyrd.io/catalog-source"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes
@@ -355,6 +364,14 @@ type Source struct {
 	// SubPath is a directory inside the source that holds the application.
 	// +optional
 	SubPath string `json:"subPath,omitempty"`
+	// Overlay is an archive laid over the checkout before the build: the
+	// files a catalog entry adds to an upstream repository (a Dockerfile,
+	// a config file). It goes with a Dockerfile build; the buildpacks
+	// builder reads one source, and a build with both is refused in
+	// words. The build key and the deploy token take it in: a new overlay
+	// is a new build.
+	// +optional
+	Overlay *BlobSource `json:"overlay,omitempty"`
 }
 
 // GitSource builds from a Git repository. A branch or tag is watched: the

@@ -254,12 +254,13 @@ func (p *Postgres) wsID(ctx context.Context, q interface {
 	return id, err
 }
 
-const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at, readiness, ready_at, owner_invite_pending, creation_fingerprint`
+const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at, readiness, ready_at, owner_invite_pending, creation_fingerprint, suspended_at, suspend_reason, delete_after, delete_reason, expires_at, origin, created_by, protected, last_activity_at, deleted_at, deletion, tombstone_owners`
 
 func scanWorkspace(row pgx.Row) (*Workspace, error) {
 	var w Workspace
-	var settings, readiness []byte
-	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt, &readiness, &w.ReadyAt, &w.OwnerInvitePending, &w.CreationFingerprint)
+	var settings, readiness, deletion, owners []byte
+	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt, &readiness, &w.ReadyAt, &w.OwnerInvitePending, &w.CreationFingerprint,
+		&w.SuspendedAt, &w.SuspendReason, &w.DeleteAfter, &w.DeleteReason, &w.ExpiresAt, &w.Origin, &w.CreatedBy, &w.Protected, &w.LastActivityAt, &w.DeletedAt, &deletion, &owners)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -267,6 +268,16 @@ func scanWorkspace(row pgx.Row) (*Workspace, error) {
 		return nil, err
 	}
 	_ = json.Unmarshal(settings, &w.Settings)
+	// '{}' is the column's default: no deletion.
+	if len(deletion) > 2 {
+		var d WorkspaceDeletion
+		if json.Unmarshal(deletion, &d) == nil {
+			w.Deletion = &d
+		}
+	}
+	if len(owners) > 2 {
+		_ = json.Unmarshal(owners, &w.TombstoneOwners)
+	}
 	// '{}' is the column's default: no look yet.
 	if len(readiness) > 2 {
 		var r WorkspaceReadiness
@@ -290,7 +301,16 @@ func (p *Postgres) WorkspaceByAddress(ctx context.Context, address string) (*Wor
 }
 
 func (p *Postgres) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
-	rows, err := p.pool.Query(ctx, `SELECT `+workspaceColumns+` FROM workspaces ORDER BY created_at, slug`)
+	return p.listWorkspaces(ctx, `status <> '`+WorkspaceDeleted+`'`)
+}
+
+// ListDeletedWorkspaces lists the tombstones, oldest deletion first.
+func (p *Postgres) ListDeletedWorkspaces(ctx context.Context) ([]Workspace, error) {
+	return p.listWorkspaces(ctx, `status = '`+WorkspaceDeleted+`'`)
+}
+
+func (p *Postgres) listWorkspaces(ctx context.Context, where string) ([]Workspace, error) {
+	rows, err := p.pool.Query(ctx, `SELECT `+workspaceColumns+` FROM workspaces WHERE `+where+` ORDER BY created_at, slug`)
 	if err != nil {
 		return nil, err
 	}
@@ -340,8 +360,8 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 		}
 	}
 	id := newID()
-	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings, owner, creation_fingerprint) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		id, w.Slug, w.Name, address, status, settings, w.Owner, w.CreationFingerprint); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings, owner, creation_fingerprint, origin, created_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		id, w.Slug, w.Name, address, status, settings, w.Owner, w.CreationFingerprint, w.Origin, w.CreatedBy, w.ExpiresAt); err != nil {
 		if isUnique(err) {
 			return nil, ErrConflict
 		}
@@ -376,14 +396,13 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 }
 
 func (p *Postgres) SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error) {
-	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET status = $2, updated_at = now() WHERE slug = $1`, slug, status)
-	if err != nil {
-		return nil, err
+	switch status {
+	case WorkspaceSuspended:
+		return p.SuspendWorkspace(ctx, slug, SuspendReasonOperator)
+	case WorkspaceActive:
+		return p.ActivateWorkspace(ctx, slug)
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
-	}
-	return p.Workspace(ctx, slug)
+	return nil, fmt.Errorf("workspace status %q is not one a caller sets", status)
 }
 
 func (p *Postgres) SetWorkspaceReadiness(ctx context.Context, slug string, r WorkspaceReadiness) (*Workspace, error) {
@@ -1890,9 +1909,9 @@ func (p *Postgres) QueryBuckets(ctx context.Context, ws, project string, from, t
 	} else {
 		filter = ""
 	}
-	q := `SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_buckets b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + `
+	q := `SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_buckets b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + `
 	UNION ALL
-	SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_hourly b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + ` ORDER BY period_start`
+	SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_hourly b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + ` ORDER BY period_start`
 	rows, err := p.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err

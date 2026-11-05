@@ -75,6 +75,9 @@ type sessionStore struct {
 	ns    string
 	log   *slog.Logger
 	now   func() time.Time
+	// claimed is told of a workspace someone signed in to (#274): a
+	// workspace waiting to be claimed is claimed by it. Nil: nobody.
+	claimed func(ctx context.Context, slug string)
 }
 
 func newSessionStore(st store.Store, kube kubernetes.Interface, ns string, log *slog.Logger) *sessionStore {
@@ -152,6 +155,9 @@ func (st *sessionStore) create(ctx context.Context, realm, ws string, id ext.Ide
 	}
 	if stored, err := st.store.GetSession(ctx, sid); err == nil {
 		s.WorkspaceID = stored.WorkspaceID
+	}
+	if st.claimed != nil && ws != "" {
+		st.claimed(ctx, ws) // a person arrived at a workspace waiting to be claimed (#274)
 	}
 	st.mu.Lock()
 	st.cache[sid] = &cachedSession{s: s, checkedAt: now, touchedAt: now}

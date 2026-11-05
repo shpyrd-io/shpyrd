@@ -26,7 +26,7 @@ func suspendedWithWorkspace(obj client.Object) bool {
 func (r *WorkspaceReconciler) syncSuspension(ctx context.Context, all []store.Workspace) error {
 	suspended := map[string]bool{}
 	for i := range all {
-		if all[i].Status == store.WorkspaceSuspended && !r.Config.isDefault(all[i].Slug) {
+		if all[i].Off() && !r.Config.isDefault(all[i].Slug) {
 			suspended[all[i].Slug] = true
 		}
 	}

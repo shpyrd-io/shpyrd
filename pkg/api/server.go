@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/catalog"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -70,6 +71,9 @@ type Options struct {
 	// Sources stores uploaded application archives. Nil disables deploys
 	// from local checkouts.
 	Sources *SourceStore
+	// AppCatalog is the catalog of applications a project can be made
+	// from (pkg/catalog); nil reads none.
+	AppCatalog *catalog.Fetcher
 	// Token protects the API. Empty disables authentication (development).
 	Token string
 	// TokenDisabled refuses the admin token: sign-in through accounts only
@@ -139,6 +143,10 @@ type Options struct {
 	// ("workspaces", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
 	Capabilities []string
+	// WorkspaceDeleteAllowed is asked before an owner schedules their own
+	// workspace's deletion (#274); an error refuses with its words (the
+	// cloud: a paid subscription must be cancelled first). Nil allows.
+	WorkspaceDeleteAllowed func(ctx context.Context, ws *store.Workspace) error
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -158,6 +166,9 @@ type PublicConfig struct {
 	// Capabilities beyond the core this server offers (RFC-0033): empty on
 	// the open-source platform.
 	Capabilities []string `json:"capabilities"`
+	// Catalog says this server reads a catalog of applications
+	// (pkg/catalog): the launcher offers it.
+	Catalog bool `json:"catalog"`
 	// Workspace is the one answering at this host: its slug and name, for
 	// the sign-in page.
 	Workspace *WorkspaceRef `json:"workspace,omitempty"`
@@ -257,6 +268,7 @@ type Server struct {
 	archiveActive    sync.Map           // namespace -> active request; the server runs one replica
 	helm             *action.Configuration
 	sources          *SourceStore
+	appCatalog       *catalog.Fetcher
 	prom             *PromClient
 	rp               *relyingParty
 	authz            *authz.Resolver
@@ -429,7 +441,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	if opts.Public.Capabilities == nil {
 		opts.Public.Capabilities = append([]string{}, opts.Capabilities...)
 	}
-	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
+	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, appCatalog: opts.AppCatalog, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
 	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
 	s.execTickets = newTicketStore(execTicketTTL)
@@ -492,6 +504,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	}
 	s.githubUsers = newGitHubUserTokens(s.store, s.githubBox, s.log)
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
+	sessions.claimed = s.claimOnSignIn
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
 	// runs get a fresh one.
@@ -785,6 +798,7 @@ func (s *Server) routes() error {
 	api.GET("/cluster/oom-kills", console, s.require(authz.ClusterView), s.clusterOOMKills) // #119
 	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo)    // RFC-0059
 	api.POST("/cluster/registry/gc", console, s.require(authz.ClusterAdmin), s.registryGC)
+	api.GET("/cluster/orphans", console, s.require(authz.ClusterAdmin), s.orphans)     // #274: what a cascade or destroy left
 	api.GET("/cluster/backups", console, s.require(authz.ClusterAdmin), s.listBackups) // RFC-0037
 	api.POST("/cluster/backups", console, s.require(authz.ClusterAdmin), s.runBackup)
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
@@ -799,6 +813,7 @@ func (s *Server) routes() error {
 		// The console lists the workspaces it hosts (RFC-0080); with the
 		// workspaces capability the cloud layer serves the full routes.
 		api.GET("/workspaces", console, s.require(authz.ClusterAdmin), s.listWorkspacesCore)
+		api.DELETE("/workspaces/:slug", console, s.require(authz.ClusterAdmin), s.deleteWorkspace) // #274
 	}
 	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016: the default workspace's, for the dashboard of before
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
@@ -840,6 +855,7 @@ func (s *Server) routes() error {
 	api.PUT("/workspace/project-caps", s.require(authz.ClusterAdmin), s.putProjectCaps)
 	api.GET("/workspace/usage", s.require(authz.ClusterAdmin), s.workspaceUsageLedger)
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
+	api.DELETE("/workspace", s.require(authz.WorkspaceOwner), s.deleteOwnWorkspace) // #274: an owner schedules the deletion
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)
 	api.POST("/workspace/principals/:id/bind", s.require(authz.WorkspaceOwner), s.bindPrincipal)
@@ -920,7 +936,12 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/calls", s.require(authz.ProjectView), s.projectCalls)    // #311: who called at the internal name
 	api.POST("/projects/:slug/preview", s.require(authz.ProjectDeploy), s.previewApp) // "Open as"
 	api.GET("/launcher", s.launcher)                                                  // the apps the caller may open
-	api.GET("/tokens", s.listTokens)                                                  // RFC-0031: the caller's tokens
+	// The catalog (pkg/catalog): browsed and installed from by whoever
+	// may make a project.
+	api.GET("/catalog", s.require(authz.ClusterCreate), s.catalogIndex)
+	api.GET("/catalog/entries/:name", s.require(authz.ClusterCreate), s.catalogEntry)
+	api.POST("/catalog/entries/:name/install", s.require(authz.ClusterCreate), s.catalogInstall)
+	api.GET("/tokens", s.listTokens) // RFC-0031: the caller's tokens
 	api.POST("/tokens", s.createToken)
 	api.DELETE("/tokens/:id", s.deleteToken)
 	api.GET("/projects/:slug/domains", s.require(authz.ProjectView), s.listDomains) // RFC-0034
@@ -1112,6 +1133,7 @@ func (s *Server) auth() gin.HandlerFunc {
 func (s *Server) config(c *gin.Context) {
 	pub := s.opts.Public
 	pub.Auth = s.authConfigFor(c)
+	pub.Catalog = s.appCatalog != nil
 	pub.Door = tenancy.RealmWorkspace
 	if s.atConsole(c) {
 		pub.Door = tenancy.RealmConsole // the console application, at the console host and for internal callers

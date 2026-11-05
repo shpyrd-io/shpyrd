@@ -450,6 +450,10 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 					return outcome{}, err
 				}
 			}
+		} else if app.Spec.Source.Overlay != nil {
+			// The buildpacks builder reads one source; the catalog's
+			// files cannot be laid over it (pkg/catalog).
+			build = buildState{Ready: "False", Reason: "OverlayNeedsDockerfile", Message: overlayNeedsDockerfile, LatestImage: app.Status.Image, LatestBuild: app.Status.LatestBuild}
 		} else {
 			buildSecret := secret
 			if pending != nil {

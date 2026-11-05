@@ -282,15 +282,22 @@ func (m *Memory) ListWorkspaces(_ context.Context) ([]Workspace, error) {
 	defer m.mu.Unlock()
 	out := make([]Workspace, 0, len(m.workspaces))
 	for _, w := range m.workspaces {
+		if w.Status == WorkspaceDeleted {
+			continue // a tombstone: ListDeletedWorkspaces
+		}
 		out = append(out, *w)
 	}
+	sortWorkspaces(out)
+	return out, nil
+}
+
+func sortWorkspaces(out []Workspace) {
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.Before(out[j].CreatedAt)
 		}
 		return out[i].Slug < out[j].Slug
 	})
-	return out, nil
 }
 
 func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, error) {
@@ -346,16 +353,14 @@ func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, er
 	return &out, nil
 }
 
-func (m *Memory) SetWorkspaceStatus(_ context.Context, slug, status string) (*Workspace, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w, err := m.ws(slug)
-	if err != nil {
-		return nil, err
+func (m *Memory) SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error) {
+	switch status {
+	case WorkspaceSuspended:
+		return m.SuspendWorkspace(ctx, slug, SuspendReasonOperator)
+	case WorkspaceActive:
+		return m.ActivateWorkspace(ctx, slug)
 	}
-	w.Status, w.UpdatedAt = status, m.now()
-	c := *w
-	return &c, nil
+	return nil, fmt.Errorf("workspace status %q is not one a caller sets", status)
 }
 
 func (m *Memory) SetWorkspaceReadiness(_ context.Context, slug string, r WorkspaceReadiness) (*Workspace, error) {
@@ -1967,7 +1972,7 @@ func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) 
 
 func (m *Memory) QueryBuckets(_ context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error) {
 	m.mu.Lock()
-	w, err := m.ws(ws)
+	w, err := m.wsAny(ws)
 	m.mu.Unlock()
 	if err != nil {
 		return nil, err

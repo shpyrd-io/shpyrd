@@ -1026,3 +1026,68 @@ func TestTheConsoleSetsTheWorkspaceSettings(t *testing.T) {
 		t.Errorf("second project without limits = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// A restore does not bring back a workspace the cluster deleted on purpose
+// (#274) unless asked; asked, the tombstone's names are freed and the
+// workspace is recreated from the dump.
+func TestImportOfDeletedWorkspaceNeedsAsking(t *testing.T) {
+	s, _, st := newTenantServer(t)
+	ctx := context.Background()
+	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta", Address: "beta.shpyrd.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SuspendWorkspace(ctx, "beta", store.SuspendReasonOperator); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.BeginWorkspaceDeletion(ctx, "beta"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := st.TombstoneWorkspace(ctx, "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := `{"version":1,"workspace":{"slug":"beta","name":"Beta Labs","address":"beta.shpyrd.test","status":"active"},"teams":[{"name":"owners","members":["bea@beta.test"],"platformRole":"platform-admin"}]}`
+	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=beta", dump); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "was deleted on") {
+		t.Fatalf("import of a deleted workspace = %d %s, want 409 saying so", rec.Code, rec.Body.String())
+	}
+	if ws, _ := st.Workspace(ctx, "beta"); ws == nil || ws.Status != store.WorkspaceDeleted {
+		t.Fatalf("the tombstone must stand: %+v", ws)
+	}
+	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=beta&restoreDeleted=true", dump); rec.Code != http.StatusOK {
+		t.Fatalf("import asked for = %d %s", rec.Code, rec.Body.String())
+	}
+	ws, err := st.Workspace(ctx, "beta")
+	if err != nil || ws.Status != store.WorkspaceActive || ws.ID == old.ID || ws.Name != "Beta Labs" || ws.Origin != store.OriginRestore {
+		t.Fatalf("restored = %+v %v", ws, err)
+	}
+	if dead, _ := st.ListDeletedWorkspaces(ctx); len(dead) != 1 || dead[0].ID != old.ID || dead[0].Slug != store.ScrubbedSlug(old.ID) {
+		t.Errorf("the old tombstone is scrubbed, not gone: %v", dead)
+	}
+}
+
+// At the door of a workspace that is gone: a "deleted" answer, nothing to
+// sign in to (#274).
+func TestDoorOfDeletedWorkspace(t *testing.T) {
+	s, _, st := newTenantServer(t)
+	ctx := context.Background()
+	if _, err := st.SuspendWorkspace(ctx, "closed", store.SuspendReasonOperator); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.BeginWorkspaceDeletion(ctx, "closed"); err != nil {
+		t.Fatal(err)
+	}
+	s.workspacesChanged()
+	if rec := at(t, s, "closed.shpyrd.test", "GET", "/api/projects", ""); rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), "deleted") {
+		t.Errorf("deleting workspace API = %d %s, want 410", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "shop.closed.shpyrd.test", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), "Workspace deleted") {
+		t.Errorf("deleting workspace's app host = %d, want 410 with the page", rec.Code)
+	}
+	if _, err := st.TombstoneWorkspace(ctx, "closed"); err != nil {
+		t.Fatal(err)
+	}
+	s.workspacesChanged()
+	if rec := at(t, s, "closed.shpyrd.test", "GET", "/api/projects", ""); rec.Code != http.StatusGone {
+		t.Errorf("deleted workspace API = %d %s, want 410 while the name is held", rec.Code, rec.Body.String())
+	}
+}

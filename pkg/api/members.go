@@ -365,6 +365,18 @@ func (s *Server) requireTenant() gin.HandlerFunc {
 			return
 		case t.Workspace == nil:
 			// The console's own routes.
+		case t.Workspace.Gone() && !t.Internal:
+			// Deleted, or being deleted: nothing to sign in to, no gate
+			// to go to (#274).
+			if asJSON {
+				status, err := offError(t.Workspace)
+				abort(c, status, err)
+			} else {
+				status, title, text := OffPage(t.Workspace)
+				s.edgePage(c, status, title, text, nil)
+				c.Abort()
+			}
+			return
 		case t.Workspace.Status == store.WorkspaceSuspended && !t.Internal:
 			if g, ok := s.suspendedGate(); ok {
 				switch s.atSuspended(c, t.Workspace) {

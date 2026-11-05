@@ -77,10 +77,68 @@ func TestPatchAppliesToEveryContainer(t *testing.T) {
 	if len(out.Spec.InitContainers[0].Env) != 2 || len(out.Spec.InitContainers[1].VolumeMounts) != 2 {
 		t.Errorf("existing env/mounts must be kept: %+v", out.Spec.InitContainers)
 	}
-	// Idempotent: a pod that carries the volume is not patched again.
+	// Idempotent: a pod that carries the volume and the class is not
+	// patched again.
 	if again := Patch(&out, "shpyrd-ca-bundle"); len(again) != 0 {
 		t.Errorf("second patch = %+v", again)
 	}
+}
+
+// A build is a step of a deploy, outside the workspace's ceiling: the pod
+// gets the build PriorityClass the project's compute quota leaves out,
+// with the class's preemption policy, since the API server's Priority
+// plugin refuses a pod whose policy differs from its class's when it runs
+// again after the webhook. Since every build asks for its place on a
+// machine (#340), a pod without the class was refused by a small plan's
+// quota and never ran. A pod that names a class already keeps it and its
+// policy, and one that carries the trust volume but no class still gets
+// the class.
+func TestPatchPutsTheBuildOutsideTheWorkspaceCeiling(t *testing.T) {
+	pod := buildPod()
+	policy := corev1.PreemptLowerPriority // what the Priority plugin wrote for a pod with no class
+	pod.Spec.PreemptionPolicy = &policy
+	out := applyPatch(t, pod)
+	if out.Spec.PriorityClassName != PriorityClass {
+		t.Errorf("priorityClassName = %q, want %q", out.Spec.PriorityClassName, PriorityClass)
+	}
+	if out.Spec.PreemptionPolicy == nil || *out.Spec.PreemptionPolicy != PriorityClassPreemption {
+		t.Errorf("preemptionPolicy = %v, want %s, the class's", out.Spec.PreemptionPolicy, PriorityClassPreemption)
+	}
+
+	named := buildPod()
+	named.Spec.PriorityClassName = "kpack-build-high-priority"
+	named.Spec.PreemptionPolicy = &policy
+	if out := applyPatch(t, named); out.Spec.PriorityClassName != "kpack-build-high-priority" || *out.Spec.PreemptionPolicy != policy {
+		t.Errorf("a class the pod names is replaced: %q %s", out.Spec.PriorityClassName, *out.Spec.PreemptionPolicy)
+	}
+
+	trusted := buildPod()
+	trusted.Spec.Volumes = append(trusted.Spec.Volumes, corev1.Volume{Name: VolumeName})
+	ops := Patch(trusted, "shpyrd-ca-bundle")
+	if len(ops) != 2 || ops[0].Path != "/spec/priorityClassName" || ops[0].Value != PriorityClass || ops[1].Path != "/spec/preemptionPolicy" {
+		t.Errorf("a trusted pod without a class: ops = %+v, want the class and its policy alone", ops)
+	}
+}
+
+// applyPatch applies Patch to pod as the API server would and returns the
+// pod that results.
+func applyPatch(t *testing.T, pod *corev1.Pod) corev1.Pod {
+	t.Helper()
+	raw, _ := json.Marshal(Patch(pod, "shpyrd-ca-bundle"))
+	patch, err := jsonpatch.DecodePatch(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig, _ := json.Marshal(pod)
+	patched, err := patch.Apply(orig)
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, raw)
+	}
+	var out corev1.Pod
+	if err := json.Unmarshal(patched, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // The HTTP endpoint answers an AdmissionReview with a JSON patch.

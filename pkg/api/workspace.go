@@ -363,30 +363,63 @@ func brandingView(w *store.Workspace) *BrandingView {
 	b := w.Settings.Branding
 	out := &BrandingView{Color: b.Color}
 	if b.Logo != "" {
-		sum := sha256.Sum256([]byte(b.Logo))
-		out.LogoURL = "/api/workspace/logo?v=" + hex.EncodeToString(sum[:6])
+		out.LogoURL = "/api/workspace/logo?v=" + logoVersion(b.Logo)
 	}
 	return out
 }
 
+// logoVersion names a logo by what it holds: the v of its address, so a
+// browser keeps one for a day and asks for a new logo at a new address.
+func logoVersion(logo string) string {
+	sum := sha256.Sum256([]byte(logo))
+	return hex.EncodeToString(sum[:6])
+}
+
 // workspaceLogo is GET /api/workspace/logo (public): the image itself,
-// cacheable by its version.
+// kept by the browser for a day when the address names its version. It
+// serves the version the address names, never another under that name:
+// the server runs as more than one replica, and the one that did not take
+// a change still remembers the workspace as it was for a few seconds; what
+// it served then would be kept for a day, and the logo could not change.
 func (s *Server) workspaceLogo(c *gin.Context) {
 	w, err := s.tenant(c)
-	if err != nil || w.Settings.Branding == nil || w.Settings.Branding.Logo == "" {
-		c.Status(http.StatusNotFound)
-		return
-	}
-	raw, err := base64.StdEncoding.DecodeString(w.Settings.Branding.Logo)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=86400")
+	want := c.Query("v")
+	b := w.Settings.Branding
+	if want != "" && (b == nil || logoVersion(b.Logo) != want) {
+		// Not what this server remembers: read the workspace as it is.
+		// When that is the version asked for, the memory was stale, and
+		// is dropped so the next answer about the workspace is right too.
+		if fresh, err := s.store.Workspace(c.Request.Context(), w.Slug); err == nil {
+			b = fresh.Settings.Branding
+			if b != nil && logoVersion(b.Logo) == want {
+				s.forgetTenants()
+			}
+		}
+	}
+	if b == nil || b.Logo == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(b.Logo)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if want == logoVersion(b.Logo) {
+		c.Header("Cache-Control", "public, max-age=86400")
+	} else {
+		// An address of a logo that is gone, or none: what is there now,
+		// not to be kept under that name.
+		c.Header("Cache-Control", "no-store")
+	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	// An SVG opened as a document must not run scripts on this origin.
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	c.Data(http.StatusOK, w.Settings.Branding.LogoType, raw)
+	c.Data(http.StatusOK, b.LogoType, raw)
 }
 
 // hasOwnMethod reports whether the workspace configured a login method of
@@ -916,14 +949,33 @@ func (s *Server) importWorkspace(c *gin.Context) {
 			abort(c, http.StatusBadRequest, fmt.Errorf("the dump is of workspace %q, not %q", dump.Workspace.Slug, ws))
 			return
 		}
-		if _, err := s.store.Workspace(ctx, ws); errors.Is(err, store.ErrNotFound) {
-			created, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: ws, Name: firstNonEmpty(dump.Workspace.Name, ws), Address: dump.Workspace.Address, Settings: dump.Workspace.Settings})
+		existing, err := s.store.Workspace(ctx, ws)
+		if err == nil && existing.Status == store.WorkspaceDeleted {
+			// The cluster holds its tombstone (#274): a restore brings it
+			// back only on purpose; the tombstone's names are freed first.
+			if c.Query("restoreDeleted") != "true" {
+				when := "earlier"
+				if existing.DeletedAt != nil {
+					when = "on " + existing.DeletedAt.UTC().Format("2006-01-02")
+				}
+				abort(c, http.StatusConflict, fmt.Errorf("workspace %s was deleted %s; restoreDeleted=true brings it back", ws, when))
+				return
+			}
+			if _, err := s.store.ScrubWorkspace(ctx, ws); err != nil {
+				storeErr(c, err, "workspace")
+				return
+			}
+			s.audit(c, "", "workspace.restore-deleted", ws, "the tombstone's names were freed for the restore")
+			err = store.ErrNotFound
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			created, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: ws, Name: firstNonEmpty(dump.Workspace.Name, ws), Address: dump.Workspace.Address, Settings: dump.Workspace.Settings, Origin: store.OriginRestore})
 			if err != nil {
 				storeErr(c, err, "workspace")
 				return
 			}
 			if dump.Workspace.Status == store.WorkspaceSuspended {
-				_, _ = s.store.SetWorkspaceStatus(ctx, created.Slug, store.WorkspaceSuspended)
+				_, _ = s.store.SuspendWorkspace(ctx, created.Slug, firstNonEmpty(dump.Workspace.SuspendReason, store.SuspendReasonOperator))
 			}
 			s.workspacesChanged()
 		} else if err != nil {
@@ -991,6 +1043,22 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 // listWorkspacesCore is GET /api/workspaces on the open-source platform: the
 // workspaces this cluster hosts, as the console lists them (RFC-0080). The
 // cloud layer replaces it with the full workspace routes.
+// workspaceSummaryCore is one workspace as the open-source console lists
+// it; the cloud layer adds what it knows.
+func (s *Server) workspaceSummaryCore(ctx context.Context, w *store.Workspace) WorkspaceSummary {
+	sum := WorkspaceSummary{ID: w.ID, Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
+	sum.Limits, sum.Sleep = w.Settings.Limits, w.Settings.Sleep
+	FillLifecycle(&sum, w)
+	if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
+		for _, m := range roles {
+			if m.Role == store.WorkspaceRoleOwner {
+				sum.Owners = append(sum.Owners, m.Email)
+			}
+		}
+	}
+	return sum
+}
+
 func (s *Server) listWorkspacesCore(c *gin.Context) {
 	ctx := c.Request.Context()
 	all, err := s.store.ListWorkspaces(ctx)
@@ -1000,17 +1068,7 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 	}
 	out := make([]WorkspaceSummary, 0, len(all))
 	for i := range all {
-		w := &all[i]
-		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
-		sum.Limits, sum.Sleep = w.Settings.Limits, w.Settings.Sleep
-		if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
-			for _, m := range roles {
-				if m.Role == store.WorkspaceRoleOwner {
-					sum.Owners = append(sum.Owners, m.Email)
-				}
-			}
-		}
-		out = append(out, sum)
+		out = append(out, s.workspaceSummaryCore(ctx, &all[i]))
 	}
 	c.JSON(http.StatusOK, out)
 }

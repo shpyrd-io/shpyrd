@@ -212,6 +212,7 @@ func newClusterCmd(g *globalFlags) *cobra.Command {
 		newClusterBackupsCmd(g),
 		newClusterRestoreCmd(g),
 		newClusterSnapshotsCmd(g),
+		newClusterOrphansCmd(g),
 	)
 	return cmd
 }

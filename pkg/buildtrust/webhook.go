@@ -1,10 +1,16 @@
-// Package buildtrust serves the admission webhook that makes kpack build
-// pods trust the platform CA (RFC-0059). kpack has no setting for a private
-// CA and every step of a build (build-init, the lifecycle, completion)
-// talks to the registry, so the pod is patched on creation: the cluster's
-// trust bundle (trust-manager's ConfigMap, present in every namespace) is
-// mounted into each container and SSL_CERT_FILE points at it, which every
-// Go binary honours.
+// Package buildtrust serves the admission webhook that patches kpack build
+// pods on creation, for what kpack has no setting of its own.
+//
+// Trust (RFC-0059): kpack cannot be told a private CA, and every step of a
+// build (build-init, the lifecycle, completion) talks to the registry, so
+// the cluster's trust bundle (trust-manager's ConfigMap, present in every
+// namespace) is mounted into each container and SSL_CERT_FILE points at
+// it, which every Go binary honours.
+//
+// Place (#243, #340): a build is a step of a deploy, outside the
+// workspace's ceiling, and the project's compute quota leaves out the
+// pods of PriorityClass. kpack names a class on its builds only when its
+// own two classes are switched on, so the pod gets the platform's here.
 package buildtrust
 
 import (
@@ -34,6 +40,15 @@ const (
 	BundleKey = "ca-certificates.crt"
 	// EnvVar is the Go runtime variable naming the root certificates file.
 	EnvVar = "SSL_CERT_FILE"
+	// PriorityClass is the class of an image build (deploy/components/shpyrd,
+	// step-priorities.yaml): the same priority as a pod with none, 0, and
+	// never preempting, named so the compute quota can leave builds out.
+	PriorityClass = "shpyrd-build"
+	// PriorityClassPreemption is that class's preemption policy. The
+	// webhook writes it on the pod with the class (Patch says why), so the
+	// manifest and this constant must agree; pkg/install's tests hold them
+	// together.
+	PriorityClassPreemption = corev1.PreemptNever
 )
 
 // Options configure the webhook server.
@@ -148,7 +163,7 @@ func (s *Server) serveBuildPod(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(patch)
 		pt := admissionv1.PatchTypeJSONPatch
 		resp.Patch, resp.PatchType = raw, &pt
-		s.log.Debug("build pod patched with the trust bundle", "namespace", review.Request.Namespace, "pod", pod.Name, "containers", len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+		s.log.Debug("build pod patched", "namespace", review.Request.Namespace, "pod", pod.Name, "containers", len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
 	}
 	out, _ := json.Marshal(&admissionv1.AdmissionReview{
 		TypeMeta: metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"},
@@ -165,11 +180,36 @@ type Operation struct {
 	Value interface{} `json:"value,omitempty"`
 }
 
-// Patch returns the JSON patch that mounts the bundle ConfigMap into every
-// init and regular container of pod and points SSL_CERT_FILE at it. Pods
-// that already carry the volume are left alone; containers that already set
-// the variable keep their value.
+// Patch returns the JSON patch that names the build's PriorityClass, when
+// the pod names none, and mounts the bundle ConfigMap into every init and
+// regular container of pod with SSL_CERT_FILE pointing at it. Pods that
+// already carry the volume keep their containers as they are; containers
+// that already set the variable keep their value.
+//
+// The API server's Priority plugin ran before the webhooks: the pod came
+// with no class, so it holds priority 0 and the default preemption policy,
+// PreemptLowerPriority. After a webhook changes a pod the plugin runs
+// again, and it refuses a pod whose priority or policy differ from what
+// its class says (Kubernetes 1.37 on kind: "the string value of
+// PreemptionPolicy (PreemptLowerPriority) must not be provided in pod
+// spec; priority admission controller computed Never"). The class's value
+// is 0, so the priority stands; the policy is written here to the
+// class's. The quota plugin, last in the chain, matches its scope on the
+// name.
 func Patch(pod *corev1.Pod, bundle string) []Operation {
+	var ops []Operation
+	if pod.Spec.PriorityClassName == "" {
+		ops = append(ops,
+			Operation{Op: "add", Path: "/spec/priorityClassName", Value: PriorityClass},
+			Operation{Op: "add", Path: "/spec/preemptionPolicy", Value: PriorityClassPreemption},
+		)
+	}
+	return append(ops, trustOps(pod, bundle)...)
+}
+
+// trustOps is the trust half of Patch; nil for a pod that carries the
+// bundle already.
+func trustOps(pod *corev1.Pod, bundle string) []Operation {
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == VolumeName {
 			return nil

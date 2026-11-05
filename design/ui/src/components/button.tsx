@@ -8,10 +8,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // The action of the screen glows: an orange light that falls beneath it,
+        // The action of the screen glows: a light of its own colour falls beneath it,
         // and under the pointer a warm light rises inside it from its foot.
         default:
-          "bg-primary bg-clip-border text-primary-foreground shadow-[0_4px_12px_-4px_rgb(255_79_0/0.5)] transition-[background-color,box-shadow,translate] hover:bg-primary/90 hover:shadow-[0_6px_16px_-4px_rgb(255_79_0/0.65)] relative isolate overflow-hidden before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:translate-y-2 before:bg-[radial-gradient(ellipse_65%_80%_at_50%_125%,#ffd27a_0%,rgb(255_170_50/0.7)_35%,transparent_72%)] before:opacity-0 before:transition-[opacity,translate] before:duration-300 hover:before:translate-y-0 hover:before:opacity-100 dark:shadow-[0_4px_14px_-4px_rgb(255_79_0/0.6)] dark:hover:shadow-[0_6px_18px_-4px_rgb(255_79_0/0.75)]",
+          "bg-primary bg-clip-border text-primary-foreground shadow-[0_4px_12px_-4px_color-mix(in_srgb,var(--primary)_50%,transparent)] transition-[background-color,box-shadow,translate] hover:bg-primary/90 hover:shadow-[0_6px_16px_-4px_color-mix(in_srgb,var(--primary)_65%,transparent)] relative isolate overflow-hidden before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:translate-y-2 before:bg-[radial-gradient(ellipse_65%_80%_at_50%_125%,var(--primary-light)_0%,var(--primary-light-soft)_35%,transparent_72%)] before:opacity-0 before:transition-[opacity,translate] before:duration-300 hover:before:translate-y-0 hover:before:opacity-100 dark:shadow-[0_4px_14px_-4px_color-mix(in_srgb,var(--primary)_60%,transparent)] dark:hover:shadow-[0_6px_18px_-4px_color-mix(in_srgb,var(--primary)_75%,transparent)]",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

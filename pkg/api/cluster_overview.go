@@ -56,6 +56,12 @@ type overviewCache struct {
 	err       error
 }
 
+// A cached snapshot is served without waiting while it is younger than this.
+// An older one means nobody has opened the overview for a while: the viewer
+// waits for the refresh (bounded by the build deadline) instead of seeing a
+// snapshot from hours ago and a stale warning until the next poll.
+const overviewMaxAge = 60 * time.Second
+
 func (s *Server) overviewSnapshot(ctx context.Context, id string) (*overviewSnapshot, error) {
 	c := &s.overview
 	c.mu.Lock()
@@ -68,10 +74,6 @@ func (s *Server) overviewSnapshot(ctx context.Context, id string) (*overviewSnap
 		}
 		return nil, errors.New("snapshot expired; refresh the overview")
 	}
-	var latest *overviewSnapshot
-	if len(c.snapshots) > 0 {
-		latest = c.snapshots[len(c.snapshots)-1]
-	}
 	if c.pending == nil && time.Since(c.attempted) >= 30*time.Second {
 		c.pending = make(chan struct{})
 		c.attempted = time.Now()
@@ -80,6 +82,9 @@ func (s *Server) overviewSnapshot(ctx context.Context, id string) (*overviewSnap
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			snap, err := s.buildOverview(ctx)
+			if err != nil {
+				s.log.Warn("overview: node snapshot could not be refreshed", "error", err)
+			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			c.err = err
@@ -93,25 +98,40 @@ func (s *Server) overviewSnapshot(ctx context.Context, id string) (*overviewSnap
 			c.pending = nil
 		}()
 	}
-	pending, err := c.pending, c.err
+	latest, pending, err := c.latest(), c.pending, c.err
 	c.mu.Unlock()
-	if latest != nil {
+	if latest != nil && time.Since(latest.At) < overviewMaxAge {
 		return latest, nil
 	}
-	if pending == nil {
+	if pending != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-pending:
+		}
+		c.mu.Lock()
+		latest, err = c.latest(), c.err
+		c.mu.Unlock()
+	}
+	if latest == nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-pending:
+	if err != nil && time.Since(latest.At) >= overviewMaxAge {
+		// The refresh failed: the old snapshot is still the best available, and
+		// the viewer is told why it is old. The cached snapshot itself is shared
+		// and never mutated.
+		stale := *latest
+		stale.Errors = append(append([]string{}, latest.Errors...), "Node snapshot could not be refreshed: "+err.Error())
+		return &stale, nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.snapshots) > 0 {
-		return c.snapshots[len(c.snapshots)-1], nil
+	return latest, nil
+}
+
+func (c *overviewCache) latest() *overviewSnapshot {
+	if len(c.snapshots) == 0 {
+		return nil
 	}
-	return nil, c.err
+	return c.snapshots[len(c.snapshots)-1]
 }
 
 func (s *Server) buildOverview(ctx context.Context) (*overviewSnapshot, error) {
@@ -368,6 +388,12 @@ func (s *Server) clusterOverview(c *gin.Context) {
 }
 func (s *Server) overviewNodes(c *gin.Context) {
 	snap, err := s.overviewSnapshot(c.Request.Context(), c.Query("snapshot"))
+	if err != nil && c.Query("snapshot") != "" && c.DefaultQuery("offset", "0") == "0" {
+		// The id came from another replica, or expired. The first page has no
+		// ordering to keep, so the latest snapshot serves it; a later page
+		// cannot be taken from a different snapshot and stays a conflict.
+		snap, err = s.overviewSnapshot(c.Request.Context(), "")
+	}
 	if err != nil {
 		abort(c, http.StatusConflict, err)
 		return

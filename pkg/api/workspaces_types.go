@@ -33,6 +33,21 @@ type CreateWorkspaceRequest struct {
 	// creates it, none for the operator's own.
 	Limits *store.Limits        `json:"limits,omitempty"`
 	Sleep  *store.SleepDefaults `json:"sleep,omitempty"`
+	// Origin says what makes the workspace (store.OriginAgent, ...;
+	// store.OriginOperator when empty) and CreatedBy who: an agent's name,
+	// a token, an email. ExpiresIn makes it a workspace waiting to be
+	// claimed (#274): a duration ("24h", "7d") after which, unclaimed, it
+	// is suspended and deleted. A sign-in claims it, so does
+	// POST /api/workspaces/:slug/claim.
+	Origin    string `json:"origin,omitempty"`
+	CreatedBy string `json:"createdBy,omitempty"`
+	ExpiresIn string `json:"expiresIn,omitempty"`
+}
+
+// ProtectWorkspaceRequest is PUT /api/workspaces/:slug/protected: a hold
+// no policy crosses (#274).
+type ProtectWorkspaceRequest struct {
+	Protected bool `json:"protected"`
 }
 
 // CreatedWorkspace is what POST /api/workspaces answers: the workspace,
@@ -85,4 +100,19 @@ type WorkspaceSummary struct {
 	Readiness *store.WorkspaceReadiness `json:"readiness,omitempty"`
 	ReadyAt   *time.Time                `json:"readyAt,omitempty"`
 	CreatedAt time.Time                 `json:"createdAt"`
+	// The lifecycle (#274): why and since when it is suspended, the date
+	// it is deleted and why, when an unclaimed one expires, what made it,
+	// whether policies leave it alone, when it was last used, and, on a
+	// tombstone, when it was deleted and how the cascade went.
+	SuspendedAt    *time.Time               `json:"suspendedAt,omitempty"`
+	SuspendReason  string                   `json:"suspendReason,omitempty"`
+	DeleteAfter    *time.Time               `json:"deleteAfter,omitempty"`
+	DeleteReason   string                   `json:"deleteReason,omitempty"`
+	ExpiresAt      *time.Time               `json:"expiresAt,omitempty"`
+	Origin         string                   `json:"origin,omitempty"`
+	CreatedBy      string                   `json:"createdBy,omitempty"`
+	Protected      bool                     `json:"protected,omitempty"`
+	LastActivityAt *time.Time               `json:"lastActivityAt,omitempty"`
+	DeletedAt      *time.Time               `json:"deletedAt,omitempty"`
+	Deletion       *store.WorkspaceDeletion `json:"deletion,omitempty"`
 }

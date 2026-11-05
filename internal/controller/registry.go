@@ -99,3 +99,9 @@ func (r *AppReconciler) pruneImages(ctx context.Context, app *shpyrdv1.App) {
 func (r *AppReconciler) registrySecretChanged(obj client.Object) bool {
 	return r.Config.RegistrySecret != "" && obj.GetNamespace() == r.Config.SystemNamespace && obj.GetName() == r.Config.RegistrySecret
 }
+
+// Registry is the platform registry's client with the system credential,
+// for the workspace reconciler's cascade (#274).
+func (r *AppReconciler) Registry(ctx context.Context) (*registry.Client, error) {
+	return r.registryClient(ctx)
+}

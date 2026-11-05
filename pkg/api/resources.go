@@ -338,13 +338,25 @@ func (s *Server) createResource(c *gin.Context) {
 // and counted against the workspace's limits, a database restored from
 // another's backups has its source and moment checked first (#74).
 func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name string, spec map[string]interface{}, action string) {
-	if !volumeName.MatchString(name) {
-		abort(c, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)"))
-		return
-	}
 	ns, ok := s.projectNamespace(c)
 	if !ok {
 		return
+	}
+	view, status, err := s.makeResource(c, ns, c.Param("slug"), t, name, spec, action)
+	if err != nil {
+		abort(c, status, err)
+		return
+	}
+	c.JSON(status, view)
+}
+
+// makeResource is createResourceOf for a project named by its namespace
+// and slug (the catalog's install makes resources in a project the path
+// does not name): the view of what was made and 201, or the status a
+// refusal takes and why.
+func (s *Server) makeResource(c *gin.Context, ns, slug string, t ext.ResourceType, name string, spec map[string]interface{}, action string) (ResourceView, int, error) {
+	if !volumeName.MatchString(name) {
+		return ResourceView{}, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)")
 	}
 	ctx := c.Request.Context()
 	if t.Kind == "Postgres" {
@@ -354,14 +366,12 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 			if raw, _ := rec["targetTime"].(string); raw != "" {
 				at, err := time.Parse(time.RFC3339, raw)
 				if err != nil {
-					abort(c, http.StatusBadRequest, fmt.Errorf("recovery.targetTime %q: use RFC 3339, e.g. 2026-09-25T10:00:00Z", raw))
-					return
+					return ResourceView{}, http.StatusBadRequest, fmt.Errorf("recovery.targetTime %q: use RFC 3339, e.g. 2026-09-25T10:00:00Z", raw)
 				}
 				to = &at
 			}
 			if err := s.checkRecovery(ctx, ns, name, from, to); err != nil {
-				abort(c, http.StatusBadRequest, err)
-				return
+				return ResourceView{}, http.StatusBadRequest, err
 			}
 		}
 	}
@@ -370,18 +380,17 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		"kind":       t.Kind,
 		"metadata": map[string]interface{}{
 			"name": name, "namespace": ns,
-			"labels": map[string]interface{}{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: c.Param("slug")},
+			"labels": map[string]interface{}{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: slug},
 		},
 		"spec": spec,
 	}}
 	note := ""
 	shared := false
-	ch := change{project: c.Param("slug")}
+	ch := change{project: slug}
 	if t.Kind == "Postgres" {
 		cap, err := s.applyPostgresType(ctx, s.workspace(c), spec)
 		if err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
+			return ResourceView{}, http.StatusBadRequest, err
 		}
 		ch.database = true
 		if shared = spec["type"] == shpyrdv1.PostgresTypeShared; shared {
@@ -393,8 +402,7 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	if t.Kind == "ObjectBucket" {
 		n, cap, err := s.applyBucketRules(ctx, s.workspace(c), spec)
 		if err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
+			return ResourceView{}, http.StatusBadRequest, err
 		}
 		note = n
 		ch.buckets, ch.bucketCap, ch.objectStorage = 1, cap, cap
@@ -402,8 +410,7 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	if (t.Kind == "Postgres" && !shared) || t.Kind == "Redis" {
 		n, res, count, err := s.storeSize(ctx, t.Kind, spec)
 		if err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
+			return ResourceView{}, http.StatusBadRequest, err
 		}
 		note = n
 		ch.add, ch.addN, ch.instances = res, count, count
@@ -433,18 +440,19 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	if err != nil {
 		switch {
 		case apierrors.IsAlreadyExists(err):
-			abort(c, http.StatusConflict, fmt.Errorf("%s %q already exists", t.Kind, name))
+			return ResourceView{}, http.StatusConflict, fmt.Errorf("%s %q already exists", t.Kind, name)
 		case apierrors.IsInvalid(err):
-			abort(c, http.StatusBadRequest, err)
-		default:
-			abortAdmission(c, err, http.StatusBadRequest)
+			return ResourceView{}, http.StatusBadRequest, err
 		}
-		return
+		if r, ok := refused(err); ok {
+			return ResourceView{}, http.StatusBadRequest, errors.New(r.msg)
+		}
+		return ResourceView{}, http.StatusBadGateway, err
 	}
-	s.audit(c, c.Param("slug"), action, t.Kind+" "+name, "")
+	s.audit(c, slug, action, t.Kind+" "+name, "")
 	view := resourceViewOf(t, *u)
 	view.Note = note
-	c.JSON(http.StatusCreated, view)
+	return view, http.StatusCreated, nil
 }
 
 // What a shared database refuses, in the plan's words.
