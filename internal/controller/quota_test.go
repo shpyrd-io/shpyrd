@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -48,13 +49,18 @@ func TestReconcileQuota(t *testing.T) {
 	if _, ok := q.Spec.Hard[corev1.ResourceRequestsStorage]; ok {
 		t.Error("storage cannot share a quota with pod scopes")
 	}
-	// Buildpack builds run as pods without resources; a quota that made
-	// them declare some would refuse every build.
+	// Pods that ask for nothing are outside the quota; a quota that made
+	// them declare some would refuse the platform's own pods.
 	if len(q.Spec.Scopes) != 1 || q.Spec.Scopes[0] != corev1.ResourceQuotaScopeNotBestEffort {
 		t.Errorf("compute quota scopes = %v, want NotBestEffort", q.Spec.Scopes)
 	}
-	// Dockerfile builds and release steps are steps of a deploy, outside
-	// the ceiling (#243, #60): the quota leaves their priority classes out.
+	// Builds and release steps are steps of a deploy, outside the ceiling
+	// (#243, #60): the quota leaves their priority classes out. A buildpack
+	// build's pod gets its class from the build-pod webhook, so the quota
+	// and the webhook must name the same one.
+	if BuildPriorityClass != buildtrust.PriorityClass {
+		t.Errorf("quota leaves out %q, the webhook names %q", BuildPriorityClass, buildtrust.PriorityClass)
+	}
 	if sel := q.Spec.ScopeSelector; sel == nil || len(sel.MatchExpressions) != 1 ||
 		sel.MatchExpressions[0].ScopeName != corev1.ResourceQuotaScopePriorityClass ||
 		sel.MatchExpressions[0].Operator != corev1.ScopeSelectorOpNotIn ||

@@ -13,7 +13,8 @@ import (
 // where the CPU, memory and disk are free, and the cluster autoscaler adds
 // a machine when none has them. Requests only: a buildpack build has no
 // ceiling of its own (the stack's tools decide), and the Dockerfile build
-// keeps the limits it had.
+// keeps the limits it had. A request puts the pod within reach of the
+// project's compute quota; its PriorityClass keeps it out (quota.go).
 const (
 	// buildRequestCPU is one core: a build is mostly one process at a time
 	// (an install, a compile, an image export).

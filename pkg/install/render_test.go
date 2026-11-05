@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/shpyrd-io/shpyrd/deploy"
+	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
 )
 
 func TestLocalProfileRenders(t *testing.T) {
@@ -1161,10 +1162,13 @@ func TestWALArchiveAlertsReadTheArchiveQueueAndSkipNeverFailed(t *testing.T) {
 	}
 }
 
-// Dockerfile builds and release steps run under priority classes of their
-// own, outside the workspace's compute quota (#243, #60): the shpyrd
-// component installs them, so a server-only roll brings them along. They
-// never preempt.
+// Builds and release steps run under priority classes of their own,
+// outside the workspace's compute quota (#243, #60): the shpyrd component
+// installs them, so a server-only roll brings them along. They never
+// preempt, and their value is 0: the build-pod webhook names the build
+// class on a pod the API server has already given priority 0 and writes
+// the class's policy on it, and the server refuses the pod when either
+// differs from the class (pkg/buildtrust).
 func TestTheServerInstallsTheStepPriorityClasses(t *testing.T) {
 	eng, err := New(nil, Options{Profile: "local", Vars: map[string]string{VarDomain: "example.test"}, Reporter: &quiet{}})
 	if err != nil {
@@ -1181,12 +1185,13 @@ func TestTheServerInstallsTheStepPriorityClasses(t *testing.T) {
 		}
 		policy, _, _ := unstructured.NestedString(o.Object, "preemptionPolicy")
 		global, _, _ := unstructured.NestedBool(o.Object, "globalDefault")
-		if policy != "Never" || global {
-			t.Errorf("%s: preemptionPolicy=%q globalDefault=%v", o.GetName(), policy, global)
+		value, _, _ := unstructured.NestedInt64(o.Object, "value")
+		if policy != string(buildtrust.PriorityClassPreemption) || global || value != 0 {
+			t.Errorf("%s: preemptionPolicy=%q globalDefault=%v value=%d", o.GetName(), policy, global, value)
 		}
 		found[o.GetName()] = true
 	}
-	for _, name := range []string{"shpyrd-build", "shpyrd-release"} {
+	for _, name := range []string{buildtrust.PriorityClass, "shpyrd-release"} {
 		if !found[name] {
 			t.Errorf("the shpyrd component has no %s PriorityClass", name)
 		}
