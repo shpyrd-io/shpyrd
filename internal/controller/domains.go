@@ -130,6 +130,16 @@ func certificateSecretName(app *shpyrdv1.App, host string) string {
 	return app.Name + "-" + strings.Trim(name, "-") + "-tls"
 }
 
+// certificateHostLabel preserves existing short labels while bounding longer
+// resource names to Kubernetes' label limit without losing their identity.
+func certificateHostLabel(name string) string {
+	if len(name) <= 63 {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	return strings.TrimRight(name[:50], "-_.") + "-" + hex.EncodeToString(sum[:6])
+}
+
 // ingressTLS is the TLS section of the project's Ingress: one entry per host.
 // Hosts under the cluster domain use the wildcard when the front door serves
 // it as its default certificate; every other host has its own Secret.
@@ -217,7 +227,7 @@ func (r *AppReconciler) ensureCertificate(ctx context.Context, app *shpyrdv1.App
 	cert.SetName(name)
 	cert.SetNamespace(app.Namespace)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
-		cert.SetLabels(mergeMaps(cert.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/host": name}))
+		cert.SetLabels(mergeMaps(cert.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/host": certificateHostLabel(name)}))
 		_ = unstructured.SetNestedField(cert.Object, name, "spec", "secretName")
 		_ = unstructured.SetNestedStringSlice(cert.Object, []string{host}, "spec", "dnsNames")
 		_ = unstructured.SetNestedMap(cert.Object, map[string]interface{}{"kind": "ClusterIssuer", "name": issuer}, "spec", "issuerRef")
