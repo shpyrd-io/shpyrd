@@ -136,6 +136,8 @@ shpyrd redis resize cache shared-m --project shop         # another size; the st
 shpyrd redis cli cache --project shop -- INFO memory
 ```
 
+**Cache or persistent?** Most apps want a cache, the default. It holds what can be rebuilt (rendered pages, query results, rate limits, sessions a person can lose), keeps everything in memory, sleeps with the app and comes back empty, which a cache expects. Make a store persistent only when losing its data on a restart breaks the app: a job queue (Sidekiq, BullMQ, Celery, RQ) whose pending jobs must survive, or sessions that must outlive a restart. **Persistent storage costs more**: the store gets a disk of its own and stays up while the app sleeps. Persistence cannot change after creation, so when in doubt, start with a cache; an app that later needs a queue creates a second, persistent store beside it.
+
 A store takes a size from the Redis list, the processes' names with clients of their own, and gets the smallest when it names none:
 
 | Size | CPU | Memory | `maxmemory` | Clients |
