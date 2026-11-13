@@ -43,7 +43,9 @@ func TestVolumeMinimumAndSnapshots(t *testing.T) {
 	rec = do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"small","size":"1Gi"}`, true)
 	var view VolumeView
 	_ = json.Unmarshal(rec.Body.Bytes(), &view)
-	if rec.Code != http.StatusCreated || view.Size != "50Gi" || !strings.Contains(view.Note, "start at 50Gi") || !strings.Contains(view.Note, "instead of 1Gi") {
+	// The volume keeps the 1Gi asked for; the note says the disk is 50Gi and
+	// names no provider (shpyrd#354).
+	if rec.Code != http.StatusCreated || view.Size != "1Gi" || !strings.Contains(view.Note, "Volumes start at 50Gi") || !strings.Contains(view.Note, "1Gi asked for") || strings.Contains(view.Note, "Oracle") {
 		t.Errorf("rounded create: %d %+v", rec.Code, view)
 	}
 	rec = do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"big","size":"100Gi"}`, true)

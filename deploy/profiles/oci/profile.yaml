@@ -1,12 +1,16 @@
 name: oci
 description: Oracle Cloud (OKE) with a public load balancer, Let's Encrypt certificates and the in-cluster registry
 vars:
-  # Project disks and databases are provider block volumes (SHPYRD_STORAGE_CLASS
-  # below, with its minimum size and its snapshots): they follow their process
-  # or database to another node, so a node can be drained or lost without
-  # losing data. Claims that exist keep their class; shpyrd-local (the node's
-  # disk) stays installed for them until the last one is migrated.
-  SHPYRD_PROJECT_STORAGE_CLASS: ""
+  # Project disks and databases are provider block volumes: they follow their
+  # process or database to another node, so a node can be drained or lost
+  # without losing data. Databases are on SHPYRD_STORAGE_CLASS below (OKE's
+  # Balanced class), project disks on the Lower Cost class the
+  # storage-oci-lower-cost component creates: an app's disk holds uploads and
+  # tool state, for which Lower Cost is plenty at about 60% of the price.
+  # Both have the same minimum size and the same snapshots. Claims that exist
+  # keep their class; shpyrd-local (the node's disk) stays installed for them
+  # until the last one is migrated.
+  SHPYRD_PROJECT_STORAGE_CLASS: oci-bv-lower-cost
   SHPYRD_DATABASE_STORAGE_CLASS: ""
   SHPYRD_SHARED_POSTGRES_INSTANCES: "2"
   SHPYRD_SHARED_POSTGRES_PER_SERVER: "200"
@@ -147,7 +151,7 @@ runlevels:
   - name: rc0
     components: [monitoring-crds]
   - name: rc1
-    components: [object-gateway, network-policy, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-fss]
+    components: [object-gateway, network-policy, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-fss, storage-oci-lower-cost]
   - name: rc2
     components: [letsencrypt-issuers, ca-issuers, trust-manager, ingress-nginx, ingress-nginx-internal, registry, registry-nodes, external-dns, dns01-oci]
   - name: rc3

@@ -231,10 +231,9 @@ func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, 
 		current = &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID}}, Spec: v.Spec}
 		current.Spec.FromSnapshot = ""
 		current.Spec.StorageClass = ""
-		// On the profile's class, as a new disk: the provider minimum
-		// applies (RFC-0060), or the Volume would ask for less than the
-		// disk it gets and refuse every later resize up to that size.
-		current.Spec.Size = s.restoredVolumeSize(current.Spec)
+		// On the profile's class, as a new disk: the volume keeps the size
+		// it asked for, and the provider minimum applies to the disk
+		// (RFC-0060, shpyrd-cloud#70).
 		if err := s.apps.Create(ctx, current); err != nil {
 			return err
 		}
@@ -640,9 +639,10 @@ func (s *Server) removeCreatedArchiveResources(ctx context.Context, app *shpyrdv
 	return s.saveProjectArchive(ctx, app.Namespace, op)
 }
 
-// restoredVolumeSize is what a restored volume's disk becomes: rounded to
-// the provider minimum unless it is a shared folder (a file system, which
-// has no minimum and ignores the size).
+// restoredVolumeSize is what a restored volume's disk becomes, for the
+// ceiling: rounded to the provider minimum unless it is a shared folder (a
+// file system, which has no minimum and ignores the size). The volume
+// itself keeps the size it asks for.
 func (s *Server) restoredVolumeSize(spec shpyrdv1.VolumeSpec) resource.Quantity {
 	if spec.AccessMode == corev1.ReadWriteMany {
 		return spec.Size

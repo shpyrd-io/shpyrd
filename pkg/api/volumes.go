@@ -123,16 +123,20 @@ func (s *Server) makeVolume(c *gin.Context, ns, slug string, req CreateVolumeReq
 	if err != nil {
 		return VolumeView{}, http.StatusBadRequest, err
 	}
-	// Provider minimum (RFC-0060): the disk would be that size anyway; say
-	// so before it exists instead of after the bill. Shared volumes are
-	// file systems, which have no such minimum and ignore the size.
+	// Provider minimum (RFC-0060): the disk is at least that size whatever
+	// is asked; say so before it exists instead of after the bill. The
+	// volume keeps the size asked for (shpyrd-cloud#70): the reconciler
+	// rounds the claim, the status reports the disk, and usage is metered
+	// on the request. The ceiling counts the disk. Shared volumes are file
+	// systems, which have no such minimum and ignore the size.
 	var note string
+	disk := size
 	if req.Shared {
 		if s.vars(install.VarFSSMountTarget) != "" {
-			note = "shared volumes are Oracle Cloud File Storage file systems: the size is not enforced, the volume grows as needed and billing follows use"
+			note = "shared volumes are file systems: the size is not enforced, the volume grows as needed and billing follows use"
 		}
 	} else {
-		size, note = s.applyVolumeMinimum(size)
+		disk, note = s.applyVolumeMinimum(size)
 	}
 	// A plan without disks says so first, before any question of class or
 	// size; the judgement under the lock says it again.
@@ -156,7 +160,7 @@ func (s *Server) makeVolume(c *gin.Context, ns, slug string, req CreateVolumeReq
 	}
 	// A new disk, judged against the workspace's ceilings (its plan may
 	// include no disks at all) and made under its lock.
-	err = s.admit(c.Request.Context(), s.workspace(c), change{project: slug, storage: vol.Spec.Size, newDisk: true}, func(ctx context.Context) error {
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: slug, storage: disk, newDisk: true}, func(ctx context.Context) error {
 		return s.apps.Create(ctx, vol)
 	})
 	if err != nil {
@@ -174,8 +178,10 @@ func (s *Server) makeVolume(c *gin.Context, ns, slug string, req CreateVolumeReq
 	return view, http.StatusCreated, nil
 }
 
-// applyVolumeMinimum rounds a request up to the profile's minimum volume
-// size and explains it.
+// applyVolumeMinimum is the disk a request gets: the request, or the
+// profile's minimum volume size when the request is under it, with a note
+// that says so. The note names no provider (shpyrd#354): what matters to
+// the person is the minimum and what they got.
 func (s *Server) applyVolumeMinimum(size resource.Quantity) (resource.Quantity, string) {
 	minStr := install.ProjectVolumeMinSize(s.vars)
 	if minStr == "" {
@@ -185,11 +191,7 @@ func (s *Server) applyVolumeMinimum(size resource.Quantity) (resource.Quantity, 
 	if err != nil || size.Cmp(minimum) >= 0 {
 		return size, ""
 	}
-	provider := "volumes on this cluster"
-	if s.vars(install.VarProfile) == "oci" {
-		provider = "Oracle Cloud block volumes"
-	}
-	return minimum, fmt.Sprintf("%s start at %s: created at %s instead of %s", provider, minimum.String(), minimum.String(), size.String())
+	return minimum, fmt.Sprintf("Volumes start at %s: the disk is %s; the volume keeps the %s asked for", minimum.String(), minimum.String(), size.String())
 }
 
 // sharedFoldersUnavailable is what a project hears when it asks for a shared
@@ -296,11 +298,6 @@ func (s *Server) resizeVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("volumes cannot shrink (currently %s)", floor.String()))
 		return
 	}
-	if !vol.Shared() {
-		if rounded, note := s.applyVolumeMinimum(size); note != "" {
-			size = rounded
-		}
-	}
 	// Checked before acceptance (storage plan step 4): a class that cannot
 	// grow a disk refuses the growth here, in words, not in the status
 	// later.
@@ -308,10 +305,21 @@ func (s *Server) resizeVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	// The disk's growth, judged against the ceilings (a disk that exists
+	// may grow where a new one is refused) and written under the lock. A
+	// request under the provider minimum changes what is asked and metered,
+	// not the disk: no growth to judge.
 	growth := size.DeepCopy()
-	growth.Sub(vol.Spec.Size)
-	// The growth, judged against the ceilings (a disk that exists may
-	// grow where a new one is refused) and written under the lock.
+	before := vol.Spec.Size
+	if !vol.Shared() {
+		growth, _ = s.applyVolumeMinimum(size)
+		rounded, _ := s.applyVolumeMinimum(before)
+		before = existingOrRounded(vol.Status.Capacity, rounded)
+	}
+	growth.Sub(before)
+	if growth.Sign() < 0 {
+		growth = resource.Quantity{}
+	}
 	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: growth}, func(ctx context.Context) error {
 		vol.Spec.Size = size
 		return s.apps.Update(ctx, vol)
@@ -349,11 +357,14 @@ func (s *Server) deleteVolume(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// volumeFloor is the smallest size a volume may be set to: what the claim
-// actually has. Setting the spec back to it recovers from a refused expansion.
+// volumeFloor is the smallest size a volume may be set to: what it asks
+// for, or what the claim actually has when that is less (setting the spec
+// back to it recovers from a refused expansion). A volume under the
+// provider minimum has a disk larger than it asks for; it may still be set
+// to anything from its request up.
 func volumeFloor(vol *shpyrdv1.Volume) resource.Quantity {
 	if vol.Status.Capacity != "" {
-		if q, err := resource.ParseQuantity(vol.Status.Capacity); err == nil {
+		if q, err := resource.ParseQuantity(vol.Status.Capacity); err == nil && q.Cmp(vol.Spec.Size) < 0 {
 			return q
 		}
 	}

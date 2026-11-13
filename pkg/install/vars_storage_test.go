@@ -12,7 +12,7 @@ func TestProfilesStorageClasses(t *testing.T) {
 		authURL                                   string
 		class, shared, min, database, databaseMin string
 	}{
-		{"oci", map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com"}, "https://auth.oci.example.com", "oci-bv", "shpyrd-fss", "50Gi", "oci-bv", "50Gi"},
+		{"oci", map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com"}, "https://auth.oci.example.com", "oci-bv-lower-cost", "shpyrd-fss", "50Gi", "oci-bv", "50Gi"},
 		{"aws", map[string]string{VarDomain: "aws.example.com", VarACMEEmail: "ops@example.com", VarDNSProvider: "aws", VarDNSZoneID: "Z123", VarDNSRegion: "us-east-1", VarEFSID: "fs-0123", VarAWSCluster: "shpyrd-dev", VarAWSRegion: "us-east-1", VarAWSVPCID: "vpc-1", VarAWSLBEIPs: "eipalloc-1,eipalloc-2"}, "https://auth.aws.example.com", "gp3", "shpyrd-efs", "1Gi", "gp3", "1Gi"},
 		{"local", map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"}, "https://auth.example.test:8443", LocalStorageClass, LocalStorageClass, "", LocalStorageClass, ""},
 	}

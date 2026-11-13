@@ -1,4 +1,4 @@
-# A provider snapshot of every block disk of the profile's class, nightly:
+# A provider snapshot of every block disk of the profile's classes, nightly:
 # the projects' disks and databases and the platform's own, the newest
 # SHPYRD_SNAPSHOT_KEEP kept per disk (RFC-0060). A database's own backups
 # are its real backup; the snapshot is the fallback, and for a disk it is the
@@ -39,6 +39,8 @@ spec:
                   value: shpyrd-system
                 - name: SHPYRD_STORAGE_CLASS
                   value: "${SHPYRD_STORAGE_CLASS}"
+                - name: SHPYRD_PROJECT_STORAGE_CLASS
+                  value: "${SHPYRD_PROJECT_STORAGE_CLASS}"
                 - name: SHPYRD_SNAPSHOT_CLASS
                   value: "${SHPYRD_SNAPSHOT_CLASS}"
                 - name: SHPYRD_SNAPSHOT_KEEP

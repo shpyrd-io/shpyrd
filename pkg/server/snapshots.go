@@ -15,14 +15,20 @@ import (
 
 // runSnapshots is `shpyrd-server snapshots`: the nightly provider snapshots
 // of the block disks (RFC-0060, the storage plan). Every claim of the
-// profile's block class in the projects' namespaces and the platform's own
-// gets a snapshot; the newest SHPYRD_SNAPSHOT_KEEP stay per disk. The
-// platform-snapshots CronJob runs it where the profile names a snapshot
-// class; `shpyrd-ctl cluster snapshots take` is the same by hand.
+// profile's block classes (the databases' and the platform's own, and the
+// project disks' when they have a class of their own) in the projects'
+// namespaces and the platform's own gets a snapshot; the newest
+// SHPYRD_SNAPSHOT_KEEP stay per disk. The platform-snapshots CronJob runs
+// it where the profile names a snapshot class; `shpyrd-ctl cluster
+// snapshots take` is the same by hand, one class at a time.
 func runSnapshots(logger *slog.Logger) error {
 	class, snapshotClass := os.Getenv(install.VarStorageClass), os.Getenv(install.VarSnapshotClass)
 	if class == "" || snapshotClass == "" {
 		return errors.New("SHPYRD_STORAGE_CLASS and SHPYRD_SNAPSHOT_CLASS name the disks to snapshot and the class to snapshot them with")
+	}
+	classes := []string{class}
+	if project := os.Getenv(install.VarProjectStorageClass); project != "" && project != class && project != install.LocalStorageClass {
+		classes = append(classes, project)
 	}
 	keep := 7
 	if raw := os.Getenv("SHPYRD_SNAPSHOT_KEEP"); raw != "" {
@@ -42,11 +48,17 @@ func runSnapshots(logger *slog.Logger) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	opts := snapshots.Options{Class: class, SnapshotClass: snapshotClass, System: true, Keep: keep, Wait: 10 * time.Minute}
-	if k.Config != nil {
-		opts.Sync = func(ctx context.Context, namespace, claim string) { snapshots.Flush(ctx, k, namespace, claim) }
+	var failed error
+	for _, class := range classes {
+		opts := snapshots.Options{Class: class, SnapshotClass: snapshotClass, System: true, Keep: keep, Wait: 10 * time.Minute}
+		if k.Config != nil {
+			opts.Sync = func(ctx context.Context, namespace, claim string) { snapshots.Flush(ctx, k, namespace, claim) }
+		}
+		results, err := snapshots.Take(ctx, os.Stdout, c, opts)
+		logger.Info("disk snapshots", "class", class, "disks", len(results), "keep", keep)
+		if err != nil && failed == nil {
+			failed = err
+		}
 	}
-	results, err := snapshots.Take(ctx, os.Stdout, c, opts)
-	logger.Info("disk snapshots", "class", class, "disks", len(results), "keep", keep)
-	return err
+	return failed
 }

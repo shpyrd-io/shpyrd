@@ -1,0 +1,6 @@
+name: storage-oci-lower-cost
+description: Storage class for project disks on OCI Block Volume at the Lower Cost performance level (expandable, snapshots); databases stay on the Balanced class
+namespace: kube-system
+kustomize:
+  path: base
+timeout: 2m

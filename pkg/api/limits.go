@@ -292,7 +292,13 @@ func (s *Server) workspaceUsage(ctx context.Context, ws string, cat *sizes.Catal
 			if slug == "" {
 				slug = namespaces[v.Namespace]
 			}
+			// The disk it has, else the disk it gets: the provider minimum
+			// rounds a request up (a shared folder is a file system, with
+			// no minimum).
 			size := v.Spec.Size
+			if !v.Shared() {
+				size = existingOrRounded(v.Status.Capacity, roundToMinimum(v.Spec.Size, install.ProjectVolumeMinSize(s.vars)))
+			}
 			both(func(u *usage) { u.addStorage(slug, size) })
 		}
 	}

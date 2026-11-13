@@ -1,0 +1,21 @@
+# Project disks on OCI Block Volume at the Lower Cost performance level
+# (vpusPerGB 0: 2 IOPS/GB, 240 KB/s per GB, about 60% of the Balanced price).
+# An app's disk holds uploads, SQLite files and tool state, for which that is
+# plenty; databases keep the Balanced class OKE provides (oci-bv), named in
+# SHPYRD_STORAGE_CLASS. Same driver, same snapshots (oci-bv-backup), same
+# 50 GB minimum, expansion allowed. The performance level of a disk that
+# exists can be changed online in the OCI console or CLI; the class of a
+# claim cannot.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ${SHPYRD_PROJECT_STORAGE_CLASS}
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+provisioner: blockvolume.csi.oraclecloud.com
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  attachment-type: "paravirtualized"
+  vpusPerGB: "0"
