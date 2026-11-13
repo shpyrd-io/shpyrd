@@ -1,0 +1,113 @@
+id: tour-project
+
+title: "Tour 2: a project and its header"
+
+area: projects
+
+tags: [tour]
+
+scenario: tour
+
+goal: >
+  A project's overview, and everything its header opens: its name and icon,
+  deploying from Git, the deploy options, and
+  destroying it (not confirmed). The public internet badge opens a dialog
+  too, but it is not a button, so it cannot be reached here (nor by keyboard).
+
+steps:
+  # Signing in on the launcher, where its result is plain to see.
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Storefront
+
+  - action: goto
+    path: /projects/storefront
+
+  - action: wait
+    text: Summary
+    narration: Each project has a page of its own. The overview says what runs, from which source, and what changed last.
+
+  - action: capture
+    name: overview
+    description: The overview of a deployed project.
+    use: { docs: true, marketing: true }
+
+  - action: do
+    instruction: Open the dialog to change the project's name, icon and description
+
+  - action: wait
+    text: Name, icon and description
+    narration: Its name, icon and description are how it shows on the launcher.
+
+  - action: capture
+    name: name-icon-dialog
+    description: Changing a project's name, icon and description.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront
+
+  - action: wait
+    text: Running
+
+  - action: do
+    instruction: Click Deploy, until the Deploy from Git dialog opens
+
+  - action: wait
+    text: Deploy from Git
+    narration: Deploy from a Git repository, with buildpacks or a Dockerfile.
+
+  - action: capture
+    name: deploy-dialog
+    description: Deploying a project from Git.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront
+
+  - action: wait
+    text: Running
+
+  - action: do
+    instruction: Click More options beside Deploy, until its menu opens
+
+  - action: wait
+    text: Rebuild from the source
+
+  - action: capture
+    name: deploy-options
+    description: The deploy button's other options.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront
+
+  - action: wait
+    text: Running
+
+  - action: do
+    instruction: Click Destroy the project, until its confirmation dialog opens, and confirm nothing in it
+
+  - action: wait
+    text: to confirm
+    narration: Destroying a project asks for its name first, so it never happens by accident.
+
+  - action: capture
+    name: destroy-dialog
+    description: The confirmation before destroying a project.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

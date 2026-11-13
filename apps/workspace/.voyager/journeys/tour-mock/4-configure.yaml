@@ -1,0 +1,224 @@
+id: mock-configure
+
+title: "Mock tour 4: configuring a project"
+
+area: projects
+
+tags: [tour, mock]
+
+scenario: mock
+
+goal: >
+  How a project is set up: config vars, the databases, stores and volumes
+  beside it and their snapshots, its domains and its log drains.
+
+steps:
+  - action: goto
+    path: /projects/hello-world/config
+
+  - action: wait
+    text: SESSION_SECRET
+    narration: Config vars are set here, or come from the databases attached to the app.
+
+  - action: capture
+    name: config
+    description: Config vars, set by hand and provided by the resources.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click From a .env, until the Set from a .env dialog opens
+
+  - action: wait
+    text: Set from a .env
+
+  - action: capture
+    name: env-dialog
+    description: Setting config vars from a .env file.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+    narration: "Beside the app: a database, a store and a volume."
+
+  - action: capture
+    name: resources
+    description: The processes, and the database, store and volume beside them.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add beside the application, until a menu lists A volume, A Postgres database and A Redis or Valkey store
+
+  - action: wait
+    text: A volume
+
+  - action: capture
+    name: add-menu
+    description: What can be added beside an application.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+
+  - action: capture
+    name: resources-before-postgres
+    description: The resources, before adding a database.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a Postgres database: click Add, then A Postgres database, until the New Postgres database dialog opens"
+
+  - action: wait
+    text: New Postgres database
+
+  - action: capture
+    name: postgres-dialog
+    description: A new Postgres database.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+
+  - action: capture
+    name: resources-before-redis
+    description: The resources, before adding a store.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a Redis store: click Add, then A Redis or Valkey store, until the New Redis-compatible store dialog opens"
+
+  - action: wait
+    text: New Redis-compatible store
+
+  - action: capture
+    name: redis-dialog
+    description: A new Redis-compatible store.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+
+  - action: capture
+    name: resources-before-volume
+    description: The resources, before adding a volume.
+    use: { docs: true }
+
+  - action: do
+    instruction: "Add a volume: click Add, then A volume, until the New volume dialog opens"
+
+  - action: wait
+    text: New volume
+
+  - action: capture
+    name: volume-dialog
+    description: A new volume.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+
+  - action: capture
+    name: resources-before-resize
+    description: The resources, before resizing the database.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Resize on the row of the database db, until the Resize db dialog opens
+
+  - action: wait
+    text: Resize db
+
+  - action: capture
+    name: resize-dialog
+    description: Resizing a database.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/resources
+
+  - action: wait
+    text: uploads
+
+  - action: capture
+    name: resources-before-snapshots
+    description: The resources, before the volume's snapshots.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Snapshots on the row of the volume uploads, until the Snapshots of uploads dialog opens
+
+  - action: wait
+    text: uploads-20260928
+    narration: Volumes keep snapshots, to go back before a risky release.
+
+  - action: capture
+    name: snapshots-dialog
+    description: A volume's snapshots.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/domains
+
+  - action: wait
+    text: hello.acme.com
+    narration: Bring your own domain; the certificate is made for you.
+
+  - action: capture
+    name: domains
+    description: The project's domains and their certificates.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Add a domain dialog opens
+
+  - action: wait
+    text: Add a domain
+
+  - action: capture
+    name: domain-dialog
+    description: Adding a domain.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/drains
+
+  - action: wait
+    text: datadog
+    narration: And send its logs wherever your team reads them.
+
+  - action: capture
+    name: drains
+    description: Log drains, sending the project's lines elsewhere.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Add a drain dialog opens
+
+  - action: wait
+    text: Add a drain
+
+  - action: capture
+    name: drain-dialog
+    description: Adding a log drain.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

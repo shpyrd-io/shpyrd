@@ -1,0 +1,17 @@
+id: tour
+
+description: >
+  The workspace "Acme" in use, for the product tour. People: owner@acme.test
+  ("Olivia Owner", owner), ada@acme.test (admin) and dev@acme.test (member,
+  in the team "platform"), every password VOYAGER_PASSWORD. Projects:
+  Storefront (deployed from a prebuilt image, two releases, config vars, a
+  Postgres database "db" with backups and a Redis store "cache" attached, a
+  volume "uploads", a log drain "papertrail", the domain shop.acme.test,
+  dev@acme.test as developer, API let in), API (deployed) and Website (not
+  deployed). The workspace has the config var LOG_LEVEL and the drain
+  "archive". Needs the postgres, redis, object-storage, logs-agent and sleep
+  extensions.
+
+seed:
+  command: .voyager/seed.sh tour
+  timeout: 8m

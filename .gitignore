@@ -58,3 +58,6 @@ contrib/oci/terraform/tfplan_autoscaler
 
 # Generated shared object gateway credentials
 *-objects.env
+
+# Voyager run artifacts (screenshots, videos, traces)
+.voyager-output/

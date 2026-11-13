@@ -1,0 +1,14 @@
+id: mock
+
+description: >
+  The Mock's workspace "Acme" as mock/*.json has it, seen by Ana Souza, its
+  owner. Six projects: Hello World (running, with builds, config vars, a
+  Postgres database, a Redis store, a volume with a snapshot, two domains,
+  two drains and three roles), Docs (deploying), Billing (open to people who
+  sign in), Dash TV, Reports (failed) and Metrics. Four people, four teams,
+  two API tokens, two connected assistants, an open invitation (i1, for
+  carla@acme.com).
+
+# No seed: the Mock answers from the committed JSON files, and what a screen
+# changes is kept in the browser's localStorage, which every Voyager run
+# starts without. The same files give the same state.

@@ -1,0 +1,92 @@
+id: mock-launcher
+
+title: "Mock tour 1: the launcher"
+
+area: launcher
+
+tags: [tour, mock]
+
+scenario: mock
+
+goal: >
+  The launcher: every application the person may open, the theme, their
+  menu, the dialog that makes a new project, and an invitation's page.
+
+steps:
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Hello World
+    narration: This is shpyrd, where your team's applications live. The launcher shows every one you may open.
+
+  - action: capture
+    name: launcher
+    description: The launcher of a workspace with six applications.
+    use: { docs: true, marketing: true }
+
+  - action: do
+    instruction: Click the Dark theme button, until the button reads Light theme instead
+
+  # The dark theme is a class on the document.
+  - action: wait
+    selector: html.dark
+    narration: Light or dark, as you like it.
+
+  - action: capture
+    name: launcher-dark
+    description: The launcher in the dark theme.
+    use: { docs: true, marketing: true }
+
+  - action: do
+    instruction: Open the menu of the person signed in, Ana Souza, at the top right
+
+  - action: wait
+    text: Sign out
+
+  - action: capture
+    name: person-menu
+    description: The menu of the person signed in.
+    use: { docs: true }
+
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Hello World
+
+  - action: capture
+    name: launcher-again
+    description: The launcher, again.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click New project, until the New project dialog opens
+
+  - action: wait
+    text: What it is
+    narration: A new project takes a name, and optionally a Git repository to build from.
+
+  - action: capture
+    name: new-project-dialog
+    description: The new project dialog.
+    use: { docs: true }
+
+  - action: goto
+    path: /invite/i1
+
+  - action: wait
+    text: carla@acme.com
+    narration: "An invitation is a link: whoever it was sent to signs in and joins."
+
+  - action: capture
+    name: invitation
+    description: An invitation's page, opened while signed in as someone else.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

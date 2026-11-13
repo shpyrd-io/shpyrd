@@ -1,0 +1,92 @@
+id: tour-access
+
+title: "Tour 5: who may open a project"
+
+area: projects
+
+tags: [tour]
+
+scenario: tour
+
+goal: >
+  Who may open an application and who may change it: access, roles,
+  connections between projects, and the project's activity.
+
+steps:
+  # Signing in on the launcher, where its result is plain to see.
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Storefront
+
+  - action: goto
+    path: /projects/storefront/access
+
+  - action: wait
+    text: Who may open it
+    narration: "Each app decides who may open it: anyone, whoever signs in, or named people."
+
+  - action: capture
+    name: access
+    description: Who may open the application.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/roles
+
+  - action: wait
+    text: dev@acme.test
+    narration: Roles say who may deploy, configure or administer it.
+
+  - action: capture
+    name: roles
+    description: The people and teams with a role on the project.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Give someone a role dialog opens
+
+  - action: wait
+    text: Give someone a role
+
+  - action: capture
+    name: role-dialog
+    description: Giving someone a role on a project.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/connections
+
+  - action: wait
+    text: Let in
+
+  - action: capture
+    name: connections
+    description: The projects and platform services let into this one.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/storefront/activity
+
+  - action: wait
+    text: admin token
+    narration: And everything done to it is written down, with who did it.
+
+  - action: capture
+    name: activity
+    description: Everything done to the project, by whom.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

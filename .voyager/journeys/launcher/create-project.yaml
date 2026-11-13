@@ -1,0 +1,93 @@
+id: create-project
+
+title: Create the first project
+
+area: launcher
+
+tags: [core]
+
+scenario: empty
+
+goal: >
+  The owner of a new workspace creates its first project from the launcher.
+
+steps:
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: No application yet
+    narration: A brand new workspace starts empty, ready for its first application.
+
+  - action: capture
+    name: empty-launcher
+    description: The launcher of a workspace with no project yet.
+    use: { docs: true }
+
+  # One `do` per screen, so the dialog gets a screenshot empty and filled in.
+  - action: do
+    instruction: Open the dialog to create a new project
+    narration: A project is an application and everything it needs to run.
+
+  - action: wait
+    text: What it is
+
+  - action: capture
+    name: new-project-dialog
+    description: The new project dialog, empty.
+    use: { docs: true }
+
+  - action: do
+    instruction: Fill in the slug "storefront" and the name "Storefront", without creating the project yet
+    narration: Give it a name, and optionally a Git repository to deploy from.
+
+  - action: verify
+    instruction: The new project dialog is still open, with "storefront" as the slug and "Storefront" as the name
+
+  - action: capture
+    name: new-project-filled
+    description: The new project dialog filled in, before creating it.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Create, until the page of the new project opens
+    narration: One click, and the project exists.
+
+  - action: wait
+    url: /projects/storefront*
+
+  - action: verify
+    instruction: The page shows the project "Storefront"
+
+  - action: capture
+    name: project-created
+    description: A project just created, before anything is deployed to it.
+    use: { docs: true }
+
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Storefront
+    narration: Back on the launcher, it is there for everyone who may open it.
+
+  - action: verify
+    instruction: The launcher lists an application named "Storefront" and no longer says "No application yet"
+
+  - action: capture
+    name: launcher-with-project
+    description: The launcher with its first project.
+    use: { docs: true, marketing: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: true

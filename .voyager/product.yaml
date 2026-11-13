@@ -1,0 +1,78 @@
+# Maps product areas to code. `voyager update` uses this to find the
+# journeys a change is likely to affect.
+areas:
+  sign-in:
+    description: >
+      Signing in to a workspace with email and password (auth-local), tokens
+      or an identity provider, and accepting invitations.
+    code:
+      - apps/workspace/src/screens/login.tsx
+      - apps/workspace/src/screens/invite.tsx
+      - apps/shared/src/api/**
+      - pkg/api/auth.go
+      - pkg/api/sessions.go
+      - pkg/api/invitations.go
+      - pkg/api/realms.go
+      - pkg/ext/authlocal/**
+      - ee/sso/**
+
+  launcher:
+    description: >
+      The workspace's home: the applications a person can open, and creating
+      a new project.
+    code:
+      - apps/workspace/src/App.tsx
+      - apps/workspace/src/screens/launcher.tsx
+      - apps/workspace/src/lib/**
+      - pkg/api/apps.go
+      - pkg/project/**
+      - internal/controller/**
+
+  projects:
+    description: >
+      One project: overview, releases, config vars, resources, domains,
+      access, logs, metrics, drains and backups.
+    code:
+      - apps/workspace/src/screens/project/**
+      - pkg/api/apps.go
+      - pkg/api/members.go
+      - pkg/api/resources.go
+      - pkg/api/secrets.go
+      - pkg/api/domains.go
+      - pkg/api/drains.go
+      - pkg/api/logs.go
+      - pkg/api/metrics.go
+      - pkg/api/backups.go
+      - pkg/api/project_*.go
+
+  workspace:
+    description: >
+      The workspace's settings: general, people and invitations, teams,
+      sign-in methods, API tokens, config vars, log drains and domains.
+    code:
+      - apps/workspace/src/screens/workspace/**
+      - pkg/api/invitations.go
+      - pkg/api/globals.go
+      - pkg/api/account.go
+      - pkg/store/**
+      - pkg/tenancy/**
+
+  console:
+    description: >
+      The operator console: platform overview, console users, accounts,
+      costs, sizes, placement, registry, storage, backups and email.
+    code:
+      - apps/console/**
+      - pkg/api/cluster*.go
+      - pkg/api/console_users.go
+      - pkg/api/sizes.go
+      - pkg/api/registry.go
+      - ee/costs/**
+
+  design-system:
+    description: >
+      The component library and shared application code every screen is
+      built from.
+    code:
+      - design/ui/**
+      - apps/shared/**
