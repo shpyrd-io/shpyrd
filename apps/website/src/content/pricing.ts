@@ -5,7 +5,10 @@ import type { PricingCopy } from "./contracts";
 import { interpolate } from "./interpolate";
 
 export const hoursPerMonth = 730;
-type Rates = { cpuCoreHour: number; memoryGibHour: number; storageGibMonth: number; egressGib: number };
+// A plan's rates: shared CPU by use, dedicated CPU by what it holds, memory
+// by what it reserves, each disk by its size and at least the minimum,
+// egress by the GiB.
+type Rates = { cpuCoreHour: number; dedicatedCpuCoreHour: number; memoryGibHour: number; storageGibMonth: number; storageMinimumGib: number; egressGib: number };
 type PaidPlan = "starter" | "pro" | "business";
 export type Region = {
   id: "international" | "br";
@@ -37,8 +40,9 @@ export function pricingFor(id: Region["id"]) {
     proMinimum: money(region, region.minimum.pro),
     businessMinimum: money(region, region.minimum.business),
     cpuMonth: money(region, starter.cpuCoreHour * hoursPerMonth, 2),
+    dedicatedMonth: money(region, starter.dedicatedCpuCoreHour * hoursPerMonth, 2),
     memoryMonth: money(region, starter.memoryGibHour * hoursPerMonth, 2),
-    databaseMonth: money(region, starter.storageGibMonth * 5, 2),
+    databaseMonth: money(region, starter.storageGibMonth * starter.storageMinimumGib, 2),
     egressExample: money(region, starter.egressGib * 10, 2),
     currencyName: region.currencyName,
   };
@@ -57,7 +61,7 @@ export function pricingFor(id: Region["id"]) {
         ...plan,
         price: number(region, minimum, Number.isInteger(minimum) ? 0 : 2),
         usage: words.usage.map(({ id }) => ({ id, value: plan.id === "free" ? words.included : money(region, rates[{
-          cpu: "cpuCoreHour", memory: "memoryGibHour", storage: "storageGibMonth", egress: "egressGib",
+          cpu: "cpuCoreHour", dedicatedCpu: "dedicatedCpuCoreHour", memory: "memoryGibHour", storage: "storageGibMonth", egress: "egressGib",
         }[id] as keyof Rates]) })),
         footnote: plan.footnote + (early === undefined ? "" : ` ${interpolate(earlyInvoice, { amount: money(region, early) })}`),
         note: undefined as string | undefined,
@@ -69,10 +73,14 @@ export function pricingFor(id: Region["id"]) {
 }
 export const pricing = pricingFor("international");
 
-export function lineCost(rates: Rates, line: { cpuCores?: number; memoryGib?: number; hours?: number; storageGib?: number; egressGib?: number }): number {
+// What one line of the example costs at a plan's rates. A line with a disk
+// is one disk, billed for its size or the plan's minimum, whichever is more.
+export function lineCost(rates: Rates, line: { cpuCores?: number; dedicatedCpuCores?: number; memoryGib?: number; hours?: number; storageGib?: number; egressGib?: number }): number {
   const hours = line.hours ?? 0;
+  const disk = line.storageGib ? Math.max(line.storageGib, rates.storageMinimumGib) : 0;
   return (line.cpuCores ?? 0) * hours * rates.cpuCoreHour
+    + (line.dedicatedCpuCores ?? 0) * hours * rates.dedicatedCpuCoreHour
     + (line.memoryGib ?? 0) * hours * rates.memoryGibHour
-    + (line.storageGib ?? 0) * rates.storageGibMonth
+    + disk * rates.storageGibMonth
     + (line.egressGib ?? 0) * rates.egressGib;
 }
