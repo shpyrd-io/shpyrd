@@ -106,7 +106,11 @@ func TestTheCollectorWritesTheClosedHours(t *testing.T) {
 	st := store.NewMemory()
 	ws, _ := st.Workspace(ctx, store.DefaultWorkspace)
 	q := 1800.0
-	if err := st.WriteBuckets(ctx, []store.UsageBucket{{WorkspaceID: store.DefaultWorkspace, Project: "47zzbjzdu14c07ueautsg6p8s", Component: "web", Metric: store.MetricCPUUsed, PeriodStart: hour, PeriodEnd: hour.Add(5 * time.Minute), Quantity: &q, Unit: store.UnitCoreSeconds, Quality: store.QualityComplete, Revision: 1}}); err != nil {
+	disk := 3000.0
+	if err := st.WriteBuckets(ctx, []store.UsageBucket{
+		{WorkspaceID: store.DefaultWorkspace, Project: "47zzbjzdu14c07ueautsg6p8s", Component: "web", Metric: store.MetricCPUUsed, PeriodStart: hour, PeriodEnd: hour.Add(5 * time.Minute), Quantity: &q, Unit: store.UnitCoreSeconds, Quality: store.QualityComplete, Revision: 1},
+		{WorkspaceID: store.DefaultWorkspace, Project: "47zzbjzdu14c07ueautsg6p8s", Component: "volume/uploads", Resource: "pv-1", Metric: store.MetricStorage, PeriodStart: hour, PeriodEnd: hour.Add(5 * time.Minute), Quantity: &disk, Unit: store.UnitGiBSeconds, Quality: store.QualityComplete, Revision: 1},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile("testdata/allocation.json")
@@ -138,8 +142,13 @@ func TestTheCollectorWritesTheClosedHours(t *testing.T) {
 		t.Fatalf("windows = %v", windows)
 	}
 	usage, _ := st.QueryCostLines(ctx, store.CostQuery{From: hour, To: hour.Add(time.Hour), Kind: store.CostUsage})
-	if len(usage) != 1 || usage[0].Workspace != ws.ID || *usage[0].Quantity != 1800 || usage[0].Unit != store.UnitCoreSeconds || usage[0].Process != "web" {
+	cpu, storage := find(usage, "web", store.MetricCPUUsed), find(usage, "volume/uploads", store.MetricStorage)
+	if len(usage) != 2 || cpu == nil || cpu.Workspace != ws.ID || *cpu.Quantity != 1800 || cpu.Unit != store.UnitCoreSeconds {
 		t.Errorf("usage = %+v", usage)
+	}
+	// A disk's line names the disk, so billing applies its minimum per disk.
+	if storage == nil || *storage.Quantity != 3000 || storage.Resource != "pv-1" || storage.ResourceType != "disk" {
+		t.Errorf("storage line = %+v", storage)
 	}
 	est, _ := st.QueryCostLines(ctx, store.CostQuery{From: hour, To: hour.Add(time.Hour), Kind: store.CostEstimated})
 	web := find(est, "web", "cpu")

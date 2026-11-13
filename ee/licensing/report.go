@@ -68,7 +68,7 @@ func BuildReport(ctx context.Context, st store.Store, cluster string, from, to t
 			}
 			q := *b.Quantity
 			switch b.Metric {
-			case store.MetricCPUUsed:
+			case store.MetricCPUUsed, store.MetricCPUReserved:
 				r.Usage.CPUCoreHours += q / secondsPerHour
 			case store.MetricMemoryReserved, store.MetricMemoryUsed:
 				r.Usage.MemoryGiBHours += q / secondsPerHour

@@ -1854,9 +1854,9 @@ func (p *Postgres) WriteBuckets(ctx context.Context, buckets []UsageBucket) erro
 				labels = string(raw)
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO usage_buckets (workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) ON CONFLICT DO NOTHING`,
-			wsID, b.Project, b.Component, b.Metric, b.PeriodStart, b.PeriodEnd, b.Quantity, b.Unit, b.Quality, b.Revision, b.Source, labels); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO usage_buckets (workspace_id, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb) ON CONFLICT DO NOTHING`,
+			wsID, b.Project, b.Component, b.Resource, b.Metric, b.PeriodStart, b.PeriodEnd, b.Quantity, b.Unit, b.Quality, b.Revision, b.Source, labels); err != nil {
 			return err
 		}
 	}
@@ -1875,8 +1875,8 @@ func (p *Postgres) RollupHourly(ctx context.Context, before time.Time) (int, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	tag, err := tx.Exec(ctx, `
-		INSERT INTO usage_hourly (workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
-		SELECT workspace_id, project, component, metric,
+		INSERT INTO usage_hourly (workspace_id, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
+		SELECT workspace_id, project, component, resource, metric,
 		       date_trunc('hour', period_start) AS hour_start,
 		       date_trunc('hour', period_start) + interval '1 hour',
 		       CASE WHEN bool_or(quantity IS NULL) THEN NULL ELSE sum(quantity) END,
@@ -1887,8 +1887,8 @@ func (p *Postgres) RollupHourly(ctx context.Context, before time.Time) (int, err
 		       max(revision), min(source), '{}'::jsonb
 		FROM usage_buckets
 		WHERE period_start < $1
-		GROUP BY workspace_id, project, component, metric, date_trunc('hour', period_start)
-		ON CONFLICT (workspace_id, project, component, metric, period_start) DO NOTHING`, cutoff)
+		GROUP BY workspace_id, project, component, resource, metric, date_trunc('hour', period_start)
+		ON CONFLICT (workspace_id, project, component, resource, metric, period_start) DO NOTHING`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("rollup insert: %w", err)
 	}
@@ -1909,9 +1909,9 @@ func (p *Postgres) QueryBuckets(ctx context.Context, ws, project string, from, t
 	} else {
 		filter = ""
 	}
-	q := `SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_buckets b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + `
+	q := `SELECT workspace_id::text, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_buckets b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + `
 	UNION ALL
-	SELECT workspace_id::text, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_hourly b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + ` ORDER BY period_start`
+	SELECT workspace_id::text, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source FROM usage_hourly b WHERE b.workspace_id = (SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1) AND b.period_start < $3 AND b.period_end > $2 ` + filter + ` ORDER BY period_start`
 	rows, err := p.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -1920,7 +1920,7 @@ func (p *Postgres) QueryBuckets(ctx context.Context, ws, project string, from, t
 	var out []UsageBucket
 	for rows.Next() {
 		var b UsageBucket
-		if err := rows.Scan(&b.WorkspaceID, &b.Project, &b.Component, &b.Metric, &b.PeriodStart, &b.PeriodEnd, &b.Quantity, &b.Unit, &b.Quality, &b.Revision, &b.Source); err != nil {
+		if err := rows.Scan(&b.WorkspaceID, &b.Project, &b.Component, &b.Resource, &b.Metric, &b.PeriodStart, &b.PeriodEnd, &b.Quantity, &b.Unit, &b.Quality, &b.Revision, &b.Source); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -2159,8 +2159,8 @@ func (p *Postgres) RekeyProject(ctx context.Context, ws, slug, id string) (int, 
 	defer tx.Rollback(ctx) //nolint:errcheck
 	moved := 0
 	for _, t := range []struct{ table, cols string }{
-		{"usage_buckets", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
-		{"usage_hourly", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
+		{"usage_buckets", "workspace_id, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
+		{"usage_hourly", "workspace_id, project, component, resource, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
 	} {
 		newCols := strings.Replace(t.cols, "project,", "$3::text AS project,", 1)
 		if _, err := tx.Exec(ctx, `INSERT INTO `+t.table+` (`+t.cols+`) SELECT `+newCols+` FROM `+t.table+` WHERE workspace_id = $1 AND project = $2 ON CONFLICT DO NOTHING`, wsID, slug, short); err != nil {

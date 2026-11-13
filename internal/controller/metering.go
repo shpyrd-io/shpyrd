@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -409,16 +411,35 @@ const (
 	podJoin   = "* on (namespace, pod) group_left (" + podLabels + ") kube_pod_labels{}"
 )
 
-// cpuBuckets writes cpu_used (core-seconds) per (namespace, component).
+// dedicatedCPU selects the containers whose CPU request equals their
+// limit: a dedicated size (pkg/sizes, Guaranteed QoS), whose cores are held
+// for it and billed as held (shpyrd-cloud#70). Every other container runs
+// a shared size and is billed on use. Both metrics are written, each for
+// its own set of containers, so a dedicated core is never billed twice.
+const dedicatedCPU = `(kube_pod_container_resource_requests{resource="cpu",container!="",namespace=~"(app|p)-.*"} ` +
+	`== on (namespace, pod, container) kube_pod_container_resource_limits{resource="cpu"})`
+
+// cpuBuckets writes cpu_used (core-seconds) per (namespace, component) for
+// the containers of shared sizes, and cpu_reserved (core-seconds) for the
+// containers of dedicated sizes: their CPU requests, summed over the window
+// in 30-second steps while the pod runs, as memoryBuckets does for memory.
 func (m *MeteringLoop) cpuBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
-	q := fmt.Sprintf(
+	used := fmt.Sprintf(
 		`sum by (namespace, `+podLabels+`) (`+
-			`increase(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~"(app|p)-.*"}[%ds]) `+
+			`(increase(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~"(app|p)-.*"}[%ds]) `+
+			`unless on (namespace, pod, container) max_over_time(`+dedicatedCPU+`[%ds:30s])) `+
 			podJoin+`)`,
-		int(dur)+30,
+		int(dur)+30, int(dur)+30,
 	)
-	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricCPUUsed, store.UnitCoreSeconds, nsMap, false)
+	out := m.queryBuckets(ctx, start, end, used, componentOfPod, store.MetricCPUUsed, store.UnitCoreSeconds, nsMap, false)
+	reserved := fmt.Sprintf(
+		`sum by (namespace, `+podLabels+`) (`+
+			`sum_over_time((`+dedicatedCPU+` and on (namespace, pod) (kube_pod_status_phase{phase="Running"} == 1))[%ds:30s]) `+
+			podJoin+`) * 30`,
+		int(dur),
+	)
+	return append(out, m.queryBuckets(ctx, start, end, reserved, componentOfPod, store.MetricCPUReserved, store.UnitCoreSeconds, nsMap, false)...)
 }
 
 // memoryBuckets writes memory_reserved (GiB-seconds) per (namespace,
@@ -441,41 +462,169 @@ func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, 
 	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricMemoryReserved, store.UnitGiBSeconds, nsMap, false)
 }
 
-// storageBuckets writes storage (GiB-seconds) per (namespace, claim
-// component). The quantity is the capacity of the Bound PersistentVolume
-// behind each claim — what was provisioned and what the provider bills —
-// not the claim's request: a 2 Gi request on OCI yields a 50 Gi volume,
-// and the customer pays for 50. A claim without a volume costs nothing.
-// The PV's claimRef gives the claim's namespace and name.
+// storageBuckets writes storage (GiB-seconds) per disk: one bucket per
+// Bound PersistentVolume behind a claim in a project namespace, named by
+// its claim's component (volume/<name>, postgres/<name>, redis/<name>,
+// build-cache) and by the disk itself (Resource: the PersistentVolume's
+// name), so a database's two instances are two disks and a disk replaced
+// under the same name is another disk (shpyrd-cloud#70).
 //
-// Claim labels come from a second query and are merged here: KSM emits
-// kube_persistentvolumeclaim_labels only when claims are on its allowlist,
-// and a multiplicative join would silently drop every claim on a cluster
-// whose monitoring predates that.
+// The quantity is the size asked for, not the size provisioned: a 10 GiB
+// volume on a provider whose disks start at 50 GiB is metered as 10 GiB
+// (billing applies its own minimum per disk). What was asked comes from
+// the object the claim belongs to (the Volume's size, the database's or
+// store's storage); a claim of nothing shpyrd knows (the buildpack cache,
+// an orphan) is metered as provisioned, and so is a request past the disk
+// (an expansion under way). A claim without a volume costs nothing.
+//
+// Prometheus says which volumes were Bound at the window's end and how
+// big (kube_persistentvolume_capacity_bytes, with the claim through
+// kube_persistentvolume_claim_ref); the claims' labels come from the API
+// when there is a client, else from kube_persistentvolumeclaim_labels
+// (KSM emits those only when claims are on its allowlist). Neither is
+// joined in PromQL: a multiplicative join would silently drop every claim
+// on a cluster whose monitoring predates the allowlist.
 func (m *MeteringLoop) storageBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
-	q := fmt.Sprintf(
-		`sum by (namespace, persistentvolumeclaim) (label_replace(label_replace(`+
-			`(kube_persistentvolume_capacity_bytes and on (persistentvolume) (kube_persistentvolume_status_phase{phase="Bound"} == 1)) `+
-			`* on (persistentvolume) group_left (claim_namespace, name) kube_persistentvolume_claim_ref, `+
-			`"namespace", "$1", "claim_namespace", "(.*)"), "persistentvolumeclaim", "$1", "name", "(.*)")`+
-			`) * %.6f / (1024*1024*1024)`,
-		dur,
-	)
-	claimLabels := map[string]map[string]string{}
-	if series, err := m.Prom.QueryInstantSeriesAt(ctx, `kube_persistentvolumeclaim_labels{namespace=~"(app|p)-.*"}`, end); err == nil {
-		for _, s := range series {
-			claimLabels[s.Labels["namespace"]+"/"+s.Labels["persistentvolumeclaim"]] = s.Labels
+	q := `sum by (namespace, persistentvolumeclaim, persistentvolume) (label_replace(label_replace(` +
+		`(kube_persistentvolume_capacity_bytes and on (persistentvolume) (kube_persistentvolume_status_phase{phase="Bound"} == 1)) ` +
+		`* on (persistentvolume) group_left (claim_namespace, name) kube_persistentvolume_claim_ref, ` +
+		`"namespace", "$1", "claim_namespace", "(.*)"), "persistentvolumeclaim", "$1", "name", "(.*)"))`
+	series, err := m.Prom.QueryInstantSeriesAt(ctx, q, end)
+	if err != nil {
+		return m.missingBuckets(start, end, nsMap, store.MetricStorage, store.UnitGiBSeconds)
+	}
+	claims := m.claims(ctx, nsMap)
+	// A claim the API did not show (gone since, or no client): its labels
+	// as kube-state-metrics has them, and the disk as provisioned.
+	if labelled, err := m.Prom.QueryInstantSeriesAt(ctx, `kube_persistentvolumeclaim_labels{namespace=~"(app|p)-.*"}`, end); err == nil {
+		for _, s := range labelled {
+			if k := s.Labels["namespace"] + "/" + s.Labels["persistentvolumeclaim"]; claims[k].labels == nil {
+				claims[k] = claim{labels: s.Labels}
+			}
 		}
 	}
-	component := func(labels map[string]string, project string) string {
-		merged := map[string]string{"persistentvolumeclaim": labels["persistentvolumeclaim"]}
-		for k, v := range claimLabels[labels["namespace"]+"/"+labels["persistentvolumeclaim"]] {
-			merged[k] = v
+	type key struct{ ws, project, comp, disk string }
+	sums := map[key]float64{}
+	for _, s := range series {
+		meta, ok := nsMap[s.Labels["namespace"]]
+		if !ok || s.Value <= 0 {
+			continue
 		}
-		return componentOfClaim(merged, project)
+		c := claims[s.Labels["namespace"]+"/"+s.Labels["persistentvolumeclaim"]]
+		labels := map[string]string{"persistentvolumeclaim": s.Labels["persistentvolumeclaim"]}
+		for k, v := range c.labels {
+			labels[k] = v
+		}
+		bytes := s.Value
+		if c.requested != nil && c.requested.AsApproximateFloat64() < bytes {
+			bytes = c.requested.AsApproximateFloat64()
+		}
+		sums[key{meta[0], meta[1], componentOfClaim(labels, meta[1]), s.Labels["persistentvolume"]}] += bytes * dur / (1024 * 1024 * 1024)
 	}
-	return m.queryBuckets(ctx, start, end, q, component, store.MetricStorage, store.UnitGiBSeconds, nsMap, true)
+	var out []store.UsageBucket
+	seen := map[string]bool{}
+	for k, v := range sums {
+		qty := v
+		seen[k.ws+"/"+k.project] = true
+		out = append(out, store.UsageBucket{
+			WorkspaceID: k.ws, Project: k.project, Component: k.comp, Resource: k.disk,
+			Metric: store.MetricStorage, PeriodStart: start, PeriodEnd: end,
+			Quantity: &qty, Unit: store.UnitGiBSeconds, Quality: store.QualityComplete, Revision: 1, Source: "prom_v1",
+		})
+	}
+	// A project without a disk gets an explicit zero (complete, not
+	// missing), so a month with no storage reads as zero rather than as a gap.
+	for _, meta := range nsMap {
+		if seen[meta[0]+"/"+meta[1]] {
+			continue
+		}
+		zero := 0.0
+		out = append(out, store.UsageBucket{
+			WorkspaceID: meta[0], Project: meta[1], Component: "other",
+			Metric: store.MetricStorage, PeriodStart: start, PeriodEnd: end,
+			Quantity: &zero, Unit: store.UnitGiBSeconds, Quality: store.QualityComplete, Revision: 1, Source: "prom_v1",
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].WorkspaceID+out[i].Project+out[i].Component+out[i].Resource < out[j].WorkspaceID+out[j].Project+out[j].Component+out[j].Resource
+	})
+	return out
+}
+
+// claim is what the metering knows of a PersistentVolumeClaim: its labels
+// (as kube-state-metrics would spell them, label_<key with _>) and the size
+// the owner asked for, nil when nothing shpyrd knows owns it.
+type claim struct {
+	labels    map[string]string
+	requested *resource.Quantity
+}
+
+// claims reads the claims of the project namespaces and what their owners
+// asked for: a Volume's size, a database's or a store's storage (the
+// controller's default when the spec says nothing). Nothing without a
+// client.
+func (m *MeteringLoop) claims(ctx context.Context, nsMap map[string][2]string) map[string]claim {
+	out := map[string]claim{}
+	if m.Client == nil {
+		return out
+	}
+	var pvcs corev1.PersistentVolumeClaimList
+	if err := m.Client.List(ctx, &pvcs); err != nil {
+		log.FromContext(ctx).Error(err, "claims for metering")
+		return out
+	}
+	volumes, databases, stores := map[string]resource.Quantity{}, map[string]resource.Quantity{}, map[string]resource.Quantity{}
+	var vols shpyrdv1.VolumeList
+	if err := m.Client.List(ctx, &vols); err == nil {
+		for _, v := range vols.Items {
+			volumes[v.Namespace+"/"+v.Name] = v.Spec.Size
+		}
+	}
+	var pgs shpyrdv1.PostgresList
+	if err := m.Client.List(ctx, &pgs); err == nil {
+		for _, pg := range pgs.Items {
+			size := resource.MustParse(defaultPostgresStorage)
+			if pg.Spec.Storage != nil {
+				size = *pg.Spec.Storage
+			}
+			databases[pg.Namespace+"/"+pg.Name] = size
+		}
+	}
+	var rds shpyrdv1.RedisList
+	if err := m.Client.List(ctx, &rds); err == nil {
+		for _, rd := range rds.Items {
+			size := resource.MustParse(defaultRedisStorage)
+			if rd.Spec.Storage != nil {
+				size = *rd.Spec.Storage
+			}
+			stores[rd.Namespace+"/"+rd.Name] = size
+		}
+	}
+	for _, pvc := range pvcs.Items {
+		if _, ok := nsMap[pvc.Namespace]; !ok {
+			continue
+		}
+		c := claim{labels: map[string]string{"persistentvolumeclaim": pvc.Name}}
+		for k, v := range pvc.Labels {
+			c.labels["label_"+strings.NewReplacer(".", "_", "/", "_", "-", "_").Replace(k)] = v
+		}
+		var requested resource.Quantity
+		var known bool
+		switch {
+		case pvc.Labels[LabelVolume] != "":
+			requested, known = volumes[pvc.Namespace+"/"+pvc.Labels[LabelVolume]]
+		case pvc.Labels["cnpg.io/cluster"] != "":
+			requested, known = databases[pvc.Namespace+"/"+pvc.Labels["cnpg.io/cluster"]]
+		case pvc.Labels["shpyrd.io/redis"] != "":
+			requested, known = stores[pvc.Namespace+"/"+pvc.Labels["shpyrd.io/redis"]]
+		}
+		if known && requested.Sign() > 0 {
+			c.requested = &requested
+		}
+		out[pvc.Namespace+"/"+pvc.Name] = c
+	}
+	return out
 }
 
 // egressBuckets writes egress_http (bytes) per namespace from the front door.

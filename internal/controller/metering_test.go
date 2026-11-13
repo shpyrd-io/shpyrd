@@ -34,16 +34,19 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
-// fakeProm answers instant queries by matching a substring of the PromQL.
+// fakeProm answers instant queries by matching a substring of the PromQL:
+// the longest needle the query contains wins, so a needle can name one
+// query among several that share a metric (the CPU queries both mention
+// the requests series; one is the sum of it, the other excludes it).
 func fakeProm(t *testing.T, answers map[string][]map[string]any) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		var result []map[string]any
+		matched := ""
 		for needle, series := range answers {
-			if strings.Contains(q, needle) {
-				result = series
-				break
+			if strings.Contains(q, needle) && len(needle) > len(matched) {
+				result, matched = series, needle
 			}
 		}
 		if result == nil {
@@ -77,20 +80,27 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, unrelated).Build()
 
 	srv := fakeProm(t, map[string][]map[string]any{
-		"container_cpu_usage_seconds_total": {
+		// CPU used: the shared sizes' containers (the query excludes the
+		// dedicated ones).
+		"increase(container_cpu_usage_seconds_total": {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "12.5"),
 			sample(map[string]string{"namespace": "app-shop", "label_cnpg_io_cluster": "db"}, "3"), // the database's pod
 			sample(map[string]string{"namespace": "app-shop", "label_kpack_io_build": "shop-build-1"}, "2"),
 			sample(map[string]string{"namespace": "app-shop"}, "1"), // an unlabelled pod
 			sample(map[string]string{"namespace": "app-other", "label_shpyrd_io_process": "web"}, "99"),
 		},
-		"kube_pod_container_resource_requests": {
+		// CPU reserved: the dedicated sizes' requests, held while running.
+		`sum_over_time(((kube_pod_container_resource_requests{resource="cpu"`: {
+			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "worker"}, "600"),
+		},
+		`kube_pod_container_resource_requests{resource="memory"`: {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "0.25"),
 		},
+		// Storage: Bound volumes, in bytes, each with its disk.
 		"kube_persistentvolume_capacity_bytes": {
-			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "shop-cache"}, "50"),
-			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1"}, "20"),
-			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "uploads"}, "5"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "shop-cache", "persistentvolume": "pv-cache"}, "50"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1", "persistentvolume": "pv-db"}, "20"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "uploads", "persistentvolume": "pv-uploads"}, "5"),
 		},
 		"kube_persistentvolumeclaim_labels": {
 			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1", "label_cnpg_io_cluster": "db"}, "1"),
@@ -111,10 +121,11 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// cpu: web, postgres/db, build, other (4); memory: web (1);
-	// storage: build-cache, postgres/db, volume/uploads (3); egress (1).
-	if n != 9 {
-		t.Fatalf("buckets written = %d, want 9", n)
+	// cpu used: web, postgres/db, build, other (4); cpu reserved: worker
+	// (1); memory: web (1); storage: build-cache, postgres/db,
+	// volume/uploads (3); egress (1).
+	if n != 10 {
+		t.Fatalf("buckets written = %d, want 10", n)
 	}
 
 	got, err := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "shop", start.Add(-time.Second), end.Add(time.Second))
@@ -122,22 +133,33 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 		t.Fatal(err)
 	}
 	byKey := map[string]float64{}
+	disks := map[string]string{}
 	for _, b := range got {
 		if b.Quantity != nil {
 			byKey[b.Component+"/"+b.Metric] = *b.Quantity
+		}
+		if b.Resource != "" {
+			disks[b.Component] = b.Resource
 		}
 	}
 	if byKey["web/"+store.MetricCPUUsed] != 12.5 {
 		t.Errorf("web cpu = %v, want 12.5 (%v)", byKey["web/"+store.MetricCPUUsed], byKey)
 	}
+	// Storage is bytes times the window's seconds, in GiB-seconds; the
+	// fixture's bytes are small, so the quantities are too.
+	gibs := func(bytes float64) float64 { return bytes * bucketInterval.Seconds() / (1024 * 1024 * 1024) }
 	want := map[string]float64{
 		"postgres/db/" + store.MetricCPUUsed:    3,
 		"build/" + store.MetricCPUUsed:          2,
 		"other/" + store.MetricCPUUsed:          1,
+		"worker/" + store.MetricCPUReserved:     600,
 		"web/" + store.MetricEgressHTTP:         4096,
-		"build-cache/" + store.MetricStorage:    50,
-		"postgres/db/" + store.MetricStorage:    20,
-		"volume/uploads/" + store.MetricStorage: 5,
+		"build-cache/" + store.MetricStorage:    gibs(50),
+		"postgres/db/" + store.MetricStorage:    gibs(20),
+		"volume/uploads/" + store.MetricStorage: gibs(5),
+	}
+	if disks["build-cache"] != "pv-cache" || disks["postgres/db"] != "pv-db" || disks["volume/uploads"] != "pv-uploads" {
+		t.Errorf("storage buckets name their disks: %v", disks)
 	}
 	for k, v := range want {
 		if byKey[k] != v {
@@ -968,5 +990,56 @@ func TestSleepWakesEveryDeclaredInstance(t *testing.T) {
 	maxR, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount")
 	if idle != 0 || minR != 2 || maxR != 2 {
 		t.Errorf("scaledobject idle=%d min=%d max=%d, want 0, 2, 2", idle, minR, maxR)
+	}
+}
+
+// TestStorageIsMeteredOnTheSizeAskedForPerDisk: a 10Gi volume on a 50Gi disk
+// is metered as 10Gi; a database's two instances are two disks, each on the
+// database's storage; a claim nothing owns is metered as provisioned
+// (shpyrd-cloud#70).
+func TestStorageIsMeteredOnTheSizeAskedForPerDisk(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gi := func(n int64) int64 { return n * 1024 * 1024 * 1024 }
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: store.DefaultWorkspace, shpyrdv1.LabelProject: "shop"}}}
+	vol := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: "p-shop"}, Spec: shpyrdv1.VolumeSpec{Size: resource.MustParse("10Gi")}}
+	pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: ptr.To(resource.MustParse("5Gi"))}}
+	claim := func(name string, labels map[string]string) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "p-shop", Labels: labels}}
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, vol, pg,
+		claim("vol-uploads", map[string]string{LabelVolume: "uploads"}),
+		claim("db-1", map[string]string{"cnpg.io/cluster": "db"}),
+		claim("db-2", map[string]string{"cnpg.io/cluster": "db"}),
+		claim("shop-cache", nil),
+	).Build()
+	srv := fakeProm(t, map[string][]map[string]any{
+		"kube_persistentvolume_capacity_bytes": {
+			sample(map[string]string{"namespace": "p-shop", "persistentvolumeclaim": "vol-uploads", "persistentvolume": "pv-a"}, fmt.Sprint(gi(50))),
+			sample(map[string]string{"namespace": "p-shop", "persistentvolumeclaim": "db-1", "persistentvolume": "pv-b"}, fmt.Sprint(gi(50))),
+			sample(map[string]string{"namespace": "p-shop", "persistentvolumeclaim": "db-2", "persistentvolume": "pv-c"}, fmt.Sprint(gi(50))),
+			sample(map[string]string{"namespace": "p-shop", "persistentvolumeclaim": "shop-cache", "persistentvolume": "pv-d"}, fmt.Sprint(gi(50))),
+		},
+	})
+	defer srv.Close()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	end := time.Now().UTC().Truncate(bucketInterval)
+	got := m.storageBuckets(context.Background(), end.Add(-bucketInterval), end, map[string][2]string{"p-shop": {store.DefaultWorkspace, "shop"}})
+	byDisk := map[string]float64{}
+	components := map[string]string{}
+	for _, b := range got {
+		byDisk[b.Resource] = *b.Quantity / bucketInterval.Seconds()
+		components[b.Resource] = b.Component
+	}
+	want := map[string]float64{"pv-a": 10, "pv-b": 5, "pv-c": 5, "pv-d": 50}
+	for disk, gib := range want {
+		if byDisk[disk] != gib {
+			t.Errorf("%s = %v GiB, want %v (%v)", disk, byDisk[disk], gib, byDisk)
+		}
+	}
+	if components["pv-a"] != "volume/uploads" || components["pv-b"] != "postgres/db" || components["pv-c"] != "postgres/db" || components["pv-d"] != "build-cache" {
+		t.Errorf("components = %v", components)
 	}
 }
