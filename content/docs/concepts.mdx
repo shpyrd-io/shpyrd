@@ -43,7 +43,7 @@ A **process type** is a way of running the build: `web` serves HTTP and receives
 
 Two size kinds exist:
 
-- **shared**: the `cpu` value is a ceiling the process may use; it is guaranteed a 1/8 share of it and borrows the rest from idle neighbours (Kubernetes burstable QoS). Many small shared instances fit on one node.
+- **shared**: the `cpu` value is a ceiling the process may use; it is guaranteed a 1/16 share of it and borrows the rest from idle neighbours (Kubernetes burstable QoS). Many small shared instances fit on one node.
 - **dedicated**: requests equal limits — whole cores, Guaranteed QoS.
 
 Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-m` (up to 0.5 CPU, 256 MiB) for Node.js, Ruby, Python and Java, and `shared-s` (up to 0.5 CPU, 64 MiB) otherwise. Databases and stores have lists of their own with the same names ([Databases](/docs/databases#sizes)). `shpyrd sizes list` shows the full catalog.

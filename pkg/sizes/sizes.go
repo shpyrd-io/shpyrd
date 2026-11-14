@@ -44,9 +44,9 @@ const (
 )
 
 // ShareFactor is the share of its CPU a shared size is guaranteed: the
-// request is cpu/ShareFactor. 1/8 of half a core is the slice Fly
+// request is cpu/ShareFactor. 1/16 of a core (6.25%) is the slice Fly
 // guarantees a shared-cpu-1x machine.
-const ShareFactor = 8
+const ShareFactor = 16
 
 var nameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$`)
 

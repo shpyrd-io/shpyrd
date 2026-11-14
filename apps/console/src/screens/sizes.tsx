@@ -68,7 +68,7 @@ export function Sizes() {
         <CardTitle>Instances</CardTitle>
         <CardDescription>
           Named CPU and memory allocations processes, databases and stores run with. Each has a list of its own with the same names, as Heroku's add-ons have plans of their own: a Postgres shared-s is not a process shared-s. For a
-          shared size the CPU is a ceiling: an eighth of it is guaranteed and the rest is borrowed from idle neighbours. A dedicated size gets whole cores. Memory is never overcommitted.
+          shared size the CPU is a ceiling: a sixteenth of it is guaranteed and the rest is borrowed from idle neighbours. A dedicated size gets whole cores. Memory is never overcommitted.
         </CardDescription>
         {!readOnly && (
           <CardAction>
@@ -273,7 +273,7 @@ function SizeDialog({ which, size, taken, onClose, onDone }: { which: Which; siz
             <Field label="Name" hint="Lowercase letters, digits and dashes." error={nameError}>
               <Input value={name} disabled={!!size} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="shared-m" className="font-mono text-xs" autoFocus={!size} />
             </Field>
-            <Field label="Kind" hint={kind === "shared" ? "The CPU is a ceiling; an eighth is guaranteed." : "Whole cores; requests equal to limits."}>
+            <Field label="Kind" hint={kind === "shared" ? "The CPU is a ceiling; a sixteenth is guaranteed." : "Whole cores; requests equal to limits."}>
               <Select value={kind} onValueChange={(v) => setKind(v as InstanceSize["kind"])}>
                 <SelectTrigger className="w-full">
                   <SelectValue />

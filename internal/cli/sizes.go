@@ -70,7 +70,7 @@ func newSizesCmd(g *globalFlags) *cobra.Command {
 		Long: `Instance sizes are named cpu/memory allocations a process runs with, like
 Fly machine sizes or Render instance types. The catalog is cluster-wide.
 
-  shared    cpu is the ceiling; 1/8 of it is guaranteed, the rest is borrowed
+  shared    cpu is the ceiling; 1/16 of it is guaranteed, the rest is borrowed
             from idle neighbours (Burstable QoS)
   dedicated requests equal limits, whole cores (Guaranteed QoS)
 
