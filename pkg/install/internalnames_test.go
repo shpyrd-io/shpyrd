@@ -42,6 +42,13 @@ func TestInternalNamesZoneIsAddedOnceAndFollowsTheDoor(t *testing.T) {
 	if !strings.Contains(first, "internal:53 {") || !strings.Contains(first, `answer "{{ .Name }} 60 IN A 10.96.1.2"`) || !strings.Contains(first, "template IN ANY internal") {
 		t.Errorf("block:\n%s", first)
 	}
+	// Only <project>.internal and <project>.<workspace>.internal are the
+	// platform's; the rest of .internal (a node's search domain on AWS or
+	// GCP) goes upstream, so a search for go.dev does not end at the door.
+	block := first[strings.Index(first, internalNamesBegin):]
+	if strings.Count(block, `match "^[^.]+\.([^.]+\.)?internal\.$"`) != 2 || strings.Count(block, "fallthrough") != 2 || !strings.Contains(block, "forward . /etc/resolv.conf") {
+		t.Errorf("the templates must match one or two labels, fall through and forward the rest:\n%s", block)
+	}
 	if again := WithInternalNames(first, "10.96.1.2"); again != first {
 		t.Errorf("applying the same address must change nothing:\n%s", again)
 	}
