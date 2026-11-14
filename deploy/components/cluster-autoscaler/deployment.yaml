@@ -48,6 +48,15 @@ spec:
             # Remove a node when its pods could fit on other nodes.
             - --scale-down-utilization-threshold=0.5
             - --balance-similar-node-groups=true
+            # Count every scheduled pod when simulating. By default a pod
+            # whose priority is under -10 is "expendable": the autoscaler
+            # drops it from its picture of the node, as if the scheduler
+            # would preempt it. OKE's node agents run at -2000000000, so on
+            # a node at its pod limit the autoscaler saw two free slots, held
+            # every pending build to be schedulable there and never added a
+            # node, while the scheduler, which never preempts for a build
+            # (shpyrd-build has preemptionPolicy Never), left it Pending.
+            - --expendable-pods-priority-cutoff=-2147483648
             # Do not skip pods with no PodDisruptionBudget; shpyrd apps can
             # be rescheduled safely — they roll back to one pod if evicted.
             - --skip-nodes-with-system-pods=false
