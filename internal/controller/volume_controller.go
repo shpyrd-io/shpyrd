@@ -44,6 +44,25 @@ type VolumeReconciler struct {
 	DefaultClass  string
 	SharedClass   string
 	SnapshotClass string
+	// MinSize is the provider minimum a block disk is rounded up to, as a
+	// quantity ("50Gi"); "" for none. The Volume keeps the size asked for
+	// and the claim asks for the disk (shpyrd-cloud#70): the status reports
+	// what was provisioned, and usage is metered on the request. Shared
+	// folders (file systems) and node-local volumes have no minimum.
+	MinSize string
+}
+
+// diskSize is the claim a volume gets for what it asks: the request, or
+// the provider minimum when the request is under it.
+func (r *VolumeReconciler) diskSize(vol *shpyrdv1.Volume) resource.Quantity {
+	if r.MinSize == "" || vol.Shared() || r.storageClassFor(vol) == LocalStorageClass {
+		return vol.Spec.Size
+	}
+	minimum, err := resource.ParseQuantity(r.MinSize)
+	if err != nil || vol.Spec.Size.Cmp(minimum) >= 0 {
+		return vol.Spec.Size
+	}
+	return minimum
 }
 
 func (r *VolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -143,7 +162,7 @@ func (r *VolumeReconciler) reconcile(ctx context.Context, vol *shpyrdv1.Volume) 
 		if err := r.Create(ctx, pvc); err != nil {
 			return fmt.Errorf("create claim: %w", err)
 		}
-		r.Recorder.Eventf(vol, corev1.EventTypeNormal, "Provisioning", "created claim %s (%s, %s)", pvc.Name, vol.Spec.Size.String(), vol.Mode())
+		r.Recorder.Eventf(vol, corev1.EventTypeNormal, "Provisioning", "created claim %s (%s, %s)", pvc.Name, pvc.Spec.Resources.Requests.Storage().String(), vol.Mode())
 	case err != nil:
 		return fmt.Errorf("get claim: %w", err)
 	default:
@@ -171,9 +190,9 @@ func (r *VolumeReconciler) reconcile(ctx context.Context, vol *shpyrdv1.Volume) 
 	case corev1.ClaimBound:
 		vol.Status.Phase = shpyrdv1.VolumeBound
 		vol.Status.Message = ""
-		if req := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; vol.Status.Capacity != "" && req.Cmp(vol.Spec.Size) == 0 {
-			if cap := pvc.Status.Capacity[corev1.ResourceStorage]; cap.Cmp(vol.Spec.Size) < 0 {
-				vol.Status.Message = fmt.Sprintf("expanding to %s", vol.Spec.Size.String())
+		if disk, req := r.diskSize(vol), pvc.Spec.Resources.Requests[corev1.ResourceStorage]; vol.Status.Capacity != "" && req.Cmp(disk) == 0 {
+			if cap := pvc.Status.Capacity[corev1.ResourceStorage]; cap.Cmp(disk) < 0 {
+				vol.Status.Message = fmt.Sprintf("expanding to %s", disk.String())
 			}
 		}
 		setVolumeCondition(vol, metav1.ConditionTrue, "Bound", "claim bound")
@@ -201,13 +220,17 @@ func (r *VolumeReconciler) reconcileExisting(ctx context.Context, vol *shpyrdv1.
 	if vol.Spec.StorageClass != "" && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != vol.Spec.StorageClass {
 		return fmt.Errorf("storage class cannot change after creation (claim uses %s)", *pvc.Spec.StorageClassName)
 	}
+	// The claim asks for the disk: the request, or the provider minimum
+	// when the request is under it. A request that moves under the disk's
+	// size is not a shrink: the disk stays, the volume asks for less.
 	current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	switch cmp := vol.Spec.Size.Cmp(current); {
+	disk := r.diskSize(vol)
+	switch cmp := disk.Cmp(current); {
 	case cmp < 0:
 		return fmt.Errorf("volumes cannot shrink (currently %s)", current.String())
 	case cmp > 0:
 		// Where the growth stands, for the person who asked for it.
-		vol.Status.Resize = &shpyrdv1.VolumeResize{Phase: shpyrdv1.ResizeRequested, To: vol.Spec.Size.String(), At: metav1.Now()}
+		vol.Status.Resize = &shpyrdv1.VolumeResize{Phase: shpyrdv1.ResizeRequested, To: disk.String(), At: metav1.Now()}
 		ok, className, err := r.expansionAllowed(ctx, pvc)
 		if err != nil {
 			return err
@@ -218,13 +241,13 @@ func (r *VolumeReconciler) reconcileExisting(ctx context.Context, vol *shpyrdv1.
 			return errors.New(msg)
 		}
 		patch := client.MergeFrom(pvc.DeepCopy())
-		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = vol.Spec.Size
+		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = disk
 		if err := r.Patch(ctx, pvc, patch); err != nil {
 			vol.Status.Resize.Phase, vol.Status.Resize.Message = shpyrdv1.ResizeFailed, "the claim did not take the new size: "+err.Error()
 			return fmt.Errorf("expand claim: %w", err)
 		}
 		vol.Status.Resize.Phase, vol.Status.Resize.Message = shpyrdv1.ResizePending, "the provider is growing the disk"
-		r.Recorder.Eventf(vol, corev1.EventTypeNormal, "Expanding", "claim %s grows from %s to %s", pvc.Name, current.String(), vol.Spec.Size.String())
+		r.Recorder.Eventf(vol, corev1.EventTypeNormal, "Expanding", "claim %s grows from %s to %s", pvc.Name, current.String(), disk.String())
 	}
 	return nil
 }
@@ -308,7 +331,7 @@ func (r *VolumeReconciler) desiredPVC(vol *shpyrdv1.Volume, fromSnapshot string)
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{claimMode(vol, ptr.To(r.storageClassFor(vol)))},
-			Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: vol.Spec.Size}},
+			Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: r.diskSize(vol)}},
 		},
 	}
 	if class := r.storageClassFor(vol); class != "" {

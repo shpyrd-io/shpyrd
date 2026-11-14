@@ -649,6 +649,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"),
 		// Profile storage (RFC-0060).
 		DefaultClass: install.ProjectStorageClass(os.Getenv), SharedClass: install.ProjectSharedStorageClass(os.Getenv), SnapshotClass: os.Getenv(install.VarSnapshotClass),
+		MinSize: install.ProjectVolumeMinSize(os.Getenv),
 	}
 	if err := volumes.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("volume controller: %w", err)

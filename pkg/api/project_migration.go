@@ -45,16 +45,14 @@ func (s *Server) setMoveStorage(ctx context.Context, app *shpyrdv1.App, op *proj
 		if forward {
 			volume.Spec.StorageClass = op.Move.targetClass()
 			volume.Spec.FromSnapshot = ""
-			// The copy was made at the source claim's size (which may have
-			// been rounded to a former minimum); onto a provider class the
-			// profile's minimum applies again, as for a new disk.
+			// The volume keeps the size the source claim asked for; onto a
+			// provider class the profile's minimum applies to the disk, as
+			// for a new one (the reconciler rounds the claim and the status
+			// reports the disk).
 			for _, claim := range op.Move.Claims {
 				if claim.Original.Name == volume.PVCName() {
 					volume.Spec.Size = claim.Original.Spec.Resources.Requests[corev1.ResourceStorage]
 				}
-			}
-			if op.Move.targetClass() != controller.LocalStorageClass {
-				volume.Spec.Size, _ = s.applyVolumeMinimum(volume.Spec.Size)
 			}
 		}
 		if err := s.apps.Patch(ctx, volume, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {

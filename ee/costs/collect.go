@@ -156,14 +156,15 @@ func (c *Collector) workspaceIDs(ctx context.Context) map[string]string {
 }
 
 // collectUsage sums the metering loop's buckets of an hour, [start, until),
-// into lines of the hour [start, end), per workspace, project, component
-// and metric.
+// into lines of the hour [start, end), per workspace, project, component,
+// metric and, for storage, disk: a disk's line names the disk as its
+// resource (shpyrd-cloud#70), so billing applies its minimum to each.
 func (c *Collector) collectUsage(ctx context.Context, start, end, until time.Time) error {
 	all, err := c.Store.ListWorkspaces(ctx)
 	if err != nil {
 		return err
 	}
-	type key struct{ ws, project, component, metric, unit string }
+	type key struct{ ws, project, component, resource, metric, unit string }
 	sums := map[key]float64{}
 	for _, w := range all {
 		buckets, err := c.Store.QueryBuckets(ctx, w.Slug, "", start, until)
@@ -174,7 +175,7 @@ func (c *Collector) collectUsage(ctx context.Context, start, end, until time.Tim
 			if b.Quantity == nil || b.PeriodStart.Before(start) || !b.PeriodStart.Before(until) {
 				continue
 			}
-			sums[key{w.ID, b.Project, b.Component, b.Metric, b.Unit}] += *b.Quantity
+			sums[key{w.ID, b.Project, b.Component, b.Resource, b.Metric, b.Unit}] += *b.Quantity
 		}
 	}
 	keys := make([]key, 0, len(sums))
@@ -182,12 +183,16 @@ func (c *Collector) collectUsage(ctx context.Context, start, end, until time.Tim
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		return keys[i].project+keys[i].component+keys[i].metric < keys[j].project+keys[j].component+keys[j].metric
+		return keys[i].project+keys[i].component+keys[i].metric+keys[i].resource < keys[j].project+keys[j].component+keys[j].metric+keys[j].resource
 	})
 	lines := make([]store.CostLine, 0, len(keys))
 	for _, k := range keys {
 		q := sums[k]
-		lines = append(lines, store.CostLine{Kind: store.CostUsage, Source: "metering", Start: start, End: end, Workspace: k.ws, Project: k.project, Process: k.component, Metric: k.metric, Quantity: &q, Unit: k.unit})
+		line := store.CostLine{Kind: store.CostUsage, Source: "metering", Start: start, End: end, Workspace: k.ws, Project: k.project, Process: k.component, Metric: k.metric, Quantity: &q, Unit: k.unit}
+		if k.resource != "" {
+			line.Resource, line.ResourceType = k.resource, "disk"
+		}
+		lines = append(lines, line)
 	}
 	_, err = c.Store.UpsertCostLines(ctx, lines)
 	return err

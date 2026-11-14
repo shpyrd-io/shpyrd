@@ -176,9 +176,15 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 					if v.Status.RestoredFrom != "" && v.Status.Phase == shpyrdv1.VolumeBound {
 						status += " (restored from " + v.Status.RestoredFrom + ")"
 					}
+					// What it asks for; while growing, from what it has; on a
+					// disk larger than asked (the provider minimum), the disk.
 					size := v.Spec.Size.String()
 					if v.Status.Capacity != "" && v.Status.Capacity != size {
-						size = v.Status.Capacity + " -> " + size
+						if cap, err := resource.ParseQuantity(v.Status.Capacity); err == nil && cap.Cmp(v.Spec.Size) > 0 {
+							size += " (disk " + v.Status.Capacity + ")"
+						} else {
+							size = v.Status.Capacity + " -> " + size
+						}
 					}
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, size, mode, status, firstNonEmpty(strings.Join(v.Status.MountedBy, ", "), "-"), age(v.CreationTimestamp))
 				}
@@ -219,7 +225,7 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 			}
 			floor := vol.Spec.Size
 			if vol.Status.Capacity != "" {
-				if q, err := resource.ParseQuantity(vol.Status.Capacity); err == nil {
+				if q, err := resource.ParseQuantity(vol.Status.Capacity); err == nil && q.Cmp(floor) < 0 {
 					floor = q // a refused expansion can be reverted to the real size
 				}
 			}

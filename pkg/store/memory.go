@@ -1881,7 +1881,7 @@ func (m *Memory) WriteBuckets(_ context.Context, buckets []UsageBucket) error {
 		}
 		dup := false
 		for _, e := range m.billing().buckets {
-			if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.Component == b.Component &&
+			if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.Component == b.Component && e.Resource == b.Resource &&
 				e.Metric == b.Metric && e.PeriodStart.Equal(b.PeriodStart) && e.Revision == b.Revision {
 				dup = true
 				break
@@ -1900,8 +1900,8 @@ func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) 
 	defer m.mu.Unlock()
 	cutoff := before.UTC().Truncate(time.Hour)
 	type key struct {
-		ws, project, component, metric string
-		hour                           time.Time
+		ws, project, component, resource, metric string
+		hour                                     time.Time
 	}
 	type agg struct {
 		sum      float64
@@ -1920,7 +1920,7 @@ func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) 
 			keep = append(keep, b)
 			continue
 		}
-		k := key{b.WorkspaceID, b.Project, b.Component, b.Metric, b.PeriodStart.UTC().Truncate(time.Hour)}
+		k := key{b.WorkspaceID, b.Project, b.Component, b.Resource, b.Metric, b.PeriodStart.UTC().Truncate(time.Hour)}
 		a := groups[k]
 		if a == nil {
 			a = &agg{unit: b.Unit, source: b.Source}
@@ -1940,7 +1940,7 @@ func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) 
 	}
 	existing := map[key]bool{}
 	for _, h := range m.billing().hourly {
-		existing[key{h.WorkspaceID, h.Project, h.Component, h.Metric, h.PeriodStart}] = true
+		existing[key{h.WorkspaceID, h.Project, h.Component, h.Resource, h.Metric, h.PeriodStart}] = true
 	}
 	rolled := 0
 	for k, a := range groups {
@@ -1960,7 +1960,7 @@ func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) 
 			qty = &v
 		}
 		m.billing().hourly = append(m.billing().hourly, UsageBucket{
-			WorkspaceID: k.ws, Project: k.project, Component: k.component, Metric: k.metric,
+			WorkspaceID: k.ws, Project: k.project, Component: k.component, Resource: k.resource, Metric: k.metric,
 			PeriodStart: k.hour, PeriodEnd: k.hour.Add(time.Hour),
 			Quantity: qty, Unit: a.unit, Quality: q, Revision: a.revision, Source: a.source,
 		})

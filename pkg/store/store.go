@@ -754,9 +754,15 @@ func MergeLimits(base, patch *Limits) *Limits {
 // UsageBucket is one 5-minute (or hourly) usage record for a project
 // component. Quantity is nil when Quality is missing.
 type UsageBucket struct {
-	WorkspaceID string            `json:"workspaceId"`
-	Project     string            `json:"project"`
-	Component   string            `json:"component"`
+	WorkspaceID string `json:"workspaceId"`
+	Project     string `json:"project"`
+	Component   string `json:"component"`
+	// Resource names the one thing the bucket is about when the component
+	// is not enough: for storage, the disk (the PersistentVolume's name),
+	// so a database's two instances are two disks and a disk replaced under
+	// the same name is another disk, each billed for at least the plan's
+	// minimum (shpyrd-cloud#70). Empty for the other metrics.
+	Resource    string            `json:"resource,omitempty"`
 	Metric      string            `json:"metric"`
 	PeriodStart time.Time         `json:"periodStart"`
 	PeriodEnd   time.Time         `json:"periodEnd"`

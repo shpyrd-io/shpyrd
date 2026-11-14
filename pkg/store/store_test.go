@@ -579,22 +579,34 @@ func TestUsageStore(t *testing.T) {
 					PeriodStart: gap.Add(time.Duration(i) * 5 * time.Minute), PeriodEnd: gap.Add(time.Duration(i+1) * 5 * time.Minute),
 					Quantity: q, Unit: UnitGiBSeconds, Quality: qual, Revision: 1, Source: "prom_v1"})
 			}
+			// Two disks of one component in the same hour are two rows,
+			// kept apart by the disk (shpyrd-cloud#70).
+			for _, disk := range []string{"pv-1", "pv-2"} {
+				q := 300.0
+				olds = append(olds, UsageBucket{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "postgres/db", Resource: disk, Metric: MetricStorage,
+					PeriodStart: old, PeriodEnd: old.Add(5 * time.Minute), Quantity: &q, Unit: UnitGiBSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"})
+			}
 			if err := s.WriteBuckets(ctx, olds); err != nil {
 				t.Fatal(err)
 			}
 			n, err := s.RollupHourly(ctx, now.Add(-48*time.Hour))
-			if err != nil || n != 2 {
+			if err != nil || n != 4 {
 				t.Fatalf("rollup: hours=%d err=%v", n, err)
 			}
 			if n, err := s.RollupHourly(ctx, now.Add(-48*time.Hour)); err != nil || n != 0 {
 				t.Errorf("rollup is not idempotent: hours=%d err=%v", n, err)
 			}
 			hourly, err := s.QueryBuckets(ctx, DefaultWorkspace, "shop", old.Add(-time.Minute), gap.Add(2*time.Hour))
-			if err != nil || len(hourly) != 2 {
+			if err != nil || len(hourly) != 4 {
 				t.Fatalf("hourly rows: %+v %v", hourly, err)
 			}
+			disks := map[string]float64{}
 			for _, h := range hourly {
 				switch h.Metric {
+				case MetricStorage:
+					if h.Quantity != nil {
+						disks[h.Resource] = *h.Quantity
+					}
 				case MetricCPUUsed:
 					if h.Quantity == nil || *h.Quantity != 720 || h.Quality != QualityComplete || !h.PeriodEnd.Equal(old.Add(time.Hour)) {
 						t.Errorf("cpu hour: %+v", h)
@@ -604,6 +616,9 @@ func TestUsageStore(t *testing.T) {
 						t.Errorf("memory hour with a gap: %+v", h)
 					}
 				}
+			}
+			if disks["pv-1"] != 300 || disks["pv-2"] != 300 {
+				t.Errorf("storage hours per disk: %v", disks)
 			}
 			// The recent bucket is untouched.
 			if recent, _ := s.QueryBuckets(ctx, DefaultWorkspace, "", now.Add(-time.Minute), now.Add(10*time.Minute)); len(recent) != 1 {

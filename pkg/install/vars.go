@@ -113,7 +113,7 @@ const (
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
-	VarProjectStorageClass     = "SHPYRD_PROJECT_STORAGE_CLASS"      // project disks: "" = SHPYRD_STORAGE_CLASS with its minimum and snapshots (the cloud profiles); shpyrd-local = the node's disk (the local profile)
+	VarProjectStorageClass     = "SHPYRD_PROJECT_STORAGE_CLASS"      // project disks: "" = SHPYRD_STORAGE_CLASS; a block class of their own (oci: the Lower Cost class), with the provider's minimum and snapshots; shpyrd-local = the node's disk (the local profile)
 	VarSharedPostgresInstances = "SHPYRD_SHARED_POSTGRES_INSTANCES"  // instances of a shared Postgres server: 2 on the cloud profiles, 1 on kind
 	VarSharedPostgresPerServer = "SHPYRD_SHARED_POSTGRES_PER_SERVER" // tenants a shared server takes before the next one is created
 	VarDatabaseStorageClass    = "SHPYRD_DATABASE_STORAGE_CLASS"     // Postgres and Redis data volumes: "" = SHPYRD_STORAGE_CLASS; shpyrd-local = the node's disk
@@ -612,11 +612,12 @@ const LocalStorageClass = "shpyrd-local"
 
 // ProjectStorageClass is the class of a project's disks. Empty
 // SHPYRD_PROJECT_STORAGE_CLASS means the provider's class
-// (SHPYRD_STORAGE_CLASS) with its minimum size and its snapshots, as the
-// cloud profiles have it; shpyrd-local keeps the data on the node's disk,
-// as the local profile has it. Platform claims use the provider variables
-// either way. Claims that exist keep their class whatever the profile says
-// (the Volume reconciler never rewrites it; the datastores keep theirs too).
+// (SHPYRD_STORAGE_CLASS); a block class of its own (the oci profile's Lower
+// Cost class) has the same minimum size and snapshots; shpyrd-local keeps
+// the data on the node's disk, as the local profile has it. Platform claims
+// and databases use the provider variables either way. Claims that exist
+// keep their class whatever the profile says (the Volume reconciler never
+// rewrites it; the datastores keep theirs too).
 func ProjectStorageClass(vars func(string) string) string {
 	if class := vars(VarProjectStorageClass); class != "" {
 		return class
@@ -627,9 +628,11 @@ func ProjectStorageClass(vars func(string) string) string {
 // ProjectSharedStorageClass is the class of a shared folder. On a node-local
 // profile it is the node-local class too (several processes on one node);
 // otherwise the provider's ReadWriteMany class, or nothing, and the API then
-// refuses shared folders in words.
+// refuses shared folders in words. A block class named for project disks
+// (the Lower Cost class on OCI) is a block class, not a file system: shared
+// folders do not follow it.
 func ProjectSharedStorageClass(vars func(string) string) string {
-	if class := vars(VarProjectStorageClass); class != "" {
+	if class := vars(VarProjectStorageClass); class == LocalStorageClass {
 		return class
 	}
 	return vars(VarStorageClassShared)

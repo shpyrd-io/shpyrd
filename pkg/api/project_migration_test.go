@@ -464,8 +464,10 @@ func TestClassMigrationRebindsOntoTheProfileClass(t *testing.T) {
 			if current.Spec.VolumeName != "block-disk" || *current.Spec.StorageClassName != "oci-bv" {
 				t.Fatalf("forward binding: %+v", current.Spec)
 			}
-			if volume.Spec.StorageClass != "oci-bv" || volume.Spec.Size.String() != "50Gi" {
-				t.Fatalf("forward volume: class %q size %s (want oci-bv, 50Gi)", volume.Spec.StorageClass, volume.Spec.Size.String())
+			// The volume keeps the 1Gi it asked for; the disk is the
+			// provider minimum (the reconciler rounds the claim).
+			if volume.Spec.StorageClass != "oci-bv" || volume.Spec.Size.String() != "1Gi" {
+				t.Fatalf("forward volume: class %q size %s (want oci-bv, 1Gi)", volume.Spec.StorageClass, volume.Spec.Size.String())
 			}
 		} else {
 			if current.Spec.VolumeName != "local-disk" || *current.Spec.StorageClassName != controller.LocalStorageClass {

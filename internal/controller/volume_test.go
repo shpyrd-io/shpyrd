@@ -530,3 +530,63 @@ func TestAGrowthSaysWhereItStands(t *testing.T) {
 		t.Errorf("on a fixed class: %+v", fixed.Status.Resize)
 	}
 }
+
+// TestVolumeKeepsTheSizeAskedForUnderTheProviderMinimum: on a cloud profile
+// the claim asks for the minimum, the Volume keeps its request
+// (shpyrd-cloud#70). Asking for more, still under the minimum, is neither a
+// shrink nor a growth; asking for more than the minimum grows the disk.
+func TestVolumeKeepsTheSizeAskedForUnderTheProviderMinimum(t *testing.T) {
+	vol := testVolume("data", "10Gi", "")
+	expandable := &storagev1.StorageClass{
+		ObjectMeta:           metav1.ObjectMeta{Name: "oci-bv", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}},
+		Provisioner:          "blockvolume.csi.oraclecloud.com",
+		AllowVolumeExpansion: ptr.To(true),
+	}
+	r, c := newVolumeReconciler(t, vol, expandable)
+	r.DefaultClass, r.MinSize = "oci-bv", "50Gi"
+
+	got := reconcileVolume(t, r, vol)
+	if got.Spec.Size.String() != "10Gi" || got.Status.Phase == shpyrdv1.VolumeFailed {
+		t.Fatalf("volume = %s %+v", got.Spec.Size.String(), got.Status)
+	}
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "vol-data"}, pvc); err != nil {
+		t.Fatal(err)
+	}
+	if pvc.Spec.Resources.Requests.Storage().String() != "50Gi" {
+		t.Fatalf("claim asks %s, want the 50Gi minimum", pvc.Spec.Resources.Requests.Storage())
+	}
+
+	// 10Gi → 20Gi: the disk is already 50Gi; nothing to refuse, nothing to grow.
+	got.Spec.Size = resource.MustParse("20Gi")
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	got = reconcileVolume(t, r, got)
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "vol-data"}, pvc)
+	if got.Status.Phase == shpyrdv1.VolumeFailed || got.Status.Resize != nil || pvc.Spec.Resources.Requests.Storage().String() != "50Gi" {
+		t.Fatalf("under the minimum: %+v claim %s", got.Status, pvc.Spec.Resources.Requests.Storage())
+	}
+
+	// 20Gi → 60Gi: past the minimum, the disk grows.
+	got.Spec.Size = resource.MustParse("60Gi")
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	got = reconcileVolume(t, r, got)
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "vol-data"}, pvc)
+	if got.Status.Phase == shpyrdv1.VolumeFailed || pvc.Spec.Resources.Requests.Storage().String() != "60Gi" {
+		t.Fatalf("past the minimum: %+v claim %s", got.Status, pvc.Spec.Resources.Requests.Storage())
+	}
+
+	// A shared folder is a file system: no minimum.
+	shared := testVolume("media", "1Gi", corev1.ReadWriteMany)
+	fss := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-fss"}, Provisioner: "fss.csi.oraclecloud.com"}
+	r2, c2 := newVolumeReconciler(t, shared, fss)
+	r2.SharedClass, r2.MinSize = "shpyrd-fss", "50Gi"
+	reconcileVolume(t, r2, shared)
+	_ = c2.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "vol-media"}, pvc)
+	if pvc.Spec.Resources.Requests.Storage().String() != "1Gi" {
+		t.Errorf("shared folder claim asks %s, want 1Gi", pvc.Spec.Resources.Requests.Storage())
+	}
+}
