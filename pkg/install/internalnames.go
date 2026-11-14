@@ -29,21 +29,35 @@ const (
 	internalNamesEnd   = "# shpyrd internal names (end)"
 )
 
-// internalNamesBlock is the Corefile server block for the zone: every A
-// query answered with the front door's address, every other query answered
-// empty (not an error, so a resolver asking for AAAA first goes on to A).
+// internalNamesBlock is the Corefile server block for the zone. Only the
+// names the platform gives out are answered: <project>.internal and
+// <project>.<workspace>.internal, every A query with the front door's
+// address, every other query empty (not an error, so a resolver asking for
+// AAAA first goes on to A). Anything else under .internal goes upstream, as
+// it would without the block. The zone must not claim more: a resolver
+// appends its search domains before trying a name as it is, and a node on
+// AWS or GCP has one that ends in .internal (us-west-2.compute.internal,
+// google.internal), so go.dev became go.dev.us-west-2.compute.internal,
+// which an answer-everything template sent to the front door.
 func internalNamesBlock(ip string) string {
+	soa := fmt.Sprintf("        authority \"%s. 60 IN SOA ns.%s. hostmaster.%s. 1 7200 3600 1209600 60\"", InternalNamesZone, InternalNamesZone, InternalNamesZone)
+	match := "        match \"^[^.]+\\.([^.]+\\.)?" + InternalNamesZone + "\\.$\""
 	return strings.Join([]string{
 		internalNamesBegin,
 		InternalNamesZone + ":53 {",
 		"    errors",
 		"    template IN A " + InternalNamesZone + " {",
+		match,
 		fmt.Sprintf("        answer \"{{ .Name }} 60 IN A %s\"", ip),
+		"        fallthrough",
 		"    }",
 		"    template IN ANY " + InternalNamesZone + " {",
+		match,
 		"        rcode NOERROR",
-		fmt.Sprintf("        authority \"%s. 60 IN SOA ns.%s. hostmaster.%s. 1 7200 3600 1209600 60\"", InternalNamesZone, InternalNamesZone, InternalNamesZone),
+		soa,
+		"        fallthrough",
 		"    }",
+		"    forward . /etc/resolv.conf",
 		"}",
 		internalNamesEnd,
 	}, "\n")
