@@ -259,6 +259,7 @@ export type PricingCopy = {
             "lines": {
                 "what": string;
                 "cpuCores"?: number;
+                "dedicatedCpuCores"?: number;
                 "memoryGib"?: number;
                 "hours"?: number;
                 "storageGib"?: number;

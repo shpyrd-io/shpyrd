@@ -216,9 +216,10 @@ contact
 
 | Id | Name | Note |
 | --- | --- | --- |
-| cpu | CPU | per core-hour, used |
+| cpu | CPU | per core-hour, used, on shared sizes |
+| dedicatedCpu | Dedicated CPU | per core-hour, held while awake, on dedicated sizes |
 | memory | Memory | per GiB-hour, reserved, while awake |
-| storage | Storage | per GiB-month, volume capacity, awake or asleep |
+| storage | Storage | per GiB-month, each disk's size, at least 16 GiB a disk, awake or asleep |
 | egress | Egress | per GiB, traffic out of the front door |
 
 ## Counts
@@ -241,7 +242,7 @@ Compute by use, memory by size
 
 #### Body
 
-Compute is measured from what your apps actually use: a bigger size costs nothing more until the app works harder. Memory is what each app reserves - the memory of its size - while it is awake.
+On a shared size, compute is measured from what your apps actually use: a bigger size costs nothing more until the app works harder. A dedicated size holds its cores for your app alone, and pays for them while it is awake. Memory is what each app reserves - the memory of its size - while it is awake. A disk is billed for its size, at least 16 GiB.
 
 </Record>
 
@@ -293,12 +294,12 @@ A tracker your team uses during working hours, with a database. The figures are 
 | --- | --- | --- | --- | --- | --- |
 | The app, awake about 200 hours a month: a twentieth of a CPU core in use, 256 MiB reserved | 0.05 | 0.25 | 200 |  |  |
 | Its database, awake all month: a hundredth of a CPU core in use, 256 MiB reserved | 0.01 | 0.25 | 730 |  |  |
-| 5 GiB of data |  |  |  | 5 |  |
+| Its disk, 5 GiB of data, billed as the 16 GiB minimum |  |  |  | 5 |  |
 | 2 GiB sent to visitors |  |  |  |  | 2 |
 
 ### Sense
 
-For a sense of it, on Starter: one CPU core busy all month is `{{cpuMonth}}`, 1 GiB of memory reserved all month `{{memoryMonth}}`, a 5 GiB database `{{databaseMonth}}` a month, and 10 GiB sent to visitors `{{egressExample}}`.
+For a sense of it, on Starter: one shared CPU core busy all month is `{{cpuMonth}}`, one dedicated core held all month `{{dedicatedMonth}}`, 1 GiB of memory reserved all month `{{memoryMonth}}`, a database's disk at the 16 GiB minimum `{{databaseMonth}}` a month, and 10 GiB sent to visitors `{{egressExample}}`.
 
 ## Faq
 
