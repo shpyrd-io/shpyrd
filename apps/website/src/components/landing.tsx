@@ -15,10 +15,10 @@ import { glass } from "@shpyrd/ui/lib/glass";
 import { contact } from "@/content/offer";
 import type { Link } from "@/content/landings";
 import { AgentWindow } from "@/components/agent-window";
-import { BinaryMark } from "@/components/binary-mark";
 import { CodeWindow } from "@/components/code-window";
 import { ContainerCircle } from "@/components/container-helix";
 import { Faq } from "@/components/faq";
+import { HeroPrism } from "@/components/hero-prism";
 import { deployOutput } from "@/components/for-developers";
 import { icons } from "@/components/landing-icons";
 import { LoopSteps } from "@/components/loop-steps";
@@ -30,7 +30,7 @@ import { webAndWorkerYaml, workerYaml } from "@/components/use-case-agents-and-w
 import { VerticalRoute } from "@/components/vertical-route";
 import { designs, plain, type Design } from "@/lib/landing-designs";
 import { signUp } from "@/lib/signup";
-import { pageSections } from "@/lib/page";
+import { pageSections, subpageHero } from "@/lib/page";
 
 // A feature or solution page (content/site/features/*.mdx, solutions.ts). The
 // words are the content's; how each page is drawn is its design
@@ -138,7 +138,7 @@ function Grid({ items }: { items: Item[] }) {
 // Three steps side by side, each a tile with its number, an arrow between.
 function Columns({ steps }: { steps: Step[] }) {
   return (
-    <ol className="page-glow mx-auto grid w-full max-w-5xl gap-10 md:grid-cols-3 md:gap-8">
+    <ol className="mx-auto grid w-full max-w-5xl gap-10 md:grid-cols-3 md:gap-8">
       {steps.map((s, i) => (
         <li key={s.heading} className="relative grid content-start justify-items-center gap-3 text-center">
           <span className="relative flex size-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_10px_24px_rgb(255_79_0/0.25)] [&_svg]:size-7">
@@ -221,7 +221,27 @@ function QuestionColumns({ items }: { items: Landing["questions"]["items"] }) {
   );
 }
 
-export function LandingPage({ page }: { page: Landing }) {
+// What the shpyrd mark behind the hero stands in: the page's top, and no
+// wider than the window.
+function PrismGround({ children }: { children: React.ReactNode }) {
+  return <div className="relative isolate overflow-x-clip">{children}</div>;
+}
+
+export function LandingPage({
+  page,
+  picture,
+  background,
+  stepsGround,
+}: {
+  page: Landing;
+  // In place of the hero's picture, for a proposal to try another.
+  picture?: React.ReactNode;
+  // In place of the page's background, for a proposal to try another.
+  background?: React.ReactNode;
+  // A ground of its own across the window behind the steps (a proposal's
+  // test: "white" for pure white in the light, the page's in the dark).
+  stepsGround?: "white";
+}) {
   const design = designs[page.slug] ?? plain;
   const split = design.hero !== "center";
   const actions = (
@@ -237,33 +257,41 @@ export function LandingPage({ page }: { page: Landing }) {
     </>
   );
   const steps = page.example.steps;
+  const prism = !background && design.background === "prism";
+  const Ground = prism ? PrismGround : Fragment;
   return (
-    <>
-      {design.background === "circle" ? (
+    <Ground>
+      {background ? (
+        background
+      ) : prism ? (
+        <HeroPrism icon="shpyrd" />
+      ) : (
         // Infrastructure that turns on its own: the circle of containers,
         // fixed behind the page, turning with the scroll.
         <ContainerCircle />
-      ) : (
-        // The binary ship behind the top, as on the solutions-backup pages:
-        // centred, its top 50px under the header, the rain softly around it,
-        // leaning toward the pointer.
-        <BinaryMark height={991} offset={122} x={0} near={4} tilt />
       )}
-      <PageLayoutContent width="xlarge" padding="normal" className={cn(pageSections, "hero-glow")}>
+      <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
         {split ? (
           <Hero
             variant="page"
+            className={subpageHero}
             label={page.label}
             heading={page.heading}
             description={page.description}
             actions={actions}
-            image={<Picture kind={design.hero as NonNullable<Design["picture"]>} />}
+            image={picture ?? <Picture kind={design.hero as NonNullable<Design["picture"]>} />}
           />
         ) : (
-          <Hero variant="page" align="center" label={page.label} heading={page.heading} description={page.description} actions={actions} />
+          <Hero variant="page" align="center" className={subpageHero} label={page.label} heading={page.heading} description={page.description} actions={actions} />
         )}
 
-        <Stack gap="spacious" className="page-glow">
+        <Stack
+          gap="spacious"
+          className={cn(
+            stepsGround === "white" &&
+              "relative before:absolute before:inset-y-[-5rem] before:left-1/2 before:-z-10 before:w-screen before:-translate-x-1/2 before:bg-white dark:before:bg-transparent",
+          )}
+        >
           <SectionIntro align="center" variant="xlarge" heading={page.example.heading} description={page.example.description} />
           {design.example === "loop" ? (
             // Steps that come round again: the developers' loop (loop-steps.tsx).
@@ -341,6 +369,6 @@ export function LandingPage({ page }: { page: Landing }) {
           />
         )}
       </PageLayoutContent>
-    </>
+    </Ground>
   );
 }

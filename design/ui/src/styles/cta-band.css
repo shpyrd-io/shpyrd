@@ -125,6 +125,17 @@
   70% { opacity: calc(0.45 * var(--ray-strength)); }
   100% { opacity: calc(0.6 * var(--ray-strength)); }
 }
+/* Still: the same glows and rays, in the middle of their movement, drawn
+   once. */
+.cta-band-still .light,
+.cta-band-still .rays::before,
+.cta-band-still .rays::after {
+  animation: none;
+}
+.cta-band-still .rays::before,
+.cta-band-still .rays::after {
+  --cta-band-ray: 1.5deg;
+}
 @media (prefers-reduced-motion: reduce) {
   .cta-band-aurora .light,
   .cta-band-aurora .rays::before,

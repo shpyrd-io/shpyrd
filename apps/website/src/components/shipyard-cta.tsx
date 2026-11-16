@@ -1,3 +1,4 @@
+import { AuroraPause } from "@/components/aurora-pause";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { cn } from "@shpyrd/ui/lib/cn";
@@ -40,6 +41,7 @@ export function ShipyardCta({
         <span className="light" />
         <span className="light" />
         <span className="rays" />
+          <AuroraPause />
       </div>
     <Hero
       as="h2"

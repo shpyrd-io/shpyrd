@@ -11,7 +11,7 @@ import { Boundaries } from "@/components/boundaries";
 import { buildExample, closing, intro, steps } from "@/content/sharing";
 import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
-import { pageSections } from "@/lib/page";
+import { pageSections, subpageHero } from "@/lib/page";
 import { signUp } from "@/lib/signup";
 import { ScrollReveal } from "@/components/scroll-reveal";
 
@@ -30,7 +30,7 @@ export default function GettingStarted() {
       <ScrollReveal />
       <ContainerCircle />
       <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
-        <Hero variant="page" align="center" heading={intro.title} description={intro.lead} />
+        <Hero variant="page" className={subpageHero} align="center" heading={intro.title} description={intro.lead} />
 
         <VerticalRoute
           className="mx-auto w-full max-w-5xl"

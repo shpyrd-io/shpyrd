@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Check, Sparkles } from "lucide-react";
 import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { LogoMark } from "@shpyrd/ui/components/brand";
@@ -18,6 +18,7 @@ import {
 import { glass } from "@shpyrd/ui/lib/glass";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Composer, Typing, Url } from "@/components/shipping-chat";
+import { DeckScale } from "./deck";
 
 // Slide 5 (Giovani, 2026-10-28): the home's hero story (ship-story.tsx),
 // copied here and told further, as the slide's five steps: describe, the
@@ -263,6 +264,7 @@ export function FlowStory({
   const app = useRef<HTMLDivElement>(null);
   const cloudBody = useRef<HTMLDivElement>(null);
   const [target, setTarget] = useState<{ x: number; y: number } | null>(null);
+  const scale = useContext(DeckScale);
   useEffect(() => {
     if (MOMENTS[moment][0] !== "sent-ship") return;
     // After the cloud has finished coming in, so it is measured where it rests.
@@ -271,13 +273,14 @@ export function FlowStory({
       const a = app.current.getBoundingClientRect();
       const c = cloudBody.current.getBoundingClientRect();
       // A little under the box's middle: the cloud's body is low, its bumps on top.
+      // Measured on the screen, moved in the slide's own size.
       setTarget({
-        x: c.left + c.width / 2 - (a.left + a.width / 2),
-        y: c.top + c.height * 0.6 - (a.top + a.height / 2),
+        x: (c.left + c.width / 2 - (a.left + a.width / 2)) / scale,
+        y: (c.top + c.height * 0.6 - (a.top + a.height / 2)) / scale,
       });
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [moment]);
+  }, [moment, scale]);
 
   useEffect(() => {
     if (resume) setHold(null);
@@ -597,7 +600,10 @@ export function FlowStory({
       {/* The one chat, in front, below and to the left of the app. */}
       <div
         data-chat=""
-        className={cn(glass, "relative z-20 w-[78%] rounded-2xl p-2.5 max-md:w-full")}
+        className={cn(
+          glass,
+          "relative z-20 w-[78%] rounded-2xl p-2.5 max-md:w-full",
+        )}
       >
         <AppWindow
           title={agent}

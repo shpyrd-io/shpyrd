@@ -20,7 +20,9 @@ export const metadata = {
 // sections in the order that converts, the features as a carousel, the
 // customer stories, the picture for businesses and the orange closing band.
 // The closing call is the orange band with the yard in the logo's bar
-// (tried on /proposals/cta-bar, applied 2026-10-20).
+// (tried on /proposals/cta-bar, applied 2026-10-20). "Not the one who
+// built it?" as tabs, its films beside its three ways (tried on
+// /proposals/also-tabs, applied 2026-11-11).
 export default function Page() {
   return (
     <Home
@@ -34,6 +36,7 @@ export default function Page() {
       order="conversion"
       companiesPicture={<CompanyApps />}
       closing="band"
+      also="tabs"
     />
   );
 }

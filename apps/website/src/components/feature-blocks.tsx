@@ -9,6 +9,7 @@ import { SleepFilm } from "@/components/sleep-film";
 import { CostFilm } from "@/components/cost-film";
 import { MetricsFilm } from "@/components/metrics-film";
 import { OverviewFilm } from "@/components/overview-film";
+import { PointerEdge } from "@/components/pointer-edge";
 
 // Eight things shpyrd does, each a statement and a little film of it playing
 // (first from the designer's sheet, claude.ai/artifact/R8pQc5eZnfonk2iQgg6CpP;
@@ -148,14 +149,15 @@ function Block({
     );
   }
   return (
-    // No shadow (Giovani, 2026-10-19): under the pointer only its edge turns
-    // orange.
+    // No shadow (Giovani, 2026-10-19). Under the pointer it grows a little
+    // and its edge lights in orange round the pointer (Giovani, 2026-11-12,
+    // after stripe.com/br; src/styles/feature-blocks.css).
     <article
       data-tile=""
       className={cn(
         glass,
         "flex flex-col gap-4 p-2.5 transition-[box-shadow] duration-300 ease-out",
-        "shadow-none hover:ring-primary/50 dark:shadow-none dark:hover:ring-primary/50",
+        "shadow-none dark:shadow-none",
         row && "md:flex-row md:items-stretch",
         className,
       )}
@@ -220,6 +222,7 @@ export function FeatureBlocks({
         className,
       )}
     >
+      {!board && !cards && <PointerEdge />}
       <Block
         icon={<GitBranch />}
         title="Publish from your folder or GitHub"

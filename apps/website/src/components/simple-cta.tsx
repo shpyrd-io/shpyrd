@@ -1,3 +1,4 @@
+import { AuroraPause } from "@/components/aurora-pause";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 
@@ -11,6 +12,7 @@ export function SimpleCta({
   description,
   action,
   links = [],
+  still = true,
 }: {
   heading: React.ReactNode;
   description?: React.ReactNode;
@@ -18,17 +20,21 @@ export function SimpleCta({
   action: React.ReactNode;
   // Where else to go, quieter.
   links?: { label: string; href: string }[];
+  // The light in the same shape, still: drawn once, with no cost after
+  // (Giovani, 2026-11-16, after /proposals/cta-still). false: animated.
+  still?: boolean;
 }) {
   return (
     <div data-slot="next-step" className="relative isolate grid justify-items-center gap-24 overflow-x-clip pb-6">
       {/* The light under the words and the button, not the links. */}
       <Stack gap="spacious" className="relative isolate w-full justify-items-center">
-        <div aria-hidden="true" className="aurora aurora-centred">
+        <div aria-hidden="true" className={still ? "aurora aurora-centred aurora-still" : "aurora aurora-centred"}>
           <span className="light" />
           <span className="light" />
           <span className="light" />
           <span className="light" />
           <span className="rays" />
+          <AuroraPause />
         </div>
         <SectionIntro
           align="center"

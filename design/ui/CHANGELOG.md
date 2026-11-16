@@ -20,6 +20,9 @@ application has to change.
 - `KnobSlider` (`@shpyrd/ui/components/knob-slider`): one number chosen along a line, the number written on an orange square knob; the browser's range input under it, so a pointer, a finger and the keys all move it.
 - `Tabs` take `variant="pill"` (with `size="md"` or `"lg"`): the choices on a sunken pill, a light sliding under the one chosen.
 - `CtaBand` (`@shpyrd/ui/components/cta-band`): a page's closing call to action on the orange band.
+- `CtaBand` takes `still`: its light in the same shape, not moving, drawn once.
+- `Shipyard` draws its yard 30 times a second instead of at every frame: the same movement, half the work.
+- `Shipyard`: each piece keeps its height before its file arrives, so the browser's lazy loading fetches it; the ground, with the yard's stacks and warehouse, could stay unfetched.
 
 ## 0.1.2
 

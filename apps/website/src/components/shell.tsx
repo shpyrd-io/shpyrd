@@ -288,6 +288,7 @@ export function Shell({
   if (
     path === "/small-software-manifesto" ||
     path === "/proposals/manifesto-v3" ||
+    path === "/proposals/manifesto-fit" ||
     path === "/proposals/manifesto-original" ||
     path === "/proposals/sleep-day" ||
     path === "/proposals/sleep-day-blocks" ||
@@ -485,8 +486,8 @@ export function Shell({
       {children}
 
       <PageLayoutFooter>
-        {path === "/" ? (
-          // The home's foot is the full one: the brand and the way in, the
+        {path === "/" || path === "/proposals/also-list" || path === "/proposals/also-tabs" ? (
+          // The home's foot is the full one (and its test's): the brand and the way in, the
           // site's map in columns, the fine print. Every other page has the
           // small one.
           <Footer

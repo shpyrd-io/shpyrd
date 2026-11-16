@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { subpageHero } from "@/lib/page";
 import { Changelog, ChangelogEntry, ChangelogSummary } from "@shpyrd/ui/components/changelog";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
@@ -15,7 +16,7 @@ export function ChangelogPage({ posts }: { posts: ChangelogPost[] }) {
   );
   return (
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-12 py-10 sm:py-16">
-      <Hero variant="page" heading={copy.title} description={copy.description} align="center" />
+      <Hero variant="page" className={subpageHero} heading={copy.title} description={copy.description} align="center" />
       {posts.length > 0 ? <Changelog>{posts.slice(0, 3).map((post) => entry(post))}</Changelog>
         : <p className="text-muted-foreground">{copy.empty}</p>}
       <ChangelogArchive title={copy.archive} loadMore={copy.loadMore}

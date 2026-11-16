@@ -6,6 +6,7 @@
 // foot opens the list of every slide. The slide's number is in
 // the address (#3), so a link opens the deck where it was.
 import {
+  createContext,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -84,6 +85,19 @@ const menuIcons = [
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+// How much the slide is drawn smaller to fit the window (1: its own size).
+// What a slide measures on the screen is that much smaller than its layout,
+// so a slide drawing over itself (its threads) divides by it.
+export const DeckScale = createContext(1);
+
+// The room the deck leaves its slide: the main area's padding, above and
+// under (py-8).
+const MAIN_PAD = 64;
+// The smallest the slide is drawn (Giovani, 2026-11-11): smaller, its
+// captions would be too small to read; in a window lower than that the page
+// scrolls again.
+const LEAST = 0.75;
+
 // A phone: the slides stack their parts, each slide as tall as itself.
 const phone = () =>
   typeof window !== "undefined" &&
@@ -91,8 +105,13 @@ const phone = () =>
 
 export function Deck({
   slides,
+  fit = false,
 }: {
   slides: ((go: (to: number) => void) => React.ReactNode)[];
+  // The slide drawn smaller, as a whole, when the tallest does not fit the
+  // window between the header and the foot (Giovani, 2026-11-11: no scroll
+  // on a laptop). Its layout, words and sizes stay those of a large screen.
+  fit?: boolean;
 }) {
   const [at, setAt] = useState(0);
   const [full, setFull] = useState(false);
@@ -105,15 +124,27 @@ export function Deck({
   // sight, and again when the window or the fonts change.
   const [tallest, setTallest] = useState<number | null>(null);
   const [measuring, setMeasuring] = useState(true);
+  const [scale, setScale] = useState(1);
   const measure = useRef<HTMLDivElement>(null);
+  const top = useRef<HTMLElement>(null);
+  const foot = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (!measuring || !measure.current) return;
     // On a phone each slide is as tall as itself (Giovani, 2026-10-29): the
     // slides stack their parts there, and the tallest would leave the
     // others a long empty page.
-    setTallest(phone() ? null : measure.current.offsetHeight);
+    const height = phone() ? null : measure.current.offsetHeight;
+    setTallest(height);
+    // The room between the header and the foot, and the slide made as much
+    // smaller as it needs to fit it; never larger than its own size.
+    const room =
+      window.innerHeight -
+      (top.current?.offsetHeight ?? 0) -
+      (foot.current?.offsetHeight ?? 0) -
+      MAIN_PAD;
+    setScale(fit && height ? Math.max(LEAST, Math.min(1, room / height)) : 1);
     setMeasuring(false);
-  }, [measuring]);
+  }, [measuring, fit]);
   // On a phone the next slide starts at its top.
   useEffect(() => {
     if (phone()) window.scrollTo({ top: 0 });
@@ -238,7 +269,10 @@ export function Deck({
         />
       </div>
 
-      <header className="flex items-center justify-between px-6 pt-5 sm:px-8">
+      <header
+        ref={top}
+        className="flex items-center justify-between px-6 pt-5 sm:px-8"
+      >
         <a href="/" className="flex items-center gap-2" aria-label="shpyrd">
           <Wordmark className="h-6 w-auto" />
         </a>
@@ -273,23 +307,42 @@ export function Deck({
             </div>
           </div>
         )}
-        <section
-          key={at}
-          aria-roledescription="slide"
-          aria-label={`${at + 1} of ${slides.length}: ${names[at]}`}
-          style={{ minHeight: tallest ?? undefined }}
-          // The slide comes in as the site's sections do (Giovani, 2026-10-27):
-          // its label, heading and line, then its blocks, each rising 16px into
-          // place over 700ms, 80ms apart (.deck-rise, src/styles/global.css);
-          // the slide itself does not move.
-          className="deck-rise mx-auto w-full max-w-6xl"
+        {/* The slide at its own size, or drawn smaller from its top as a
+            whole; the room it takes shrinks with it, so the page does not
+            scroll. */}
+        <div
+          className="w-full"
+          style={scale < 1 && tallest ? { height: tallest * scale } : undefined}
         >
-          {slides[at](go)}
-        </section>
+          <section
+            key={at}
+            aria-roledescription="slide"
+            aria-label={`${at + 1} of ${slides.length}: ${names[at]}`}
+            style={{
+              minHeight: tallest ?? undefined,
+              ...(scale < 1 && {
+                transform: `scale(${scale})`,
+                transformOrigin: "top center",
+              }),
+            }}
+            // The slide comes in as the site's sections do (Giovani, 2026-10-27):
+            // its label, heading and line, then its blocks, each rising 16px into
+            // place over 700ms, 80ms apart (.deck-rise, src/styles/global.css);
+            // the slide itself does not move.
+            className="deck-rise mx-auto w-full max-w-6xl"
+          >
+            <DeckScale.Provider value={scale}>
+              {slides[at](go)}
+            </DeckScale.Provider>
+          </section>
+        </div>
       </main>
 
       <TooltipProvider delayDuration={150}>
-        <footer className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-t border-border/60 bg-(--page-ground) px-6 py-4 sm:px-8">
+        <footer
+          ref={foot}
+          className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-t border-border/60 bg-(--page-ground) px-6 py-4 sm:px-8"
+        >
           <Button
             variant="outline"
             size="icon-xl"

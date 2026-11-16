@@ -3,7 +3,13 @@
 // Slide 5: from the prompt to the team. Since 2026-10-28 (Giovani) the home
 // hero's story, told on to the slide's five steps (flow-story.tsx); the step
 // it is on lights up beside it, and choosing a step plays the story to it.
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Bot,
   ChevronLeft,
@@ -18,6 +24,7 @@ import {
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Button } from "@shpyrd/ui/components/button";
 import { flow } from "@/content/tour-v3";
+import { DeckScale } from "./deck";
 import { FlowStory, stepTime } from "./flow-story";
 import { Intro, Label, panel, mouseOnly } from "./parts";
 
@@ -59,6 +66,7 @@ export function Flow() {
   // up) the middle of the gap with rounded corners, as on slide 4.
   const row = useRef<HTMLDivElement>(null);
   const [thread, setThread] = useState<string | null>(null);
+  const scale = useContext(DeckScale);
   useLayoutEffect(() => {
     const box = row.current;
     if (!box) return;
@@ -69,16 +77,17 @@ export function Flow() {
         ?.getBoundingClientRect();
       const chat = box.querySelector("[data-chat]")?.getBoundingClientRect();
       if (!from || !chat) return;
-      const x0 = from.right - o.left;
-      const y0 = from.top + from.height / 2 - o.top;
-      const x1 = chat.left - o.left;
+      // Measured on the screen, drawn in the slide's own size.
+      const x0 = (from.right - o.left) / scale;
+      const y0 = (from.top + from.height / 2 - o.top) / scale;
+      const x1 = (chat.left - o.left) / scale;
       // Every thread ends at the same point (Giovani, 2026-10-28): level with
       // the chat window's three dots, its title bar's middle.
       const bar =
         box
           .querySelector("[data-chat] [data-slot=app-window-bar]")
           ?.getBoundingClientRect() ?? chat;
-      const y1 = bar.top + bar.height / 2 - o.top;
+      const y1 = (bar.top + bar.height / 2 - o.top) / scale;
       const mx = (x0 + x1) / 2;
       const dir = Math.sign(y1 - y0);
       const r = Math.min(12, Math.abs(y1 - y0) / 2, (x1 - x0) / 2);
@@ -98,7 +107,7 @@ export function Flow() {
       seen.disconnect();
       late.forEach((t) => window.clearTimeout(t));
     };
-  }, [step]);
+  }, [step, scale]);
 
   return (
     <div className="grid gap-8">

@@ -18,6 +18,7 @@ export function CtaBand({
   note,
   image = <Shipyard />,
   bleed = true,
+  still = false,
   className,
 }: {
   heading: React.ReactNode;
@@ -29,12 +30,14 @@ export function CtaBand({
   // The band from edge to edge of the window (a page of the site); false
   // keeps it within its box, its corners rounded (a gallery, a card).
   bleed?: boolean;
+  // The light in the same shape, still: drawn once, with no cost after.
+  still?: boolean;
   className?: string;
 }) {
   return (
     <div data-slot="cta-band" className={cn("cta-band relative isolate", !bleed && "cta-band-contained", className)}>
       <div aria-hidden="true" className="cta-band-ground" />
-      <div aria-hidden="true" className="cta-band-aurora">
+      <div aria-hidden="true" className={cn("cta-band-aurora", still && "cta-band-still")}>
         <span className="light" />
         <span className="light" />
         <span className="light" />

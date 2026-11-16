@@ -526,7 +526,16 @@ export function ContainerHelix({
 
     let frame = 0;
     let last = performance.now();
+    // While the page is still, 30 frames a second are enough for the slow
+    // turning; while it scrolls, every frame, so the ring keeps up
+    // (Giovani, 2026-11-16: the subpages' performance).
+    let movedAt = -Infinity;
     const tick = (now: number) => {
+      if (window.scrollY !== lastY) movedAt = now;
+      if (now - movedAt > 400 && now - last < 1000 / 30 - 2) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       const dt = Math.min((now - last) / 1000, 0.1);
       last = now;
       // The pose follows the scroll softly; the chain keeps turning slowly.
