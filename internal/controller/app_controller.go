@@ -508,6 +508,12 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
 				}
 			}
+			// A build waiting for a machine says so, and for how long (#360).
+			if build.Ready == "Unknown" {
+				if words := r.buildWaiting(ctx, kpackBuild); words != "" {
+					build.Message = words
+				}
+			}
 		}
 		app.Status.LatestBuild = build.LatestBuild
 		if image == "" {

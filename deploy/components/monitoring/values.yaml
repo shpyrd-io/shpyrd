@@ -384,6 +384,29 @@ additionalPrometheusRulesMap:
                 {{ $labels.namespace }}/{{ $labels.pod }} has been starting for
                 more than 5 minutes. A disk that cannot be attached or mounted is
                 the usual cause: the pod's events say which one and why.
+          # A pod no machine has taken for 15 minutes (#360). The autoscaler
+          # adds a machine in 2 to 4 minutes when it is going to; past that it
+          # is not going to: the pool is at its maximum, or the autoscaler
+          # thinks the pod fits a machine it does not fit (a build waited 6h40
+          # in "Waiting for the build to start" that way, with a free slot on
+          # one machine and the free CPU on the other).
+          - alert: PodUnschedulable
+            expr: |
+              max by (namespace, pod) (kube_pod_status_unschedulable == 1)
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: capacity
+            annotations:
+              summary: A pod has waited 15 minutes for a machine
+              description: >-
+                {{ $labels.namespace }}/{{ $labels.pod }} has not been placed on
+                any machine for 15 minutes. Its PodScheduled condition says what
+                is short; the cluster-autoscaler's status (ConfigMap
+                kube-system/cluster-autoscaler-status) and log say whether it is
+                adding a machine. "Schedulable pods present" with the pod still
+                pending means it believes the pod fits: add a node to the pool
+                by hand (oci ce node-pool update --size) and the pod is placed.
           # A released disk is one a migration or a deletion left behind,
           # kept for a way back. Three days is the agreed keep.
           - alert: RetainedDiskOlderThanThreeDays
