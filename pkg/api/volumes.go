@@ -200,12 +200,23 @@ func (s *Server) applyVolumeMinimum(size resource.Quantity) (resource.Quantity, 
 // instances share belong in a bucket).
 const sharedFoldersUnavailable = "Shared folders are not available on this cloud yet. For files several instances share, use a bucket."
 
-// sharedFoldersOperatorHint tells the cluster's operator what turns them on.
+// sharedFoldersOperatorHint is what turns shared folders on. It is for the
+// cluster's operator and goes to the server's log, never to the person who
+// asked for the folder (shpyrd#354): they hear sharedFoldersUnavailable alone.
 func (s *Server) sharedFoldersOperatorHint() string {
 	if s.vars(install.VarProfile) == "oci" {
-		return "Operators: create the File Storage mount target with contrib/oci/terraform (shared_storage = true) and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`."
+		return "create the File Storage mount target with contrib/oci/terraform (shared_storage = true) and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`"
 	}
-	return "Operators: install a ReadWriteMany storage class and name it in SHPYRD_STORAGE_CLASS_SHARED."
+	return "install a ReadWriteMany storage class and name it in SHPYRD_STORAGE_CLASS_SHARED"
+}
+
+// refuseSharedFolder is the refusal of a shared folder on a cloud that has
+// none: the person reads one sentence that names no provider, and the log
+// tells the operator what is missing (class is the storage class the
+// profile names and the cluster lacks, or "" when it names none).
+func (s *Server) refuseSharedFolder(vol *shpyrdv1.Volume, class string) error {
+	s.log.Warn("a shared folder was refused: shared volumes are not set up", "namespace", vol.Namespace, "volume", vol.Name, "storageClass", class, "operators", s.sharedFoldersOperatorHint())
+	return errors.New(sharedFoldersUnavailable)
 }
 
 // checkVolumeGrowth refuses the growth of a volume whose storage class
@@ -252,7 +263,7 @@ func (s *Server) checkVolumeClass(ctx context.Context, vol *shpyrdv1.Volume) err
 	// the request is refused in words, before anything is created; a shared
 	// folder never falls back to a node-local directory.
 	if vol.Shared() && vol.Spec.StorageClass == "" && class == "" {
-		return errors.New(sharedFoldersUnavailable + " " + s.sharedFoldersOperatorHint())
+		return s.refuseSharedFolder(vol, "")
 	}
 	if class == "" || s.kube == nil || s.kube.Kube == nil {
 		return nil
@@ -260,7 +271,7 @@ func (s *Server) checkVolumeClass(ctx context.Context, vol *shpyrdv1.Volume) err
 	_, err := s.kube.Kube.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err) && vol.Spec.StorageClass == "" && vol.Shared():
-		return fmt.Errorf("%s %s (storage class %s does not exist)", sharedFoldersUnavailable, s.sharedFoldersOperatorHint(), class)
+		return s.refuseSharedFolder(vol, class)
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("storage class %q does not exist on this cluster", class)
 	case err != nil:

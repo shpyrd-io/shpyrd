@@ -215,7 +215,7 @@ func resourceViewOf(t ext.ResourceType, u unstructured.Unstructured) ResourceVie
 	// (RFC-0060): show what exists, not what was asked.
 	if eff, _, _ := unstructured.NestedString(u.Object, "status", "storage"); eff != "" {
 		if req := v.Details["storage"]; req != "" && req != eff {
-			v.Details["storage"] = eff + " (" + req + " requested; provider minimum)"
+			v.Details["storage"] = eff + " (" + req + " requested; minimum size)"
 		} else {
 			v.Details["storage"] = eff
 		}
@@ -430,7 +430,7 @@ func (s *Server) makeResource(c *gin.Context, ns, slug string, t ext.ResourceTyp
 				ch.storage.Add(disk)
 			}
 			if rounded {
-				note = strings.TrimSpace(note + fmt.Sprintf(" Its disk is %s, the provider minimum.", disk.String()))
+				note = strings.TrimSpace(note + fmt.Sprintf(" Its disk is %s, the minimum size.", disk.String()))
 			}
 		}
 	}

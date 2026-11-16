@@ -8,9 +8,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -43,7 +45,7 @@ func TestDatabaseDiskCountsAgainstTheStorageCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", `{"kind":"Postgres","name":"db"}`)
-	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Its disk is 50Gi, the provider minimum.") {
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Its disk is 50Gi, the minimum size.") {
 		t.Errorf("database within the ceiling = %d %s", rec.Code, rec.Body.String())
 	}
 	// It now counts: with the ceiling lowered under two disks, a second one
@@ -54,6 +56,38 @@ func TestDatabaseDiskCountsAgainstTheStorageCeiling(t *testing.T) {
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", `{"kind":"Postgres","name":"db2"}`)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 100 GB of 60 GB.") {
 		t.Errorf("second database = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// What a person reads about a disk the minimum made larger names no
+// provider (shpyrd#354): the note of a new database or persistent store,
+// the storage detail of one that exists, and the refusal of a shared folder
+// on a profile that names no class for them.
+func TestRoundedDiskWordsNameNoProvider(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	s.opts.Extensions = all.All() // the Postgres and Redis kinds
+	s.opts.Vars = func(key string) string {
+		return map[string]string{install.VarProfile: "oci", install.VarStorageClass: "oci-bv", install.VarVolumeMinSize: "50Gi"}[key]
+	}
+	for _, body := range []string{`{"kind":"Postgres","name":"db"}`, `{"kind":"Redis","name":"store","spec":{"persistent":true}}`} {
+		rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", body)
+		if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Its disk is 50Gi, the minimum size.") || strings.Contains(rec.Body.String(), "provider") || strings.Contains(rec.Body.String(), "Oracle") {
+			t.Errorf("%s = %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	for _, kind := range []string{"Postgres", "Redis"} {
+		v := resourceViewOf(ext.ResourceType{Kind: kind}, unstructured.Unstructured{Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "db"},
+			"spec":     map[string]interface{}{"storage": "5Gi"},
+			"status":   map[string]interface{}{"storage": "50Gi"},
+		}})
+		if got := v.Details["storage"]; got != "50Gi (5Gi requested; minimum size)" {
+			t.Errorf("%s storage detail = %q", kind, got)
+		}
+	}
+	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"media","size":"1Gi","shared":true}`)
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"`+sharedFoldersUnavailable+`"}` {
+		t.Errorf("shared folder on a profile without a class = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
