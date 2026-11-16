@@ -208,12 +208,9 @@ export function LoopSteps({
         </svg>
       )}
 
-      {/* The words in a soft glow of the page's own colour (white on the
-          light page, black on the dark), so they read over the moving
-          binary behind them. */}
       <ol
         className={cn(
-          "grid gap-10 page-glow pb-20 pl-14 @3xl/loop:gap-8 @3xl/loop:pb-24 @3xl/loop:pl-0",
+          "grid gap-10 pb-20 pl-14 @3xl/loop:gap-8 @3xl/loop:pb-24 @3xl/loop:pl-0",
           steps.length === 4 ? "@3xl/loop:grid-cols-4" : "@3xl/loop:grid-cols-3",
         )}
       >
@@ -240,7 +237,7 @@ export function LoopSteps({
         // The word on the way back, on the track, the page's colour behind it.
         <span
           className={cn(
-            "absolute inline-flex items-center gap-1.5 bg-(--page-ground) px-3 text-xs font-medium text-primary page-glow",
+            "absolute inline-flex items-center gap-1.5 bg-(--page-ground) px-3 text-xs font-medium text-primary",
             track.wide ? "-translate-x-1/2 -translate-y-1/2" : "-translate-x-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap",
           )}
           style={{ left: track.label[0], top: track.label[1] }}

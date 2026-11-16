@@ -24,9 +24,10 @@ import { Problem } from "./problem";
 import { SleepDayBlocks } from "./sleep-day-blocks";
 import { Xray } from "./xray";
 
-export function Tour() {
+export function Tour({ fit = false }: { fit?: boolean } = {}) {
   return (
     <Deck
+      fit={fit}
       slides={[
         (go) => <Opening next={() => go(1)} />,
         () => <Problem />,

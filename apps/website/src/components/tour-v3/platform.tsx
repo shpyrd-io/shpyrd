@@ -10,7 +10,13 @@
 // there and what the builder doesn't have to. Under the track, a second
 // line: logs, metrics and the audit trail, along the whole way. Left alone it
 // moves on every few seconds; choosing a stop, or the arrows, holds it.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   AppWindow as AppWindowIcon,
@@ -32,6 +38,7 @@ import { Button } from "@shpyrd/ui/components/button";
 import { ChecklistItems } from "@shpyrd/ui/components/checklist";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { platform } from "@/content/tour-v3";
+import { DeckScale } from "./deck";
 import { Intro, Label, panel, rise, mouseOnly } from "./parts";
 
 const icons: Record<string, React.ReactElement> = {
@@ -127,6 +134,7 @@ export function Platform() {
   // The thread's path, measured in the journey's box.
   const way = useRef<HTMLDivElement>(null);
   const [thread, setThread] = useState<string | null>(null);
+  const scale = useContext(DeckScale);
   useLayoutEffect(() => {
     const box = way.current;
     if (!box) return;
@@ -138,11 +146,12 @@ export function Platform() {
       const pill = box.querySelector("[data-logs]")?.getBoundingClientRect();
       const card = box.querySelector("[data-cards]")?.getBoundingClientRect();
       if (!from || !pill || !card) return;
-      const x0 = from.left + from.width / 2 - o.left;
-      const y0 = from.bottom - o.top + 10;
-      const x1 = pill.left + pill.width / 2 - o.left;
-      const y1 = pill.top + pill.height / 2 - o.top;
-      const y2 = card.top - o.top;
+      // Measured on the screen, drawn in the slide's own size.
+      const x0 = (from.left + from.width / 2 - o.left) / scale;
+      const y0 = (from.bottom - o.top) / scale + 10;
+      const x1 = (pill.left + pill.width / 2 - o.left) / scale;
+      const y1 = (pill.top + pill.height / 2 - o.top) / scale;
+      const y2 = (card.top - o.top) / scale;
       // Down from the stop, a rounded corner, across to the pill's middle,
       // another rounded corner, down through the pill to the card (Giovani,
       // 2026-10-28). The same commands whatever the stop, so it can ease.
@@ -153,7 +162,7 @@ export function Platform() {
       // lines; Giovani, 2026-10-28).
       const row =
         box.querySelector("[data-journey]")?.getBoundingClientRect() ?? from;
-      const mid = (row.bottom + pill.top) / 2 - o.top;
+      const mid = ((row.bottom + pill.top) / 2 - o.top) / scale;
       const dir = Math.sign(x1 - x0);
       const r = Math.min(16, Math.abs(x1 - x0) / 2, mid - y0);
       setThread(
@@ -165,7 +174,7 @@ export function Platform() {
     const seen = new ResizeObserver(measure);
     seen.observe(box);
     return () => seen.disconnect();
-  }, [at]);
+  }, [at, scale]);
 
   // A card for each place on the way: the start, a stop, or the end.
   const card = (pos: number) => {

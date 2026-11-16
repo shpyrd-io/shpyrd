@@ -1,4 +1,5 @@
 import { ChecklistItems } from "@shpyrd/ui/components/checklist";
+import { subpageHero } from "@/lib/page";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { ContactForm } from "@/components/contact-form";
@@ -10,7 +11,7 @@ export function Contact({ kind }: { kind: Kind }) {
   const page = formOf(kind);
   return (
     <PageLayoutContent width="xlarge" padding="normal" className="grid grid-cols-1 content-start gap-12 py-8">
-      <Hero variant="page" heading={page.title} description={page.description} />
+      <Hero variant="page" className={subpageHero} heading={page.title} description={page.description} />
       <div className="grid gap-12 @4xl/page-layout:grid-cols-[3fr_2fr]">
         <ContactForm kind={kind} />
         <aside className="grid content-start gap-8">

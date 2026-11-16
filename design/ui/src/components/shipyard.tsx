@@ -40,8 +40,11 @@ function Shipyard({
     let last = 0;
     let owed = 0;
     let seen = false;
+    // Drawn 30 times a second, not the screen's 60: each drawing renders
+    // the whole yard again, and its pieces move slowly enough for 30.
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
+      if (now - last < 1000 / 30 - 2) return;
       owed += Math.min((now - last) / 1000, 0.1);
       last = now;
       while (owed >= STEP) {
@@ -111,6 +114,10 @@ function Piece({ sprite, at, rank }: { sprite: keyof typeof sprites; at: Point; 
   const [x, y] = project(at);
   const style = {
     width: wide(size[0] * scale),
+    // Its height before the file arrives: without it the picture is a line
+    // with no height, which the browser's lazy loading may never fetch (the
+    // ground did not come, so the yard showed without its stacks).
+    aspectRatio: `${size[0]} / ${size[1]}`,
     transform: `translate3d(${across(x - stands[0] * scale)}, ${down(y - stands[1] * scale)}, 0)`,
     zIndex: rank,
   };

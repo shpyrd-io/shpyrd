@@ -6,7 +6,8 @@ import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { also, companies, devHunt, gap, hero, peerPush, price, productHunt, route, testimonials } from "@/content/home";
+import { also, companies, gap, hero, price, route, testimonials } from "@/content/home";
+import { TrustSeals } from "@/components/trust-seals";
 import { Testimonial, TestimonialGrid, TestimonialHighlight } from "@shpyrd/ui/components/testimonial";
 import { enterpriseContact, secondaryCta, start } from "@/content/offer";
 import { DeployButton } from "@/components/deploy-button";
@@ -22,6 +23,7 @@ import { AppsYard } from "@/components/tour/apps-yard";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { CtaBand } from "@shpyrd/ui/components/cta-band";
 import { ShipyardBar } from "@/components/shipyard-bar";
+import { AlsoTabs } from "@/components/also-tabs";
 import { signUp } from "@/lib/signup";
 import { DevelopersFilm, PartnersFilm, TeamsFilm } from "@/components/audience-films";
 import { glass } from "@shpyrd/ui/lib/glass";
@@ -111,6 +113,7 @@ export function Home({
   order = "default",
   companiesPicture,
   closing = "shipyard",
+  also: alsoLook = "films",
 }: {
   picture: React.ReactNode;
   before?: React.ReactNode;
@@ -124,6 +127,13 @@ export function Home({
   // "band": the closing call on the orange band, the yard in the logo's bar
   // (a test, /proposals/cta-bar, 2026-10-20).
   closing?: "shipyard" | "band";
+  // "list": "Not the one who built it?" as its heading on the left and the
+  // three ways as buttons on the right, with no films (a test,
+  // /proposals/also-list, 2026-11-11).
+  // "tabs": its heading centred over the three ways as buttons on the left
+  // and the film of the one pointed at on the right (a test,
+  // /proposals/also-tabs, 2026-11-11, after iugu.com/split-pagamentos).
+  also?: "films" | "list" | "tabs";
 }) {
   const conversion = order === "conversion";
   // The sections, named so a proposal can try them in another order.
@@ -202,7 +212,60 @@ export function Home({
       {/* The solutions wait with the sections (src/lib/sections.ts). As the
           rest of the page: 168px from the route, a centred title, and each
           solution a card of glass with its icon, as on Pricing. */}
-      {sectionsLive && (
+      {sectionsLive && alsoLook === "list" && (
+        // The heading on the left, as the "For businesses" words; the three
+        // ways on the right, each a button to its page: its icon in a tile,
+        // its name and line, the arrow (Giovani, 2026-11-11). Buttons, so
+        // they carry the grey shadow that turns into the orange glow.
+        <div className="mt-26 grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:gap-16">
+          {/* Its label and heading as the "For businesses" words have them
+              (River): the label in orange capitals over the heading, 48px
+              on a wide screen. */}
+          <div className="grid gap-3">
+            <span className="text-sm font-medium tracking-wide text-primary uppercase">{also.label}</span>
+            <h2 className="font-heading text-3xl font-semibold tracking-tight text-balance md:text-4xl lg:text-5xl">
+              {also.heading}
+            </h2>
+          </div>
+          <ul className="grid gap-4">
+            {also.items.map((a) => (
+              <li key={a.href}>
+                <Link
+                  href={a.href}
+                  className={cn(
+                    glass,
+                    "group/also flex items-center gap-4 p-5 transition-[box-shadow] duration-300 ease-out hover:ring-primary/50 focus-visible:ring-primary dark:hover:ring-primary/50",
+                    "shadow-[0_6px_16px_-6px_rgb(20_20_30/0.18)] hover:shadow-[0_6px_16px_-4px_rgb(255_79_0/0.5)] dark:shadow-[0_6px_16px_-6px_rgb(0_0_0/0.5)] dark:hover:shadow-[0_6px_18px_-4px_rgb(255_79_0/0.6)]",
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="grid size-12 shrink-0 place-items-center rounded-xl bg-muted text-primary ring-1 ring-foreground/5 [&_svg]:size-6"
+                  >
+                    {alsoIcons[a.href]}
+                  </span>
+                  <span className="grid gap-1">
+                    <span className="text-base font-semibold text-foreground">{a.title}</span>
+                    <span className="text-sm text-muted-foreground">{a.body}</span>
+                  </span>
+                  <ArrowRight
+                    aria-hidden="true"
+                    className="ml-auto size-5 shrink-0 text-muted-foreground transition-[translate,color] group-hover/also:translate-x-0.5 group-hover/also:text-primary"
+                  />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {sectionsLive && alsoLook === "tabs" && (
+        <Stack gap="spacious" className="mt-26">
+          <SectionIntro variant="xlarge" align="center" heading={also.heading} />
+          {/* 56px under the heading, as every section's content. */}
+          <AlsoTabs className="mt-8" items={also.items} icons={alsoIcons} films={alsoFilms} />
+        </Stack>
+      )}
+      {sectionsLive && alsoLook === "films" && (
       <Stack gap="spacious" className="mt-26">
         <SectionIntro variant="xlarge" align="center" heading={also.heading} />
         <ul className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -381,27 +444,13 @@ export function Home({
               {/* What trying costs, under the button: nothing. */}
               <p className="text-sm text-muted-foreground">{start.note}</p>
             </div>
-            <div className="flex flex-wrap items-center justify-center gap-3 @3xl/hero:justify-start">
-              <a href={productHunt.href} target="_blank" rel="noopener noreferrer" className="shrink-0">
-                {/* The badge in the site's theme, a light one and a dark one: Product Hunt's own, kept in public/badges without the upvote count until the launch. */}
-                {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
-                <img alt={productHunt.alt} width={202} height={54} src={productHunt.image} className="h-12 w-auto dark:hidden" />
-                {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
-                <img alt={productHunt.alt} width={202} height={54} src={productHunt.imageDark} className="hidden h-12 w-auto dark:block" />
-              </a>
-              <a href={peerPush.href} target="_blank" rel="noopener noreferrer" className="shrink-0">
-                {/* The same height as the Product Hunt badge beside it. */}
-                {/* eslint-disable-next-line @next/next/no-img-element -- PeerPush serves the badge */}
-                <img src={peerPush.image} alt={peerPush.alt} width={191} height={54} className="h-12 w-auto" />
-              </a>
-              {/* The award from DevHunt (2026-10-20). The three badges 48px
-                  high rather than their 54px, so they keep to one row beside
-                  the hero's picture. */}
-              <a href={devHunt.href} target="_blank" rel="noopener noreferrer" title="shpyrd on DevHunt" className="shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element -- DevHunt serves the badge */}
-                <img src={devHunt.image} alt={devHunt.alt} width={220} height={54} className="h-12 w-auto" />
-              </a>
-            </div>
+            {/* What lowers the risk, and the awards, as on the manifesto's
+                last slide (Giovani, 2026-11-11). */}
+            <TrustSeals
+              lit
+              className="justify-items-center @3xl/hero:justify-items-start"
+              rowClassName="justify-center @3xl/hero:justify-start"
+            />
           </div>
         }
         image={picture}
@@ -444,16 +493,16 @@ export function Home({
         // Out to the window's sides and cut there: the yard's bar runs past
         // the site's edge and must not widen the page (the words keep their
         // column: the padding gives back what the margin takes).
-        <div className="relative isolate mx-[calc(50%-50vw)] overflow-x-clip px-[calc(50vw-50%)]">
-        {/* A soft shadow round the whole band, edge to edge (Giovani,
-            2026-10-20), so the white of the yard's bar does not meet the
-            page's light grey edge to edge. Outside the band, which clips
-            what reaches past its top. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute top-0 -bottom-6 left-1/2 -z-10 w-screen -translate-x-1/2 shadow-[0_0_48px_6px_rgb(60_20_0/0.28)]"
-        />
+        // Edged above and under, edge to edge, in the grey of the site's
+        // dividers and the blocks' edges (Giovani, 2026-11-11: in place of
+        // the shadow it had); drawn over the band, as its light and ground
+        // reach past its edges and would cover a border. The ground runs
+        // 23px under the box, so the line under it does too.
+        <div className="relative isolate mx-[calc(50%-50vw)] overflow-x-clip px-[calc(50vw-50%)] before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:z-30 before:h-px before:bg-foreground/8 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-[23px] after:z-30 after:h-px after:bg-foreground/8 dark:before:bg-foreground/20 dark:after:bg-foreground/20">
         <CtaBand
+          // Its light still (Giovani, 2026-11-16, after
+          // /proposals/home-cta-still): the same shape, drawn once.
+          still
           // The yard's bar is white on the orange, not multiplied into it.
           // The heading a step over the sections' (48px → 60px), for impact
           // (Giovani, 2026-10-20): the library's next size, as on its pages.

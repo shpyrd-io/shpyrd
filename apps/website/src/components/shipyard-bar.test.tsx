@@ -44,7 +44,7 @@ const scrollTo = (t: number) => {
 };
 
 describe("the yard in the logo's bar", () => {
-  it("opens the bar once on the screen", () => {
+  it("shows the whole bar from the start", () => {
     const { container } = render(<ShipyardBar />);
     expect(container.querySelector<HTMLElement>("[style*='clip-path']")!.style.clipPath).toContain("95.7%");
   });

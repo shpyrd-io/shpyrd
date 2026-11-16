@@ -8,3 +8,9 @@
 // 32px more).
 export const pageSections =
   "grid grid-cols-1 content-start gap-16 py-8 [&>*+*]:mt-26 [&>[data-slot=hero]+*]:mt-0 [&>*:last-child]:mb-36 [&>[data-slot=cta]]:mt-0 [&>[data-slot=cta]]:mb-0 [&>[data-slot=next-step]]:mb-0 [&>[data-slot=cta]+[data-slot=next-step]]:mt-0 [&>[data-slot=next-step]+[data-slot=next-step]]:mt-0 [&>*>[data-slot=section-intro]+*]:mt-8";
+
+// Every subpage's hero: 128px above and below its content from the md width,
+// where design/ui's page hero has 64px, so it stands out from the blocks
+// under it; its height is its content's (Giovani, 2026-11-16). Phones keep
+// the library's.
+export const subpageHero = "md:[&>div]:!py-32";

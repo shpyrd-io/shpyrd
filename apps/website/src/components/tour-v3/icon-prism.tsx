@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { cn } from "@shpyrd/ui/lib/cn";
+import { MARK_PATHS } from "@/components/binary-mark";
 
 // Each slide's label icon, large, given volume (Giovani, 2026-10-27): the
 // very icon the label uses (lucide, its lines 2 wide in its 24 box, round
@@ -73,6 +74,56 @@ export const ICONS = {
   ],
 };
 export type IconName = keyof typeof ICONS;
+
+// Filled shapes, not lines (Giovani, 2026-11-13: the shpyrd mark in the
+// manifesto's style): the mark of design/ui brand.tsx, 140.71 × 140.64,
+// brought to the icons' 24 box, about as large as their drawings.
+export const SHAPES = {
+  shpyrd: { d: MARK_PATHS, w: 140.71, h: 140.64 },
+};
+export type ShapeName = keyof typeof SHAPES;
+const SHAPE_SIZE = 21;
+
+// A filled shape in the 24 box: its Path2D, and its walls, one along each
+// of its outlines, each facing away from the fill.
+function solid(name: ShapeName) {
+  const { d, w, h } = SHAPES[name];
+  const k = SHAPE_SIZE / Math.max(w, h);
+  const at = (x: number, y: number) => ({ x: 12 + (x - w / 2) * k, y: 12 + (y - h / 2) * k });
+  const all = new Path2D();
+  for (const p of d) all.addPath(new Path2D(p), new DOMMatrix([k, 0, 0, k, 12 - (w / 2) * k, 12 - (h / 2) * k]));
+  const test = document.createElement("canvas").getContext("2d");
+  const inside = (x: number, y: number) => !!test?.isPointInPath(all, x, y);
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const walls: Edge[] = [];
+  for (const sub of d.flatMap((p) => p.split(/(?=M)/))) {
+    path.setAttribute("d", sub);
+    const length = path.getTotalLength();
+    if (length < 0.1) continue;
+    const n = Math.max(24, Math.round(length * k * 10));
+    const pts = Array.from({ length: n }, (_, i) => {
+      const q = path.getPointAtLength((length * i) / n);
+      return at(q.x, q.y);
+    });
+    const m = pts.length;
+    const edge: Edge = pts.map((p, i) => {
+      const a = pts[(i - 1 + m) % m];
+      const b = pts[(i + 1) % m];
+      const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      let nx = (b.y - a.y) / l;
+      let ny = -(b.x - a.x) / l;
+      // Away from the fill.
+      if (inside(p.x + nx * 0.05, p.y + ny * 0.05)) {
+        nx = -nx;
+        ny = -ny;
+      }
+      return { x: p.x, y: p.y, nx, ny };
+    });
+    edge.push(edge[0]);
+    walls.push(edge);
+  }
+  return { all, walls };
+}
 const LINE = 2;
 const HALF = LINE / 2;
 const DEPTH = LINE * 1.5;
@@ -251,6 +302,7 @@ function draw(
   ay: number,
   ax: number,
   pal: typeof KEY,
+  filled = false,
 ) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, w * dpr, h * dpr);
@@ -361,6 +413,15 @@ function draw(
   );
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  if (filled) {
+    // A shape: filled, its hairline round it.
+    ctx.lineWidth = EDGE * 2;
+    ctx.strokeStyle = pal.outline;
+    for (const p of paths) ctx.stroke(p);
+    ctx.fillStyle = pal.face;
+    for (const p of paths) ctx.fill(p);
+    return;
+  }
   ctx.lineWidth = LINE + EDGE * 2;
   ctx.strokeStyle = pal.outline;
   for (const p of paths) ctx.stroke(p);
@@ -410,10 +471,15 @@ function write(
   dpr: number,
   t: number,
   dark: boolean,
+  grain = 1,
 ) {
+  // Larger cells and digits by `grain` (a landing page's hero, 2026-11-16).
+  const cw = Math.round(CELL_W * grain);
+  const ch = Math.round(CELL_H * grain);
+  const font = FONT * grain;
   const ink = dark ? INK.dark : INK.light;
-  const cols = Math.floor(w / CELL_W);
-  const rows = Math.floor(h / CELL_H);
+  const cols = Math.floor(w / cw);
+  const rows = Math.floor(h / ch);
   const px = key.getImageData(0, 0, w, h).data;
   out.setTransform(1, 0, 0, 1, 0, 0);
   out.clearRect(0, 0, w * dpr, h * dpr);
@@ -430,8 +496,8 @@ function write(
         g = 0,
         b = 0,
         a = 0;
-      for (let y = row * CELL_H; y < (row + 1) * CELL_H; y += 2) {
-        for (let x = col * CELL_W; x < (col + 1) * CELL_W; x += 2) {
+      for (let y = row * ch; y < (row + 1) * ch; y += 2) {
+        for (let x = col * cw; x < (col + 1) * cw; x += 2) {
           const k = (y * w + x) * 4;
           const al = px[k + 3];
           r += px[k] * al;
@@ -440,7 +506,7 @@ function write(
           a += al;
         }
       }
-      const cover = a / (255 * Math.ceil(CELL_W / 2) * Math.ceil(CELL_H / 2));
+      const cover = a / (255 * Math.ceil(cw / 2) * Math.ceil(ch / 2));
       if (cover < 0.12) continue;
       r /= a;
       g /= a;
@@ -478,8 +544,8 @@ function write(
       // where lightest, 900 where darkest, every weight between.
       const weight = Math.max(0, Math.min(8, Math.round(dark * 8)));
       byWeight[weight].push({
-        x: (col + 0.5) * CELL_W * dpr,
-        y: (row + 0.5) * CELL_H * dpr,
+        x: (col + 0.5) * cw * dpr,
+        y: (row + 0.5) * ch * dpr,
         glyph,
         colour,
       });
@@ -487,7 +553,7 @@ function write(
   }
   byWeight.forEach((cells, i) => {
     if (!cells.length) return;
-    out.font = `${(i + 1) * 100} ${FONT * dpr}px "Geist Mono Variable", ui-monospace, monospace`;
+    out.font = `${(i + 1) * 100} ${font * dpr}px "Geist Mono Variable", ui-monospace, monospace`;
     for (const c of cells) {
       out.fillStyle = c.colour;
       out.fillText(c.glyph, c.x, c.y);
@@ -499,10 +565,13 @@ function write(
 export function IconPrism({
   icon,
   active = true,
+  grain = 1,
   className,
 }: {
-  icon: IconName;
+  icon: IconName | ShapeName;
   active?: boolean;
+  // How large the cells and their digits are, 1 the manifesto's.
+  grain?: number;
   className?: string;
 }) {
   const canvas = React.useRef<HTMLCanvasElement>(null);
@@ -515,9 +584,11 @@ export function IconPrism({
     const key = off.getContext("2d", { willReadFrequently: true });
     if (!el || !ctx || !key) return;
     // The mono's weights, before the first frame that needs them.
-    void document.fonts.load(`100 ${FONT}px "Geist Mono Variable"`);
-    const paths = ICONS[icon].map((d) => new Path2D(d));
-    const walls = edges(ICONS[icon]);
+    void document.fonts.load(`100 ${FONT * grain}px "Geist Mono Variable"`);
+    const filled = icon in SHAPES;
+    const shape = filled ? solid(icon as ShapeName) : null;
+    const paths = shape ? [shape.all] : ICONS[icon as IconName].map((d) => new Path2D(d));
+    const walls = shape ? shape.walls : edges(ICONS[icon as IconName]);
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const dark = () => document.documentElement.classList.contains("dark");
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -558,12 +629,13 @@ export function IconPrism({
       window.addEventListener("pointermove", follow, { passive: true });
     const paint = (t: number) => {
       if (!w || !h) return;
-      eye.x += (aim.x - eye.x) * 0.06;
-      eye.y += (aim.y - eye.y) * 0.06;
+      // Eased as before, for a frame drawn every other one.
+      eye.x += (aim.x - eye.x) * 0.116;
+      eye.y += (aim.y - eye.y) * 0.116;
       const ay = Math.sin(t * 0.22) * 0.18 + eye.x * 0.75;
       const ax = -0.12 + Math.sin(t * 0.17) * 0.06 + eye.y * 0.5;
-      draw(key, paths, walls, w, h, 1, ay, ax, KEY);
-      write(ctx, key, w, h, dpr, t, dark());
+      draw(key, paths, walls, w, h, 1, ay, ax, KEY, filled);
+      write(ctx, key, w, h, dpr, t, dark(), grain);
     };
     size();
     const seen = new ResizeObserver(() => {
@@ -573,9 +645,15 @@ export function IconPrism({
     seen.observe(el);
     let frame = 0;
     const start = performance.now();
+    // At 30 frames a second, not the screen's 60 (Giovani, 2026-11-16: the
+    // subpages' performance): each frame reads the solid back and writes some
+    // thousands of digits, and its slow sway and flips need no more.
+    let drawn = -Infinity;
     const tick = (now: number) => {
-      paint(2 + (now - start) / 1000);
       frame = requestAnimationFrame(tick);
+      if (now - drawn < 1000 / 30 - 2) return;
+      drawn = now;
+      paint(2 + (now - start) / 1000);
     };
     if (still || !active) paint(2);
     else frame = requestAnimationFrame(tick);
@@ -584,7 +662,7 @@ export function IconPrism({
       seen.disconnect();
       window.removeEventListener("pointermove", follow);
     };
-  }, [icon, active]);
+  }, [icon, active, grain]);
 
   return (
     <canvas

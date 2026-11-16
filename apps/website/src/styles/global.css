@@ -42,41 +42,17 @@ html:not(.dark) main .bg-background\/75 {
   background-color: #ffffff;
 }
 
-
-/* Words over a moving background (the binary mark): a glow in the page's own
-   colour, white on the light page and black on the dark, laid in many thin
-   layers so it clears the digits right around each letter and fades out
-   softly beyond. */
-.page-glow,
-.hero-glow
-  :is(
-    [data-slot="hero-label"],
-    [data-slot="hero-heading"],
-    [data-slot="hero-description"],
-    [data-slot="hero-note"]
-  ) {
-  text-shadow:
-    0 0 1px var(--page-ground),
-    0 0 2px var(--page-ground),
-    0 0 3px var(--page-ground),
-    0 0 4px var(--page-ground),
-    0 0 6px var(--page-ground),
-    0 0 8px var(--page-ground),
-    0 0 10px var(--page-ground),
-    0 0 12px var(--page-ground),
-    0 0 14px var(--page-ground),
-    0 0 18px var(--page-ground),
-    0 0 22px var(--page-ground),
-    0 0 28px var(--page-ground),
-    0 0 36px var(--page-ground),
-    0 0 48px var(--page-ground);
-}
-
 /* Customer stories (src/components/customer-stories.tsx): the bar under the
    card fills as a story plays. A keyframe, as a transition could not restart. */
 @keyframes stories-fill {
   from { width: 0%; }
   to { width: 100%; }
+}
+/* The same down the side of the home's "Not the one who built it?" buttons
+   (src/components/also-tabs.tsx). */
+@keyframes also-fill {
+  from { height: 0%; }
+  to { height: 100%; }
 }
 
 /* ScrollReveal (src/components/scroll-reveal.tsx): waiting below the fold,

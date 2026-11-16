@@ -25,6 +25,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {/* The theme is applied before the first paint, by a file of its own. */}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="/theme.js" />
+        {/* The page keeps working when a browser translates it
+            (public/translate-guard.js). */}
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src="/translate-guard.js" />
         {/* Which part of the funnel this is, on the data layer before the
             container's own first message: the container's tags fire at
             initialization only where shpyrd_app is set, and Next's component

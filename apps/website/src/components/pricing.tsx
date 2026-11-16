@@ -1,4 +1,5 @@
 import { Briefcase, Building2, Check, Gauge, MessageCircle, Moon, Receipt, Rocket, Sprout, Zap } from "lucide-react";
+import { subpageHero } from "@/lib/page";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card } from "@shpyrd/ui/components/card";
 import { Hero } from "@shpyrd/ui/components/hero";
@@ -59,7 +60,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
 
   return (
     <PageLayoutContent width="xlarge" padding="normal" className="grid grid-cols-1 content-start gap-16 py-8">
-      <Hero variant="page" heading={hero.heading} description={hero.description} align="center" />
+      <Hero variant="page" className={subpageHero} heading={hero.heading} description={hero.description} align="center" />
 
       {/* The plans float as glass over the binary ocean of the home page, which
           runs from edge to edge behind them. */}

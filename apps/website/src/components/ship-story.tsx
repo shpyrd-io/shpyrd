@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Sparkles } from "lucide-react";
 import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { LogoMark } from "@shpyrd/ui/components/brand";
@@ -74,6 +74,38 @@ function Crm({ building, moved }: { building: boolean; moved: boolean }) {
     { name: "Proposal", cards: ["Initech", "Stark", "Wayne"] },
     { name: "Won", cards: ["Umbrella", "Wonka"] },
   ];
+  // Where the moving deal goes: under the last card of Proposal, measured
+  // (Giovani, 2026-11-11: worked out from its own width it landed 8px to
+  // the right, as the columns' cards are not all as wide as it).
+  const board = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const g = board.current;
+    if (!g) return;
+    // Its place in the board, ignoring any move under way.
+    const at = (e: HTMLElement) => {
+      let x = 0;
+      let y = 0;
+      for (let n: HTMLElement | null = e; n && n !== g; n = n.offsetParent as HTMLElement | null) {
+        x += n.offsetLeft;
+        y += n.offsetTop;
+      }
+      return { x, y };
+    };
+    const place = () => {
+      const from = g.querySelector<HTMLElement>("[data-card='Globex']");
+      const last = g.querySelector<HTMLElement>("[data-col='1'] > [data-card]:last-child");
+      if (!from || !last) return;
+      const a = at(from);
+      const b = at(last);
+      // The cards' gap (gap-1.5) under the last one.
+      setShift(`${b.x - a.x}px ${b.y + last.offsetHeight + 6 - a.y}px`);
+    };
+    place();
+    const seen = new ResizeObserver(place);
+    seen.observe(g);
+    return () => seen.disconnect();
+  }, []);
   let n = 0;
   return (
     <div className="flex h-full min-h-0 text-[11px] leading-tight">
@@ -88,11 +120,15 @@ function Crm({ building, moved }: { building: boolean; moved: boolean }) {
           </div>
         ))}
       </div>
-      <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 p-3">
+      <div ref={board} className="relative grid min-w-0 flex-1 grid-cols-3 gap-2 p-3">
         {columns.map((column, c) => (
-          <div key={column.name} {...show(900 + c * 400, "rounded-2xl bg-foreground/[0.03] p-2 dark:bg-foreground/[0.05]")}>
-            <div className="mb-2 font-medium text-muted-foreground">{column.name}</div>
-            <div className="grid gap-1.5">
+          <div key={column.name} {...show(900 + c * 400, "rounded-2xl bg-foreground/[0.03] px-1 py-2 dark:bg-foreground/[0.05]")}>
+            <div className="mb-2 px-1 font-medium text-muted-foreground">{column.name}</div>
+            {/* Every card as wide as its column, whatever its name; 4px
+                at the column's sides, so the longest names fit (they
+                spilled past an 8px one in Lead and Won, and the cards there
+                were wider than in Proposal). */}
+            <div data-col={c} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5">
               {column.cards.map((card) => {
                 n += 1;
                 // Globex is the deal that moves on, from Lead to Proposal.
@@ -105,15 +141,14 @@ function Crm({ building, moved }: { building: boolean; moved: boolean }) {
                     moving && moved && "shadow-[0_6px_14px_rgb(0_0_0/0.12)]",
                   ),
                 );
-                // One column right (its width, the gap and the columns'
-                // padding), two cards down: under the three already in Proposal.
+                // To under the three already in Proposal.
                 const style =
                   moving && moved
-                    ? { transitionDelay: "0ms", translate: "calc(100% + 1.5rem) calc(200% + 0.75rem)" }
+                    ? { transitionDelay: "0ms", translate: shift ?? "calc(100% + 1.5rem) calc(200% + 0.75rem)" }
                     : shown.style;
                 return (
-                  <div key={card} className={shown.className} style={style}>
-                    <div className="font-medium text-foreground">{card}</div>
+                  <div key={card} data-card={card} className={cn(shown.className, "min-w-0")} style={style}>
+                    <div className="font-medium whitespace-nowrap text-foreground">{card}</div>
                     <div className="mt-1 h-1 w-2/3 rounded-full bg-foreground/10" />
                   </div>
                 );

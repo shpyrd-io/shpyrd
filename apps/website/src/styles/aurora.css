@@ -164,3 +164,22 @@
   .aurora .rays::before,
   .aurora .rays::after { animation: none; }
 }
+
+/* Still while the block is out of view (aurora-pause.tsx). */
+.aurora[data-paused] .light,
+.aurora[data-paused] .rays::before,
+.aurora[data-paused] .rays::after {
+  animation-play-state: paused;
+}
+
+/* Still (a test of 2026-11-16): the same glows and rays, in the middle of
+   their movement, drawn once. */
+.aurora.aurora-still .light,
+.aurora.aurora-still .rays::before,
+.aurora.aurora-still .rays::after {
+  animation: none;
+}
+.aurora.aurora-still .rays::before,
+.aurora.aurora-still .rays::after {
+  --ray-a: 1.5deg;
+}

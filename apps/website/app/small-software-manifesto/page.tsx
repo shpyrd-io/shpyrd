@@ -12,6 +12,8 @@ export const metadata = {
     "Welcome to the Small Software era: apps from every team, built with AI, running behind your company's sign-in on shpyrd.",
 };
 
+// It fits the window with no scroll from about 850 px high (Giovani,
+// 2026-11-11): the slide drawn smaller, no less than 75%.
 export default function SmallSoftwareManifesto() {
-  return <Tour />;
+  return <Tour fit />;
 }

@@ -248,12 +248,12 @@ export const editorialDesigns: Record<string, { icon: Icon; steps: Icon[]; capab
       "refresh"
     ],
     "capabilities": [
-      "code",
+      "bot",
       "package",
+      "code",
       "history",
-      "terminal",
       "globe",
-      "bot"
+      "terminal"
     ]
   }
 };
