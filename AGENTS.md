@@ -27,5 +27,4 @@ Documentation:
 - This repository is public: never mention private repositories, internal
   services, infrastructure, customers or future plans in it, and never
   describe a security weakness that is not yet fixed.
-- CI validates `docs/` with the shpyrd-harness validator.
 <!-- shpyrd-harness:end -->
