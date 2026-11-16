@@ -1,0 +1,11 @@
+harness_version: 0.1.0
+prefix: shpyrd
+visibility: public
+verify:
+  static:
+    - "go vet ./..."
+    - "npm run lint --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace"
+    - "npm run typecheck --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace"
+  test:
+    - "go test ./... -count=1"
+    - "npm run test --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace"

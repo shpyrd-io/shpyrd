@@ -58,3 +58,4 @@ contrib/oci/terraform/tfplan_autoscaler
 
 # Generated shared object gateway credentials
 *-objects.env
+.shpyrd/runs/

@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "shpyrd": {
+      "source": {
+        "source": "github",
+        "repo": "shpyrd-io/shpyrd-harness",
+        "ref": "v0.1.0"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "shpyrd-harness@shpyrd": true
+  }
+}

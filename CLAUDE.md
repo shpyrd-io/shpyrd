@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # shpyrd
 
 Interface work is anything under `design/`, `content/` or `apps/`. Read
