@@ -113,7 +113,7 @@ func TestCatalogListShowAndInstallThroughTheAPI(t *testing.T) {
 		case r.URL.Path == "/api/catalog/entries/fluxyr/install" && r.Method == http.MethodPost:
 			_ = json.NewDecoder(r.Body).Decode(&installed)
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(api.CatalogInstallResponse{Project: api.AppSummary{Slug: "agent", URL: "https://agent.example.test"}, Notes: []string{"Its disk is 10Gi, the provider minimum."}})
+			_ = json.NewEncoder(w).Encode(api.CatalogInstallResponse{Project: api.AppSummary{Slug: "agent", URL: "https://agent.example.test"}, Notes: []string{"Its disk is 10Gi, the minimum size."}})
 		default:
 			http.NotFound(w, r)
 		}

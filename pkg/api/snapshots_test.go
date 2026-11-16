@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -59,8 +61,27 @@ func TestVolumeMinimumAndSnapshots(t *testing.T) {
 	}
 	// Shared volumes without the shared class installed: refused up front.
 	vars[install.VarStorageClassShared] = "shpyrd-fss"
-	if rec := do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"media","size":"1Gi","shared":true}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SHPYRD_FSS_MOUNT_TARGET") {
+	// The person hears one sentence that names no provider; what turns
+	// shared folders on goes to the operator, in the log (shpyrd#354).
+	var logged bytes.Buffer
+	quiet := s.log
+	s.log = slog.New(slog.NewTextHandler(&logged, nil))
+	rec = do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"media","size":"1Gi","shared":true}`, true)
+	s.log = quiet
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+	if rec.Code != http.StatusBadRequest || refusal.Error != sharedFoldersUnavailable {
 		t.Errorf("shared without class: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, leak := range []string{"Operators", "SHPYRD_", "contrib/oci", "File Storage", "shpyrd-fss", "storage class"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("shared without class: the answer says %q: %s", leak, rec.Body.String())
+		}
+	}
+	if !strings.Contains(logged.String(), "SHPYRD_FSS_MOUNT_TARGET") || !strings.Contains(logged.String(), "shpyrd-fss") {
+		t.Errorf("shared without class: the log does not tell the operator what to set up: %s", logged.String())
 	}
 
 	// A snapshot needs a disk.
