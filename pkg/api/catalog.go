@@ -273,6 +273,15 @@ func (s *Server) catalogInstall(c *gin.Context) {
 		}
 		overlay = &shpyrdv1.BlobSource{URL: info.URL, SHA256: info.SHA256}
 	}
+	// The entry's own image, read now for the same reason. One that
+	// cannot be read is no reason not to install: the card keeps the
+	// entry's symbol, and the answer says so.
+	var notes []string
+	icon, iconTyp, err := s.appCatalog.Icon(ctx, e)
+	if err != nil {
+		notes = append(notes, fmt.Sprintf("The entry's image was not copied to the project (%v); its card shows the symbol instead.", err))
+		icon = nil
+	}
 	git := e.Catalog.Source.Git
 	linkedBy, ok := s.githubAccess(c, git)
 	if !ok {
@@ -310,7 +319,12 @@ func (s *Server) catalogInstall(c *gin.Context) {
 	fail := func(status int, step string, err error) {
 		abort(c, status, fmt.Errorf("the project %s was created, but %s: %v. Finish it by hand or delete it, then install again", slug, step, err))
 	}
-	var notes []string
+	if len(icon) > 0 {
+		if err := s.store.SetProjectIcon(ctx, app.Spec.ID, icon, iconTyp); err != nil {
+			notes = append(notes, fmt.Sprintf("The entry's image was not copied to the project (%v); its card shows the symbol instead.", err))
+			icon = nil
+		}
+	}
 	// 2. Its volumes and resources.
 	for _, v := range e.Catalog.Volumes {
 		view, status, err := s.makeVolume(c, app.Namespace, slug, CreateVolumeRequest{Name: v.Name, Size: v.Size})
@@ -361,6 +375,9 @@ func (s *Server) catalogInstall(c *gin.Context) {
 	app, err = s.updateAppIn(ctx, app, func(a *shpyrdv1.App) error {
 		a.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: git, Revision: revision}, SubPath: e.Catalog.Source.SubPath, Overlay: overlay}
 		a.Spec.Bindings = bindings
+		if len(icon) > 0 {
+			project.SetIconFile(a, iconVersion(icon), iconKinds[iconTyp])
+		}
 		markGitHubLinkedBy(a, linkedBy)
 		if a.Annotations == nil {
 			a.Annotations = map[string]string{}

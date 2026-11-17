@@ -82,6 +82,8 @@ processes:
   web: {}
 `
 
+const fluxyrIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>`
+
 // widgetExt owns a resource kind with no rules of its own, so an install
 // can make one without a sizes catalog.
 type widgetExt struct{}
@@ -111,7 +113,7 @@ func catalogServer(t *testing.T) (*Server, client.Client) {
 			}
 		}
 	}
-	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim"})
+	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim", "icon.svg": fluxyrIcon})
 	write("crm", crmEntry, map[string]string{})
 	if _, err := catalog.Publish(dir, out, time.Now()); err != nil {
 		t.Fatal(err)
@@ -257,6 +259,17 @@ func TestAnInstallMakesTheProjectTheEntryDescribes(t *testing.T) {
 	}
 	if app.Annotations[shpyrdv1.AnnotationReleaseNote] != "Install Fluxyr from the catalog" || app.Annotations[shpyrdv1.AnnotationDeployedClient] == "" {
 		t.Fatalf("the first deploy is noted and attributed: %v", app.Annotations)
+	}
+	// The image the entry ships is the project's own icon, so the card
+	// looks the same on the launcher as in the catalog.
+	if v := app.Annotations[shpyrdv1.AnnotationIconFile]; !strings.HasSuffix(v, ".svg") {
+		t.Fatalf("icon file %q", v)
+	}
+	if data, typ, err := s.store.ProjectIcon(ctx, app.Spec.ID); err != nil || string(data) != fluxyrIcon || typ != "image/svg+xml" {
+		t.Fatalf("stored icon: %v %q %s", err, typ, data)
+	}
+	if resp.Project.IconURL == "" || !strings.Contains(resp.Project.IconURL, "/api/projects/fluxyr/icon?v=") {
+		t.Fatalf("the answer points at the image: %q", resp.Project.IconURL)
 	}
 	// The volume.
 	var vol shpyrdv1.Volume
