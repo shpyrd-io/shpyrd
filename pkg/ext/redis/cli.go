@@ -35,7 +35,17 @@ it to the app:
   shpyrd redis create cache --project shop                  # cache: LRU eviction, data lost on restart
   shpyrd redis create queue --project shop --persistent     # queue: append-only file on a volume
   shpyrd attach cache --project shop                        # REDIS_URL, REDIS_HOST, ... in the app
-  shpyrd redis cli cache --project shop`,
+  shpyrd redis cli cache --project shop
+
+Most apps want a cache, the default: rendered pages, query results, rate
+limits, sessions a person can lose. It keeps everything in memory, sleeps
+with the app and comes back empty, which a cache expects.
+
+Make a store persistent only when losing its data on a restart breaks the
+app: a job queue (Sidekiq, BullMQ, Celery, RQ) whose pending jobs must
+survive, or sessions that must outlive a restart. Persistent storage costs
+more: the store gets a disk of its own and stays up while the app sleeps.
+Persistence cannot change after creation; when in doubt, start with a cache.`,
 	}
 	cmd.AddCommand(metrics.ResourceCommand(g, "redis"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newCliCmd(g), newDeleteCmd(g))
 	return cmd
@@ -112,7 +122,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	cmd.Flags().StringVar(&engine, "engine", "valkey", "valkey or redis")
 	cmd.Flags().StringVar(&version, "version", "", "engine major version (default: valkey 8, redis 7)")
 	cmd.Flags().StringVar(&size, "size", "", "a Redis size (shpyrd sizes list; default: the smallest, shared-s)")
-	cmd.Flags().BoolVar(&persistent, "persistent", false, "keep data on a volume (append-only file); default is a cache that loses data on restart")
+	cmd.Flags().BoolVar(&persistent, "persistent", false, "keep data on a disk (append-only file), for a queue whose jobs must survive a restart; costs more than a cache: a disk of its own, and the store never sleeps. Default: a cache in memory that loses its data on restart")
 	cmd.Flags().StringVar(&storage, "storage", "1Gi", "volume size when --persistent")
 	return cmd
 }
