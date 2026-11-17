@@ -10,5 +10,4 @@ brain convention (version in `../.shpyrd/harness.yaml`).
 
 Every document starts with frontmatter (`id`, `type`, `title`, `status`,
 `date`, `related`, `governs`) and is referenced by its ID. Documentation
-changes in the same pull request as the code it describes. CI checks the
-frontmatter, IDs and references.
+changes in the same pull request as the code it describes.
