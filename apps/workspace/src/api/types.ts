@@ -873,6 +873,7 @@ export type CatalogEntry = {
   icon?: string;
   iconColor?: string;
   iconUrl?: string;
+  iconType?: string;
   publisher?: string;
   license?: string;
   homepage?: string;

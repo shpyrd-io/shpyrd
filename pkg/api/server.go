@@ -940,6 +940,7 @@ func (s *Server) routes() error {
 	// may make a project.
 	api.GET("/catalog", s.require(authz.ClusterCreate), s.catalogIndex)
 	api.GET("/catalog/entries/:name", s.require(authz.ClusterCreate), s.catalogEntry)
+	api.GET("/catalog/entries/:name/icon", s.require(authz.ClusterCreate), s.catalogEntryIcon)
 	api.POST("/catalog/entries/:name/install", s.require(authz.ClusterCreate), s.catalogInstall)
 	api.GET("/tokens", s.listTokens) // RFC-0031: the caller's tokens
 	api.POST("/tokens", s.createToken)

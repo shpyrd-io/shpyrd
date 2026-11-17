@@ -66,6 +66,13 @@ func parseIcon(dataURL string) ([]byte, string, error) {
 	return raw, typ, nil
 }
 
+// iconVersion names an image by its content, so the address of the image
+// changes with it and a cached one is never stale.
+func iconVersion(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:6])
+}
+
 // iconURL is where the image a project sent is read, by its version, so
 // it may be cached; "" when it sent none.
 func iconURL(a *shpyrdv1.App) (string, string) {
@@ -166,10 +173,8 @@ func (s *Server) putProjectIcon(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	sum := sha256.Sum256(raw)
-	version := hex.EncodeToString(sum[:6])
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
-		project.SetIconFile(a, version, iconKinds[typ])
+		project.SetIconFile(a, iconVersion(raw), iconKinds[typ])
 		return nil
 	})
 	if err != nil {

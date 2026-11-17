@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,12 @@ const (
 	maxIndexSize   = 4 << 20
 	maxReadmeSize  = 256 << 10
 	maxOverlaySize = 8 << 20
+	maxIconSize    = 128 << 10
 )
+
+// iconTypes are the images an entry may ship for its card, by their
+// file extension, and what they are served as.
+var iconTypes = map[string]string{".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp"}
 
 // Fetcher reads a published catalog and keeps it: the index is read once
 // an hour (TTL), with the ETag the source gave, and served from memory in
@@ -208,6 +214,32 @@ func (f *Fetcher) Readme(ctx context.Context, e *IndexEntry) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// IconType is the media type of an entry's image, by its file name; ""
+// when the entry has none or the file is not an image the card can show.
+func IconType(rel string) string {
+	if rel == "" {
+		return ""
+	}
+	return iconTypes[strings.ToLower(path.Ext(rel))]
+}
+
+// Icon is the image the entry ships for its card, and its media type;
+// nil when it ships none. An install gives it to the project it makes.
+func (f *Fetcher) Icon(ctx context.Context, e *IndexEntry) ([]byte, string, error) {
+	if e.Icon == "" {
+		return nil, "", nil
+	}
+	typ := IconType(e.Icon)
+	if typ == "" {
+		return nil, "", fmt.Errorf("entry %s: %s is not an SVG, a PNG or a WebP", e.Name, e.Icon)
+	}
+	b, err := f.file(ctx, e.Icon, maxIconSize)
+	if err != nil {
+		return nil, "", fmt.Errorf("entry %s: its image could not be read: %w", e.Name, err)
+	}
+	return b, typ, nil
 }
 
 // Overlay is the entry's overlay archive, checked against its digest.

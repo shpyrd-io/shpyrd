@@ -46,7 +46,7 @@ export function categoryName(c: string): string {
 // How an entry is drawn: its symbol in its colour, or a window in the
 // ink its name keeps.
 function lookOf(e: CatalogEntry) {
-  const { icon, picture } = tileOf({ icon: e.icon, colour: e.iconColor, file: e.iconUrl ? { src: e.iconUrl, type: "" } : undefined });
+  const { icon, picture } = tileOf({ icon: e.icon, colour: e.iconColor, file: e.iconUrl ? { src: e.iconUrl, type: e.iconType ?? "" } : undefined });
   return { icon: icon ?? (picture ? undefined : <LayoutGrid />), picture, colour: e.iconColor, tone: toneOf(e.name) };
 }
 

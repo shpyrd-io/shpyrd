@@ -82,6 +82,8 @@ processes:
   web: {}
 `
 
+const fluxyrIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>`
+
 // widgetExt owns a resource kind with no rules of its own, so an install
 // can make one without a sizes catalog.
 type widgetExt struct{}
@@ -111,7 +113,7 @@ func catalogServer(t *testing.T) (*Server, client.Client) {
 			}
 		}
 	}
-	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim"})
+	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim", "icon.svg": fluxyrIcon})
 	write("crm", crmEntry, map[string]string{})
 	if _, err := catalog.Publish(dir, out, time.Now()); err != nil {
 		t.Fatal(err)
@@ -176,6 +178,25 @@ func TestTheCatalogIsListedWithItsEntriesAndCategories(t *testing.T) {
 	}
 	if len(f.Inputs) != 3 || f.Inputs[1].Secret != true || f.Volumes[0].Size != "5Gi" {
 		t.Fatalf("entry %+v", f)
+	}
+	// The image the entry ships, served from this origin (the pages'
+	// policy allows no other) and what it is, so the card draws an SVG as
+	// a symbol in the entry's colour.
+	if !strings.HasPrefix(f.IconURL, "/api/catalog/entries/fluxyr/icon?v=") || f.IconType != "image/svg+xml" {
+		t.Fatalf("icon %q %q", f.IconURL, f.IconType)
+	}
+	if view.Entries[0].IconURL != "" || view.Entries[0].IconType != "" {
+		t.Fatalf("an entry without an image points at none: %+v", view.Entries[0])
+	}
+	rec = do(t, s, "GET", f.IconURL, "", true)
+	if rec.Code != http.StatusOK || rec.Body.String() != fluxyrIcon || rec.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("the image: %d %q %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "private, max-age=86400" || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("headers %v", rec.Header())
+	}
+	if rec = do(t, s, "GET", "/api/catalog/entries/"+view.Entries[0].Name+"/icon", "", true); rec.Code != http.StatusNotFound {
+		t.Fatalf("no image, no answer: %d", rec.Code)
 	}
 	rec = do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"readme":"# Fluxyr\n\nAn agent."`) {
@@ -257,6 +278,17 @@ func TestAnInstallMakesTheProjectTheEntryDescribes(t *testing.T) {
 	}
 	if app.Annotations[shpyrdv1.AnnotationReleaseNote] != "Install Fluxyr from the catalog" || app.Annotations[shpyrdv1.AnnotationDeployedClient] == "" {
 		t.Fatalf("the first deploy is noted and attributed: %v", app.Annotations)
+	}
+	// The image the entry ships is the project's own icon, so the card
+	// looks the same on the launcher as in the catalog.
+	if v := app.Annotations[shpyrdv1.AnnotationIconFile]; !strings.HasSuffix(v, ".svg") {
+		t.Fatalf("icon file %q", v)
+	}
+	if data, typ, err := s.store.ProjectIcon(ctx, app.Spec.ID); err != nil || string(data) != fluxyrIcon || typ != "image/svg+xml" {
+		t.Fatalf("stored icon: %v %q %s", err, typ, data)
+	}
+	if resp.Project.IconURL == "" || !strings.Contains(resp.Project.IconURL, "/api/projects/fluxyr/icon?v=") {
+		t.Fatalf("the answer points at the image: %q", resp.Project.IconURL)
 	}
 	// The volume.
 	var vol shpyrdv1.Volume
