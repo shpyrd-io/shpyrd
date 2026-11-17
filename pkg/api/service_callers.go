@@ -56,11 +56,31 @@ type podIndex struct {
 	namespaces map[string]serviceCaller // project namespace → its project
 }
 
-// podEntry is what the index keeps of a pod: where it is, and whether it
-// is the platform's server.
+// podEntry is what the index keeps of a pod: which pod holds the address
+// (namespace/name), where it is, and whether it is the platform's server.
 type podEntry struct {
+	key       string
 	namespace string
 	server    bool
+}
+
+// holdsAddresses says whether a pod still owns the addresses in its status.
+// A pod that finished (Succeeded or Failed) keeps its last address in its
+// status after the network has given it back, and the next pod scheduled on
+// that node may get it: a finished build or job would otherwise claim the
+// address of a live pod, the platform's server included, and calls from it
+// would be judged as calls from the finished pod's project. A pod on the
+// host's network has the node's address, shared by every such pod there:
+// it says nothing about who is calling.
+func holdsAddresses(p *corev1.Pod) bool {
+	if p.Spec.HostNetwork {
+		return false
+	}
+	switch p.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return false
+	}
+	return true
 }
 
 func newPodIndex(kube kubernetes.Interface, systemNS string) *podIndex {
@@ -94,6 +114,8 @@ func (x *podIndex) Run(ctx context.Context) {
 			return obj, nil
 		}
 		slim := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: map[string]string{"app.kubernetes.io/name": p.Labels["app.kubernetes.io/name"]}}}
+		slim.Spec.HostNetwork = p.Spec.HostNetwork
+		slim.Status.Phase = p.Status.Phase
 		slim.Status.PodIPs = p.Status.PodIPs
 		if len(slim.Status.PodIPs) == 0 && p.Status.PodIP != "" {
 			slim.Status.PodIPs = []corev1.PodIP{{IP: p.Status.PodIP}}
@@ -125,11 +147,12 @@ func (x *podIndex) putPod(obj any) {
 		return
 	}
 	key := p.Namespace + "/" + p.Name
-	entry := podEntry{namespace: p.Namespace, server: p.Namespace == x.systemNS && p.Labels["app.kubernetes.io/name"] == "shpyrd-server"}
+	entry := podEntry{key: key, namespace: p.Namespace, server: p.Namespace == x.systemNS && p.Labels["app.kubernetes.io/name"] == "shpyrd-server"}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	for _, ip := range x.addresses[key] {
-		delete(x.pods, ip)
+	x.forget(key)
+	if !holdsAddresses(p) {
+		return
 	}
 	var ips []string
 	for _, ip := range p.Status.PodIPs {
@@ -154,11 +177,16 @@ func (x *podIndex) dropPod(obj any) {
 	if !ok {
 		return
 	}
-	key := p.Namespace + "/" + p.Name
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	x.forget(p.Namespace + "/" + p.Name)
+}
+
+// forget drops the addresses the pod key held, leaving any of them another
+// pod has taken since. Callers hold x.mu.
+func (x *podIndex) forget(key string) {
 	for _, ip := range x.addresses[key] {
-		if x.pods[ip].namespace == p.Namespace {
+		if x.pods[ip].key == key {
 			delete(x.pods, ip)
 		}
 	}
