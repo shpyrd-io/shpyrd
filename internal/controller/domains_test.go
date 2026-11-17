@@ -3,10 +3,12 @@ package controller
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -178,5 +180,49 @@ func TestRecordFor(t *testing.T) {
 		if typ != tc.typ || value != tc.value {
 			t.Errorf("RecordFor(%s, %s) = %s %s, want %s %s", tc.host, tc.address, typ, value, tc.typ, tc.value)
 		}
+	}
+}
+
+func TestCertificateLongNameLabels(t *testing.T) {
+	app := domainsApp()
+	app.Name = "cmnv825y9hporqnio2pj6luxc"
+	r, c := newTestReconciler(t, app)
+	host := "financial-analyst.platform.internal"
+	name := certificateSecretName(app, host)
+	if len(name) <= 63 {
+		t.Fatal("regression fixture must exceed label limit")
+	}
+	for i := 0; i < 2; i++ {
+		if err := r.ensureCertificate(t.Context(), app, name, host, "issuer"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(CertificateGVK)
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: app.Namespace, Name: name}, cert); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range cert.GetLabels() {
+		if errs := validation.IsValidLabelValue(value); len(errs) != 0 {
+			t.Fatalf("%s: %v", key, errs)
+		}
+	}
+	secret, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	if secret != name {
+		t.Fatalf("secret changed: %s", secret)
+	}
+	for _, n := range []int{62, 63, 64, 253} {
+		value := strings.Repeat("a", n)
+		label := certificateHostLabel(value)
+		if errs := validation.IsValidLabelValue(label); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n <= 63 && label != value {
+			t.Fatal("short label changed")
+		}
+	}
+	prefix := strings.Repeat("a", 64)
+	if certificateHostLabel(prefix+"b") == certificateHostLabel(prefix+"c") {
+		t.Fatal("distinct suffixes collided")
 	}
 }
