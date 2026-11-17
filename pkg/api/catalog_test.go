@@ -179,10 +179,24 @@ func TestTheCatalogIsListedWithItsEntriesAndCategories(t *testing.T) {
 	if len(f.Inputs) != 3 || f.Inputs[1].Secret != true || f.Volumes[0].Size != "5Gi" {
 		t.Fatalf("entry %+v", f)
 	}
-	// The image the entry ships, where it is and what it is, so the card
-	// draws an SVG as a symbol in the entry's colour.
-	if !strings.HasSuffix(f.IconURL, "/entries/fluxyr/icon.svg") || f.IconType != "image/svg+xml" {
+	// The image the entry ships, served from this origin (the pages'
+	// policy allows no other) and what it is, so the card draws an SVG as
+	// a symbol in the entry's colour.
+	if !strings.HasPrefix(f.IconURL, "/api/catalog/entries/fluxyr/icon?v=") || f.IconType != "image/svg+xml" {
 		t.Fatalf("icon %q %q", f.IconURL, f.IconType)
+	}
+	if view.Entries[0].IconURL != "" || view.Entries[0].IconType != "" {
+		t.Fatalf("an entry without an image points at none: %+v", view.Entries[0])
+	}
+	rec = do(t, s, "GET", f.IconURL, "", true)
+	if rec.Code != http.StatusOK || rec.Body.String() != fluxyrIcon || rec.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("the image: %d %q %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "private, max-age=86400" || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("headers %v", rec.Header())
+	}
+	if rec = do(t, s, "GET", "/api/catalog/entries/"+view.Entries[0].Name+"/icon", "", true); rec.Code != http.StatusNotFound {
+		t.Fatalf("no image, no answer: %d", rec.Code)
 	}
 	rec = do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"readme":"# Fluxyr\n\nAn agent."`) {

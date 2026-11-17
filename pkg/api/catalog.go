@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -49,9 +50,10 @@ type CatalogEntryView struct {
 	Tags        []string `json:"tags,omitempty"`
 	Icon        string   `json:"icon,omitempty"`
 	IconColor   string   `json:"iconColor,omitempty"`
-	// IconURL is the image the entry ships for its card, at the catalog,
-	// and IconType what it is: an SVG is drawn as a symbol in the entry's
-	// colour, as the project's card will draw it.
+	// IconURL is the image the entry ships for its card, served from this
+	// server (the pages draw images from this origin only), and IconType
+	// what it is: an SVG is drawn as a symbol in the entry's colour, as
+	// the project's card will draw it.
 	IconURL   string             `json:"iconUrl,omitempty"`
 	IconType  string             `json:"iconType,omitempty"`
 	Publisher string             `json:"publisher,omitempty"`
@@ -106,10 +108,8 @@ func (s *Server) catalogEntryView(e *catalog.IndexEntry) CatalogEntryView {
 	if v.Resources == nil {
 		v.Resources = []catalog.Resource{}
 	}
-	if e.Icon != "" {
-		if u, err := s.appCatalog.Resolve(e.Icon); err == nil {
-			v.IconURL, v.IconType = u, catalog.IconType(e.Icon)
-		}
+	if typ := catalog.IconType(e.Icon); typ != "" {
+		v.IconURL, v.IconType = catalogIconURL(e), typ
 	}
 	v.Processes = []string{}
 	for name := range e.Processes {
@@ -175,6 +175,45 @@ func (s *Server) catalogEntry(c *gin.Context) {
 	}
 	view.Readme = readme
 	c.JSON(http.StatusOK, view)
+}
+
+// catalogIconURL is where the entry's image is served from, versioned by
+// the entry's digest, which covers the image.
+func catalogIconURL(e *catalog.IndexEntry) string {
+	v := strings.TrimPrefix(e.Digest, "sha256:")
+	if len(v) > 12 {
+		v = v[:12]
+	}
+	return "/api/catalog/entries/" + url.PathEscape(e.Name) + "/icon?v=" + v
+}
+
+// catalogEntryIcon is GET /api/catalog/entries/:name/icon: the image the
+// entry ships, read from the catalog and answered from here, since the
+// pages' policy lets them draw images from this origin only.
+func (s *Server) catalogEntryIcon(c *gin.Context) {
+	ix, ok := s.catalogIndexOf(c)
+	if !ok {
+		return
+	}
+	e := ix.Find(c.Param("name"))
+	if e == nil {
+		abort(c, http.StatusNotFound, fmt.Errorf("the catalog has no entry %q", c.Param("name")))
+		return
+	}
+	raw, typ, err := s.appCatalog.Icon(c.Request.Context(), e)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	if len(raw) == 0 {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.Header("X-Content-Type-Options", "nosniff")
+	// An SVG opened as a document must not run scripts on this origin.
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	c.Data(http.StatusOK, typ, raw)
 }
 
 // catalogInstall makes a project from an entry.
