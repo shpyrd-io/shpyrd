@@ -1,0 +1,15 @@
+---
+title: "Deploy AI agents from templates"
+description: "Hermes Agent, OpenClaw and Fluxyr install as projects of your own from the launcher or the CLI, set up on their first visit, and follow their repositories from then on."
+date: "2026-11-13"
+type: feature
+draft: false
+---
+
+AI agents are now a few clicks away. The **+** on the launcher is a menu: an empty project, a project from GitHub, or one **from templates**. A template is an application ready to run on shpyrd: pick one, give it a name, and it becomes a project of yours, built from its repository and following it from then on, so a new commit on its branch is released like any push of your own. Pin a tag instead to stay on a version.
+
+The first templates are three agents, and none asks for a key at install. **Hermes Agent**, Nous Research's self-improving agent with its web dashboard. **OpenClaw**, the open-source assistant that answers on WhatsApp, Telegram, Discord and more, with its Control UI. **Fluxyr**, a Python framework for agents that build and repair their own skills, with its own web UI. The first visit to each shows a short setup: where the model comes from (OpenRouter, Anthropic, or any OpenAI-compatible server), the key, and the model chosen from what the provider offers for that key. Then the address is the agent's own interface, with the platform's sign-in as the only login. Messaging channels are connected afterwards, from the agent's interface or a shell on the project. Each keeps its state on a disk of the project.
+
+From the terminal, the same: `shpyrd catalog list`, `shpyrd catalog show <entry>`, `shpyrd catalog install <entry>`. See [the catalog](/docs/deploying#from-the-catalog) and [the launcher](/docs/dashboard#the-catalog).
+
+Templates live in a public repository, [shpyrd-io/catalog](https://github.com/shpyrd-io/catalog): a folder with the project's own `shpyrd.yaml`, a `catalog` block saying what it is and what it asks, and any files to lay over the upstream code. A pull request there is how an application joins the list; `shpyrd catalog validate` says what is missing. Servers read the published index on their own, so a new template needs no update of the platform.
