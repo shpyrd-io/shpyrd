@@ -179,6 +179,11 @@ func TestTheCatalogIsListedWithItsEntriesAndCategories(t *testing.T) {
 	if len(f.Inputs) != 3 || f.Inputs[1].Secret != true || f.Volumes[0].Size != "5Gi" {
 		t.Fatalf("entry %+v", f)
 	}
+	// The image the entry ships, where it is and what it is, so the card
+	// draws an SVG as a symbol in the entry's colour.
+	if !strings.HasSuffix(f.IconURL, "/entries/fluxyr/icon.svg") || f.IconType != "image/svg+xml" {
+		t.Fatalf("icon %q %q", f.IconURL, f.IconType)
+	}
 	rec = do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"readme":"# Fluxyr\n\nAn agent."`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())

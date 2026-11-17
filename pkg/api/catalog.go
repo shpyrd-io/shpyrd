@@ -49,8 +49,11 @@ type CatalogEntryView struct {
 	Tags        []string `json:"tags,omitempty"`
 	Icon        string   `json:"icon,omitempty"`
 	IconColor   string   `json:"iconColor,omitempty"`
-	// IconURL is the image the entry ships for its card, at the catalog.
+	// IconURL is the image the entry ships for its card, at the catalog,
+	// and IconType what it is: an SVG is drawn as a symbol in the entry's
+	// colour, as the project's card will draw it.
 	IconURL   string             `json:"iconUrl,omitempty"`
+	IconType  string             `json:"iconType,omitempty"`
 	Publisher string             `json:"publisher,omitempty"`
 	License   string             `json:"license,omitempty"`
 	Homepage  string             `json:"homepage,omitempty"`
@@ -105,7 +108,7 @@ func (s *Server) catalogEntryView(e *catalog.IndexEntry) CatalogEntryView {
 	}
 	if e.Icon != "" {
 		if u, err := s.appCatalog.Resolve(e.Icon); err == nil {
-			v.IconURL = u
+			v.IconURL, v.IconType = u, catalog.IconType(e.Icon)
 		}
 	}
 	v.Processes = []string{}

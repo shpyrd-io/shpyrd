@@ -216,13 +216,22 @@ func (f *Fetcher) Readme(ctx context.Context, e *IndexEntry) (string, error) {
 	return string(b), nil
 }
 
+// IconType is the media type of an entry's image, by its file name; ""
+// when the entry has none or the file is not an image the card can show.
+func IconType(rel string) string {
+	if rel == "" {
+		return ""
+	}
+	return iconTypes[strings.ToLower(path.Ext(rel))]
+}
+
 // Icon is the image the entry ships for its card, and its media type;
 // nil when it ships none. An install gives it to the project it makes.
 func (f *Fetcher) Icon(ctx context.Context, e *IndexEntry) ([]byte, string, error) {
 	if e.Icon == "" {
 		return nil, "", nil
 	}
-	typ := iconTypes[strings.ToLower(path.Ext(e.Icon))]
+	typ := IconType(e.Icon)
 	if typ == "" {
 		return nil, "", fmt.Errorf("entry %s: %s is not an SVG, a PNG or a WebP", e.Name, e.Icon)
 	}
