@@ -1,0 +1,15 @@
+---
+title: "Projects from the catalog stay on a version, and update when you say"
+description: "A catalog install is pinned to the commit the catalog published; the project says which version it runs and offers an update you preview and apply."
+date: "2026-11-18"
+type: feature
+draft: false
+---
+
+A project made from the catalog is now pinned to a **version** of its entry: the entry's folder together with the commit of the code, resolved when the catalog was published. Nothing reads the upstream branch, so a new commit upstream changes nothing by itself.
+
+When the catalog publishes another version, the project says so. On its Summary, the **Catalog** card shows the version it runs and, when there is one, the update on offer: what applying it does, a field for each new input, and an **Update** button. From the terminal, `shpyrd catalog status <project>` shows the same and `shpyrd catalog update <project>` previews, asks and applies. An update only adds: it keeps every config var, replica count and size you set, never overwrites a value, and removes nothing. A new generated input is generated, a new one with a default takes it, and a new required one must be given.
+
+Each release of a project records the version it runs, so a rollback returns to the older version and the update is offered again. A rollback restores the build, the config vars, the sizes and the attachments of the release, but not the entry's process definitions, the build settings or the plain variables the update set, and it does not remove what the update created. Applying the update again takes back the values the project had for the config vars the rollback removed, so a generated key is not generated twice.
+
+Servers that run the controller need the App definition of the same version: apply the manifests that ship with it. Automatic updates are not available. See [Updating a project from the catalog](/docs/deploying#updating-a-project-from-the-catalog).
