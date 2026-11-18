@@ -100,6 +100,12 @@ func (widgetExt) Types() []ext.ResourceType {
 
 // A published catalog on a test server, and a server reading it.
 func catalogServer(t *testing.T) (*Server, client.Client) {
+	return catalogServerWith(t, nil)
+}
+
+// catalogServerWith publishes the catalog resolving each entry's revision
+// with list, as the catalog's CI does; with nil, entries carry no commit.
+func catalogServerWith(t *testing.T, list catalog.RefLister) (*Server, client.Client) {
 	t.Helper()
 	dir, out := t.TempDir(), t.TempDir()
 	write := func(name, yaml string, files map[string]string) {
@@ -115,7 +121,7 @@ func catalogServer(t *testing.T) (*Server, client.Client) {
 	}
 	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim", "icon.svg": fluxyrIcon})
 	write("crm", crmEntry, map[string]string{})
-	if _, err := catalog.Publish(dir, out, time.Now()); err != nil {
+	if _, _, err := catalog.PublishResolved(context.Background(), dir, out, time.Now(), list); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(http.FileServer(http.Dir(out)))
@@ -367,4 +373,48 @@ func TestTheCatalogNeedsSomeoneWhoMayMakeAProject(t *testing.T) {
 		t.Fatalf("%d", rec.Code)
 	}
 	_ = gin.Mode()
+}
+
+const publishedCommit = "0123456789abcdef0123456789abcdef01234567"
+
+func publishedRefs(context.Context, string) (map[string]string, error) {
+	return map[string]string{"refs/heads/main": publishedCommit, "refs/tags/v2": "89abcdef0123456789abcdef0123456789abcdef", "refs/tags/v3": "89abcdef0123456789abcdef0123456789abcdef"}, nil
+}
+
+func TestAnInstallOfAnEntryWithACommitPinsItAndRecordsTheVersion(t *testing.T) {
+	s, cr := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "POST", "/api/catalog/entries/fluxyr/install", `{"inputs":{"OPENROUTER_API_KEY":"sk-or-123"}}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app := appBySlug(t, cr, "fluxyr")
+	src := app.Spec.Source
+	if src == nil || src.Git == nil || src.Git.URL != "https://github.com/shpyrd-io/fluxyr" || src.Git.Revision != publishedCommit || src.Overlay == nil {
+		t.Fatalf("source %+v", src)
+	}
+	a := app.Annotations
+	if a[shpyrdv1.AnnotationCatalogEntry] != "fluxyr" || !strings.HasPrefix(a[shpyrdv1.AnnotationCatalogDigest], "sha256:") || a[shpyrdv1.AnnotationCatalogSource] == "" ||
+		a[shpyrdv1.AnnotationCatalogCommit] != publishedCommit || a[shpyrdv1.AnnotationCatalogRevision] != "main" {
+		t.Fatalf("annotations %v", a)
+	}
+}
+
+func TestAnInstallWithARevisionOrWithoutACommitIsAsItWas(t *testing.T) {
+	s, cr := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "POST", "/api/catalog/entries/crm/install", `{"revision":"v3"}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app := appBySlug(t, cr, "crm")
+	if app.Spec.Source.Git.Revision != "v3" || app.Annotations[shpyrdv1.AnnotationCatalogCommit] != "" {
+		t.Fatalf("--revision: %+v %v", app.Spec.Source.Git, app.Annotations)
+	}
+	s, cr = catalogServer(t)
+	if rec := do(t, s, "POST", "/api/catalog/entries/crm/install", `{}`, true); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app = appBySlug(t, cr, "crm")
+	if app.Spec.Source.Git.Revision != "v2" || app.Annotations[shpyrdv1.AnnotationCatalogCommit] != "" {
+		t.Fatalf("no commit: %+v %v", app.Spec.Source.Git, app.Annotations)
+	}
 }

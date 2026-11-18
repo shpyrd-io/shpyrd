@@ -413,9 +413,19 @@ func (s *Server) catalogInstall(c *gin.Context) {
 		s.audit(c, slug, "config.set", slug, "set "+strings.Join(sortedNames(secrets, plain), ", "))
 	}
 	// 4. The source: the first deploy, attributed to whoever installs.
-	revision := firstNonEmpty(req.Revision, e.Revision())
+	// An entry published with a commit installs pinned to it; an explicit
+	// --revision installs as it always did.
+	pinned := req.Revision == "" && e.Commit != ""
+	revision := firstNonEmpty(req.Revision, e.Commit, e.Revision())
 	app, err = s.updateAppIn(ctx, app, func(a *shpyrdv1.App) error {
 		a.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: git, Revision: revision}, SubPath: e.Catalog.Source.SubPath, Overlay: overlay}
+		if pinned {
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[shpyrdv1.AnnotationCatalogCommit] = e.Commit
+			a.Annotations[shpyrdv1.AnnotationCatalogRevision] = e.Revision()
+		}
 		a.Spec.Bindings = bindings
 		if len(icon) > 0 {
 			project.SetIconFile(a, iconVersion(icon), iconKinds[iconTyp])

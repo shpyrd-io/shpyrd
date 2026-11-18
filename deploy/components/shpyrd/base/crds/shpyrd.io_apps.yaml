@@ -1232,6 +1232,28 @@ spec:
                         - name
                         type: object
                       type: array
+                    catalog:
+                      description: |-
+                        Catalog is the version of the catalog entry the release runs: set
+                        when the release was built from the commit the catalog published,
+                        or reuses the build of a release that was. A release built from
+                        anything else carries none.
+                      properties:
+                        commit:
+                          type: string
+                        digest:
+                          type: string
+                        entry:
+                          type: string
+                        revision:
+                          description: Revision is the name the entry gave the commit
+                            (a tag or a branch).
+                          type: string
+                      required:
+                      - commit
+                      - digest
+                      - entry
+                      type: object
                     configHash:
                       description: |-
                         ConfigHash covers env vars, the <app>-env Secret, bound vars, sizes

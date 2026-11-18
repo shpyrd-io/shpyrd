@@ -149,6 +149,13 @@ const (
 	AnnotationCatalogEntry  = "shpyrd.io/catalog-entry"
 	AnnotationCatalogDigest = "shpyrd.io/catalog-digest"
 	AnnotationCatalogSource = "shpyrd.io/catalog-source"
+	// AnnotationCatalogCommit and AnnotationCatalogRevision complete the
+	// version the project is set to deploy: the commit the entry's
+	// revision named when the catalog was published, and that revision's
+	// name. They are the target; what each release runs is
+	// Release.Catalog.
+	AnnotationCatalogCommit   = "shpyrd.io/catalog-commit"
+	AnnotationCatalogRevision = "shpyrd.io/catalog-revision"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes
@@ -870,6 +877,23 @@ type Release struct {
 	// restores them.
 	// +optional
 	Bindings []Binding `json:"bindings,omitempty"`
+	// Catalog is the version of the catalog entry the release runs: set
+	// when the release was built from the commit the catalog published,
+	// or reuses the build of a release that was. A release built from
+	// anything else carries none.
+	// +optional
+	Catalog *CatalogVersion `json:"catalog,omitempty"`
+}
+
+// CatalogVersion is one published version of a catalog entry: the entry,
+// its digest and the commit of the code.
+type CatalogVersion struct {
+	Entry  string `json:"entry"`
+	Digest string `json:"digest"`
+	Commit string `json:"commit"`
+	// Revision is the name the entry gave the commit (a tag or a branch).
+	// +optional
+	Revision string `json:"revision,omitempty"`
 }
 
 // ProcessStatus is the rollout state of one process type.

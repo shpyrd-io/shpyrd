@@ -805,3 +805,43 @@ func TestInternalNameIngress(t *testing.T) {
 		t.Errorf("internal ingress should be gone without a web process: %v", err)
 	}
 }
+
+// A rollback records the version of the release it returns to, whichever
+// way it was asked for: the image is pinned and the App still names the
+// newer version it was set to deploy.
+func TestRollbackReleaseCarriesTheCatalogVersionOfTheReleaseItReturnsTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	commitB := "89abcdef0123456789abcdef0123456789abcdef"
+	verA := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:a", Commit: "0123456789abcdef0123456789abcdef01234567", Revision: "v1"}
+	verB := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:b", Commit: commitB, Revision: "v2"}
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "rb", Namespace: "app-rb", Generation: 3,
+			Annotations: map[string]string{
+				shpyrdv1.AnnotationReleaseNote:     "Rollback to v1",
+				shpyrdv1.AnnotationCatalogEntry:    "fluxyr",
+				shpyrdv1.AnnotationCatalogDigest:   "sha256:b",
+				shpyrdv1.AnnotationCatalogCommit:   commitB,
+				shpyrdv1.AnnotationCatalogRevision: "v2",
+			},
+		},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: commitB}},
+			Image:  imgA,
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Source: "012345678901", Catalog: verA},
+			{Number: 2, Image: imgB, Source: short(commitB), Catalog: verB},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Catalog == nil || *got.Status.Releases[2].Catalog != *verA {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	got = runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 {
+		t.Fatalf("second pass: %d releases", n)
+	}
+}

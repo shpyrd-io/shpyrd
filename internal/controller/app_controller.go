@@ -650,6 +650,7 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 		}
 	}
 	if recordRelease(app, image, hash, ghash, source, metav1.Now(), configDesc, sizeByProcess) {
+		stampCatalogVersion(app)
 		out.newRelease = app.CurrentRelease()
 		for _, p := range processes(app) {
 			out.newRelease.Processes = append(out.newRelease.Processes, p.Name)
