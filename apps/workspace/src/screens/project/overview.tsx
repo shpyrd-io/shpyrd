@@ -27,6 +27,7 @@ import { api } from "@/api/api";
 import type { AuditEntry, Project } from "@/api/types";
 import { ago } from "@/lib/project";
 import type { Perms } from "@/lib/perms";
+import { CatalogUpdate } from "./catalog_update";
 import { Maintenance } from "./maintenance";
 import { GitSource } from "./source";
 
@@ -142,6 +143,8 @@ export function Overview({ project, perms }: { project: Project; perms: Perms })
           </InfoTable>
         </CardContent>
       </Card>
+
+      <CatalogUpdate project={project} perms={perms} />
 
       <Maintenance project={project} perms={perms} />
 

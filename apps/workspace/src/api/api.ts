@@ -4,6 +4,9 @@ import type {
   CatalogEntry,
   CatalogInstall,
   CatalogInstallResult,
+  CatalogUpdate,
+  CatalogUpdatePreview,
+  CatalogUpdateResult,
   CatalogView,
   ConvertInfo,
   Access,
@@ -186,6 +189,11 @@ export type Api = {
   catalog: () => Promise<CatalogView>;
   catalogEntry: (name: string) => Promise<CatalogEntry>;
   installFromCatalog: (name: string, body: CatalogInstall) => Promise<CatalogInstallResult>;
+  // What applying the version the catalog offers a project does, and the
+  // apply: it carries the digest that was previewed and the values of the
+  // inputs the update asks.
+  catalogUpdate: (slug: string) => Promise<CatalogUpdatePreview>;
+  applyCatalogUpdate: (slug: string, body: CatalogUpdate) => Promise<CatalogUpdateResult>;
   updateProject: (
     slug: string,
     body: {

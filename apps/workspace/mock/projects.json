@@ -1,7 +1,9 @@
 [
   {
     "slug": "hello-world",
-    "sourceWatch": { "mode": "github-app" },
+    "sourceWatch": {
+      "mode": "github-app"
+    },
     "githubLinkedBy": "ana-souza",
     "displayName": "Hello World",
     "description": "Operations of the day, finance and the team.",
@@ -117,7 +119,9 @@
   },
   {
     "slug": "docs",
-    "sourceWatch": { "mode": "github-app" },
+    "sourceWatch": {
+      "mode": "github-app"
+    },
     "displayName": "Docs",
     "description": "What is written about the agency, for everyone.",
     "icon": "book-open",
@@ -196,7 +200,9 @@
   },
   {
     "slug": "billing",
-    "sourceWatch": { "mode": "manual" },
+    "sourceWatch": {
+      "mode": "manual"
+    },
     "displayName": "Billing",
     "description": "Invoices, plans and what each client owes.",
     "icon": "receipt",
@@ -347,7 +353,9 @@
   },
   {
     "slug": "reports",
-    "sourceWatch": { "mode": "manual" },
+    "sourceWatch": {
+      "mode": "manual"
+    },
     "displayName": "Reports",
     "description": "Builds the reports of the month, every night.",
     "namespace": "p-reports",
@@ -419,7 +427,9 @@
   },
   {
     "slug": "metrics",
-    "sourceWatch": { "mode": "webhook" },
+    "sourceWatch": {
+      "mode": "webhook"
+    },
     "displayName": "Metrics",
     "description": "Collects the numbers of every application, each hour.",
     "namespace": "p-metrics",
@@ -468,6 +478,85 @@
           "description": "Deploy of b4b4b4b",
           "build": "9",
           "createdAt": "2026-09-15T08:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "fluxyr",
+    "displayName": "Fluxyr",
+    "description": "A Python framework for agents, skills and durable execution, with its own web UI.",
+    "icon": "message-square",
+    "iconColor": "teal",
+    "catalogEntry": "fluxyr",
+    "catalog": {
+      "entry": "fluxyr",
+      "running": {
+        "revision": "v1.3.0",
+        "commit": "1111111111111111111111111111111111111111",
+        "shortCommit": "111111111111",
+        "digest": "sha256:aaaa"
+      },
+      "state": "update-available",
+      "offered": {
+        "revision": "v1.4.0",
+        "commit": "2222222222222222222222222222222222222222",
+        "shortCommit": "222222222222",
+        "digest": "sha256:bbbb"
+      }
+    },
+    "namespace": "p-fluxyr",
+    "internalHost": "fluxyr.acme.internal",
+    "phase": "Running",
+    "url": "https://acme-fluxyr.shpyrd.app",
+    "release": 1,
+    "source": "git",
+    "processes": {
+      "web": {
+        "desired": 1,
+        "ready": 1,
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-10-20T09:00:00Z",
+    "exposure": "external",
+    "access": "authenticated",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "https://github.com/shpyrd-io/fluxyr",
+          "revision": "1111111111111111111111111111111111111111"
+        }
+      },
+      "processes": {
+        "web": {
+          "size": "shared-s",
+          "replicas": 1,
+          "port": 5050
+        }
+      },
+      "build": {
+        "strategy": "dockerfile"
+      }
+    },
+    "status": {
+      "phase": "Running",
+      "digest": "sha256:fa11fa11fa11",
+      "processTypes": [
+        "web"
+      ],
+      "releases": [
+        {
+          "number": 1,
+          "kind": "deploy",
+          "description": "Install Fluxyr from the catalog",
+          "createdAt": "2026-10-20T09:00:00Z",
+          "catalog": {
+            "revision": "v1.3.0",
+            "commit": "1111111111111111111111111111111111111111",
+            "shortCommit": "111111111111",
+            "digest": "sha256:aaaa"
+          }
         }
       ]
     }
