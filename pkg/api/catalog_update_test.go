@@ -256,10 +256,10 @@ func TestAnUpdateIsRefusedWithNothingChanged(t *testing.T) {
 		code   int
 		inBody string
 	}{
-		"digest is not the catalog's": {`{"digest":"sha256:stale","inputs":{"NEW_NEEDED":"y"}}`, http.StatusConflict, "preview"},
-		"an input the entry does not ask": {`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y","NOPE":"x"}}`, http.StatusBadRequest, "NOPE"},
+		"digest is not the catalog's":      {`{"digest":"sha256:stale","inputs":{"NEW_NEEDED":"y"}}`, http.StatusConflict, "preview"},
+		"an input the entry does not ask":  {`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y","NOPE":"x"}}`, http.StatusBadRequest, "NOPE"},
 		"an input the project already has": {`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y","OPENROUTER_API_KEY":"x"}}`, http.StatusBadRequest, "already set"},
-		"a required input is missing":       {`{"digest":"` + digest + `"}`, http.StatusUnprocessableEntity, "NEW_NEEDED"},
+		"a required input is missing":      {`{"digest":"` + digest + `"}`, http.StatusUnprocessableEntity, "NEW_NEEDED"},
 	} {
 		before := v.snapshot(app)
 		r := v.apply(tc.body)
@@ -311,7 +311,9 @@ func TestNothingIsAppliedWhenThereIsNothingToApply(t *testing.T) {
 		t.Fatal("changed")
 	}
 	// Not offered: another catalog.
-	v.setApp(app, func(a *shpyrdv1.App) { a.Annotations[shpyrdv1.AnnotationCatalogSource] = "https://elsewhere.test/index.json" })
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Annotations[shpyrdv1.AnnotationCatalogSource] = "https://elsewhere.test/index.json"
+	})
 	before = v.snapshot(app)
 	if r = v.apply(`{"digest":"` + digest + `"}`); r.code != http.StatusConflict {
 		t.Fatalf("not offered: %d %s", r.code, r.body)
@@ -429,4 +431,3 @@ func TestAProjectNotFromTheCatalogHasNoUpdate(t *testing.T) {
 		t.Errorf("apply: %d", rec.Code)
 	}
 }
-
