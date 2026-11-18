@@ -142,7 +142,7 @@ func TestThePreviewSaysWhatAnUpdateDoesAndChangesNothing(t *testing.T) {
 		t.Fatalf("inputs %v, want %v (inputs the project has are not listed)", actions, want)
 	}
 	if !reflect.DeepEqual(p.Volumes, []string{"extra"}) || !reflect.DeepEqual(p.Resources, []string{"widget cache"}) ||
-		!reflect.DeepEqual(p.ProcessesAdded, []string{"worker"}) || !reflect.DeepEqual(p.EnvChanged, []string{"FLUXYR_NEW"}) {
+		!reflect.DeepEqual(p.ProcessesAdded, []string{"worker"}) || !reflect.DeepEqual(p.EnvAdded, []string{"FLUXYR_NEW"}) || len(p.EnvKept) != 0 {
 		t.Fatalf("preview %+v", p)
 	}
 	if strings.Contains(rec.Body.String(), "sk-or") {
@@ -303,6 +303,7 @@ func TestNothingIsAppliedWhenThereIsNothingToApply(t *testing.T) {
 	v.setApp(app, func(a *shpyrdv1.App) {
 		a.Annotations[shpyrdv1.AnnotationCatalogCommit] = commitNew
 		a.Annotations[shpyrdv1.AnnotationCatalogDigest] = digest
+		a.Spec.Source.Git.Revision = commitNew
 	})
 	before = v.snapshot(app)
 	r = v.apply(`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y"}}`)
@@ -524,5 +525,189 @@ func TestAProjectNotFromTheCatalogHasNoUpdate(t *testing.T) {
 	}
 	if rec := do(t, s, "POST", "/api/projects/plain/catalog/update", `{"digest":"x"}`, true); rec.Code != http.StatusNotFound {
 		t.Errorf("apply: %d", rec.Code)
+	}
+}
+
+// ---- what moves a project off the catalog's version, through the real
+// endpoints, and what holds it on an older one
+
+const entryGitURL = "https://github.com/shpyrd-io/fluxyr"
+
+func (v *versionedCatalog) post(path, body string) *httptestResult {
+	rec := do(v.t, v.s, "POST", path, body, true)
+	return &httptestResult{code: rec.Code, body: rec.Body.String()}
+}
+
+func (v *versionedCatalog) stateNow() (summary *ProjectCatalog, detail *ProjectCatalog) {
+	s, d, _ := v.state()
+	return s, d
+}
+
+func (v *versionedCatalog) wantEmpty() {
+	v.t.Helper()
+	s, d := v.stateNow()
+	if s == nil || d == nil || s.State != "" || d.State != "" || s.Offered != nil {
+		v.t.Fatalf("no offer is made: %+v %+v", s, d)
+	}
+}
+
+func TestADeployOfAnotherCommitOfTheEntrysRepositoryIsOfferedTheCatalogsVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.want(CatalogUpToDate, commitOld, "")
+	other := "3333333333333333333333333333333333333333"
+	for _, revision := range []string{other, "main"} {
+		if r := v.post("/api/projects/fluxyr/deploy", `{"git":{"url":"`+entryGitURL+`","revision":"`+revision+`"}}`); r.code != http.StatusAccepted {
+			t.Fatalf("deploy: %d %s", r.code, r.body)
+		}
+		// Before the controller records a release for it, and after.
+		v.want(CatalogUpdateAvailable, commitOld, commitOld)
+		v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, len(a.Status.Releases)+1, "r/x@sha256:"+revision[:4], nil) })
+		// The new release runs no version of the entry.
+		v.want(CatalogUpdateAvailable, "", commitOld)
+		// Put it back for the next round.
+		v.setApp(app, func(a *shpyrdv1.App) {
+			a.Status.Releases = a.Status.Releases[:1]
+			a.Spec.Source.Git.Revision = commitOld
+		})
+	}
+	// Apply it: the source is the catalog's commit with the entry's overlay.
+	v.post("/api/projects/fluxyr/deploy", `{"git":{"url":"`+entryGitURL+`","revision":"`+other+`"}}`)
+	v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 2, "r/x@sha256:3333", nil) })
+	var p CatalogUpdatePreview
+	rec := do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || p.State != CatalogUpdateAvailable || commitOf(p.To) != commitOld {
+		t.Fatalf("preview %d %s", rec.Code, rec.Body.String())
+	}
+	r := v.apply(`{"digest":"` + v.currentDigest() + `"}`)
+	var res CatalogUpdateResult
+	if err := json.Unmarshal([]byte(r.body), &res); err != nil || r.code != http.StatusAccepted || !res.Changed {
+		t.Fatalf("apply: %d %s", r.code, r.body)
+	}
+	got := v.fresh(app)
+	if got.Spec.Source.Git.Revision != commitOld || got.Spec.Source.Overlay == nil || got.Spec.Image != "" {
+		t.Fatalf("source after apply: %+v %+v", got.Spec.Source.Git, got.Spec.Source.Overlay)
+	}
+	v.want(CatalogUpdating, "", commitOld)
+	r = v.apply(`{"digest":"` + v.currentDigest() + `"}`)
+	if err := json.Unmarshal([]byte(r.body), &res); err != nil || res.Changed {
+		t.Fatalf("a second apply changes nothing: %d %s", r.code, r.body)
+	}
+}
+
+func TestAnImageDeployedByHandIsNoLongerOfferedTheCatalogsVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	if r := v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/other/app:1"}`); r.code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", r.code, r.body)
+	}
+	v.wantEmpty()
+	// After the controller records its release, with no version.
+	v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 2, "registry.example.test/other/app:1", nil) })
+	v.wantEmpty()
+	before := v.snapshot(app)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusConflict {
+		t.Fatalf("an update is not applied over an image: %d %s", r.code, r.body)
+	}
+	if v.snapshot(app) != before {
+		t.Fatal("changed")
+	}
+}
+
+func TestAnUploadOrAnotherRepositoryIsNotOfferedAnUpdateEither(t *testing.T) {
+	for name, body := range map[string]string{
+		"another repository": `{"git":{"url":"https://github.com/someone/else","revision":"main"}}`,
+		"an upload":          `{"blob":{"url":"http://elsewhere.test/blob","sha256":"abc"}}`,
+	} {
+		v := newVersionedCatalog(t)
+		v.installedAndRunning()
+		v.publishNext(commitNew, fluxyrNext())
+		if r := v.post("/api/projects/fluxyr/deploy", body); r.code != http.StatusAccepted {
+			t.Logf("%s: deploy answered %d %s", name, r.code, r.body)
+			continue
+		}
+		s, d := v.stateNow()
+		if s == nil || d == nil || s.State != "" || d.State != "" {
+			t.Errorf("%s: %+v %+v", name, s, d)
+		}
+	}
+}
+
+func TestARollbackThroughTheEndpointHoldsTheProjectOnTheOlderVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	digestNew := v.currentDigest()
+	if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digestNew, Commit: commitNew, Revision: "main"})
+	})
+	v.want(CatalogUpToDate, commitNew, "")
+	if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", r.code, r.body)
+	}
+	// Before the controller records the rollback release, and after.
+	v.want(CatalogUpdateAvailable, commitNew, commitNew)
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog)
+	})
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusAccepted {
+		t.Fatalf("apply after a rollback: %d %s", r.code, r.body)
+	}
+	if got := v.fresh(app); got.Spec.Image != "" {
+		t.Fatalf("the pin is released: %q", got.Spec.Image)
+	}
+}
+
+func TestAnUpdateKeepsAPlainVariableTheProjectHas(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.setApp(app, func(a *shpyrdv1.App) {
+		for i := range a.Spec.Env {
+			if a.Spec.Env[i].Name == "FLUXYR_HOST" {
+				a.Spec.Env[i].Value = "127.0.0.1"
+			}
+		}
+	})
+	// A version that declares the same value and adds a variable.
+	v.publishNext(commitNew, fluxyrNext())
+	var p CatalogUpdatePreview
+	rec := do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.EnvAdded, []string{"FLUXYR_NEW"}) || !reflect.DeepEqual(p.EnvKept, []string{"FLUXYR_HOST"}) {
+		t.Fatalf("preview %+v", p)
+	}
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	got := v.fresh(app)
+	if !hasEnvValue(got.Spec.Env, "FLUXYR_HOST", "127.0.0.1") || !hasEnvValue(got.Spec.Env, "FLUXYR_NEW", "enabled") {
+		t.Fatalf("env %+v", got.Spec.Env)
+	}
+	// Another version changes the value it declares: the project's stays.
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Annotations[shpyrdv1.AnnotationCatalogDigest] = "sha256:old"
+		for i := range a.Spec.Env {
+			if a.Spec.Env[i].Name == "FLUXYR_HOST" {
+				a.Spec.Env[i].Value = "0.0.0.0"
+			}
+		}
+	})
+	v.publishNext("4444444444444444444444444444444444444444", strings.Replace(fluxyrNext(), "FLUXYR_HOST: 0.0.0.0", "FLUXYR_HOST: 0.0.0.0:9000", 1))
+	rec = do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || !reflect.DeepEqual(p.EnvKept, []string{"FLUXYR_HOST"}) || len(p.EnvAdded) != 0 {
+		t.Fatalf("preview %v %+v", err, p)
+	}
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `"}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	if got := v.fresh(app); !hasEnvValue(got.Spec.Env, "FLUXYR_HOST", "0.0.0.0") {
+		t.Fatalf("env %+v", got.Spec.Env)
 	}
 }

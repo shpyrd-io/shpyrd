@@ -31,7 +31,11 @@ a person previews and applies it. No template is read on a timer.
   (rollback, change of config vars) takes that release's version. So a
   rollback shows the older version and offers the update again.
 - An update is applied by a person and only adds: it never deletes anything
-  and never overwrites a value a person set. It needs the permission to
+  and never overwrites a value a person set, config vars and plain variables
+  alike: a variable the project already has is kept, whatever the new version
+  declares for it, because the project does not record what the previous
+  version declared, so a value a person changed cannot be told from one the
+  entry changed. It needs the permission to
   deploy and to change config, and to manage resources when it makes one.
 - Reapplying an update after a rollback takes back, from the config
   snapshots of the releases still in the history, the value a project had for

@@ -198,8 +198,8 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd catalog list` | The entries of the catalog: name, version (revision and commit), category, what each needs at install. |
 | `shpyrd catalog show <entry>` | One entry: its source and version, build, what it runs and needs, the inputs asked at install, its readme. |
 | `shpyrd catalog install <entry>` | Make a project from the entry: `--input NAME=value` for each input, `--slug`, `--name`, `--revision` for a tag or commit instead of the version the catalog published, `--access`, `--exposure`. The project stays on the version it was made from until you update it. |
-| `shpyrd catalog status <project>` | The version of its entry a project runs, whether the catalog offers another, and what applying it does. Changes nothing. |
-| `shpyrd catalog update <project>` | Show what the offered version does, ask, and apply it: `--input NAME=value` for each new input, `--yes` to skip the question. Keeps every value you set and removes nothing. |
+| `shpyrd catalog status <project>` | The version of its entry a project runs, whether the catalog offers another, and what applying it does: the variables it adds, and apart from them those it keeps at your value. Changes nothing. |
+| `shpyrd catalog update <project>` | Show what the offered version does, ask, and apply it: `--input NAME=value` for each new input, `--yes` to skip the question. Keeps every config var and variable the project has, and removes nothing. |
 | `shpyrd catalog validate <dir>` | Check a folder of entries, one per sub-folder (the catalog repository's own check; no server). |
 | `shpyrd catalog publish <dir> --out <folder>` | Write the index a catalog repository serves: `index.json` and the entries' files (its CI runs this). Each entry's revision is looked up in its repository and the full commit is written in the index; it needs network access to the templates, which are read without credentials. A revision that cannot be found stops it and writes nothing; a branch is accepted and marked. |
 

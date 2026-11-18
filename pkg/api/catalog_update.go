@@ -68,8 +68,11 @@ type CatalogUpdatePreview struct {
 	// that are new to the project, or whose definition differs.
 	ProcessesAdded   []string `json:"processesAdded"`
 	ProcessesChanged []string `json:"processesChanged"`
-	// EnvChanged names the entry's plain variables that are new or differ.
-	EnvChanged     []string `json:"envChanged"`
+	// EnvAdded names the entry's plain variables the project does not have:
+	// they are set. EnvKept names those it has with a value other than the
+	// entry's: they stay as they are, an update never overwrites a variable.
+	EnvAdded       []string `json:"envAdded"`
+	EnvKept        []string `json:"envKept"`
 	BuildChanged   bool     `json:"buildChanged"`
 	OverlayChanged bool     `json:"overlayChanged"`
 }
@@ -159,7 +162,7 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 	p.preview = CatalogUpdatePreview{
 		Entry: name, State: st.State, From: st.Running, To: st.Offered,
 		Inputs: []CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{},
-		ProcessesAdded: []string{}, ProcessesChanged: []string{}, EnvChanged: []string{},
+		ProcessesAdded: []string{}, ProcessesChanged: []string{}, EnvAdded: []string{}, EnvKept: []string{},
 	}
 	switch st.State {
 	case CatalogUpdateAvailable:
@@ -277,8 +280,12 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 		}
 	}
 	for _, v := range env {
-		if !hasEnvValue(app.Spec.Env, v.Name, v.Value) {
-			p.preview.EnvChanged = append(p.preview.EnvChanged, v.Name)
+		cur, have := envOf(app.Spec.Env, v.Name)
+		switch {
+		case !have:
+			p.preview.EnvAdded = append(p.preview.EnvAdded, v.Name)
+		case cur.ValueFrom != nil || cur.Value != v.Value:
+			p.preview.EnvKept = append(p.preview.EnvKept, v.Name)
 		}
 	}
 	p.preview.BuildChanged = build != nil && !reflect.DeepEqual(app.Spec.Build, build)
@@ -303,13 +310,19 @@ func bound(app *shpyrdv1.App, kind, name string) bool {
 	return false
 }
 
-func hasEnvValue(env []corev1.EnvVar, name, value string) bool {
+// envOf is the variable called name in env, if there is one.
+func envOf(env []corev1.EnvVar, name string) (corev1.EnvVar, bool) {
 	for _, e := range env {
-		if e.Name == name && e.Value == value && e.ValueFrom == nil {
-			return true
+		if e.Name == name {
+			return e, true
 		}
 	}
-	return false
+	return corev1.EnvVar{}, false
+}
+
+func hasEnvValue(env []corev1.EnvVar, name, value string) bool {
+	e, ok := envOf(env, name)
+	return ok && e.Value == value && e.ValueFrom == nil
 }
 
 func sortedProcessNames(m map[string]shpyrdv1.Process) []string {
@@ -539,8 +552,12 @@ func (s *Server) catalogUpdateApply(c *gin.Context) {
 			cur.Command, cur.Args, cur.Port, cur.HealthCheck, cur.Volumes = want.Command, want.Args, want.Port, want.HealthCheck, want.Volumes
 			a.Spec.Processes[n] = cur
 		}
+		// A variable the project has is never overwritten; only the new ones
+		// are added.
 		for _, v := range plan.env {
-			setEnvValue(&a.Spec.Env, v)
+			if _, have := envOf(a.Spec.Env, v.Name); !have {
+				a.Spec.Env = append(a.Spec.Env, v)
+			}
 		}
 		for _, b := range plan.bind {
 			if !bound(a, b.Kind, b.Name) {
@@ -571,18 +588,6 @@ func (s *Server) catalogUpdateApply(c *gin.Context) {
 	s.audit(c, slug, "catalog.update", e.Name, fmt.Sprintf("%s to %s at %s (%s)", e.Catalog.Name, e.Revision(), shortCommit(e.Commit), e.Digest))
 	sum := summarize(updated)
 	c.JSON(http.StatusAccepted, CatalogUpdateResult{Changed: true, From: plan.state.Running, To: plan.state.Offered, Notes: notes, Project: &sum})
-}
-
-// setEnvValue sets the variable in env, keeping the order and any other
-// variable.
-func setEnvValue(env *[]corev1.EnvVar, v corev1.EnvVar) {
-	for i := range *env {
-		if (*env)[i].Name == v.Name {
-			(*env)[i] = v
-			return
-		}
-	}
-	*env = append(*env, v)
 }
 
 // earlierValues finds, for each name, the value the project's config vars

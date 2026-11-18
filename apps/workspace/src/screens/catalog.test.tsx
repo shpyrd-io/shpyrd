@@ -26,7 +26,8 @@ const fluxyr: CatalogEntry = {
   tags: ["agent", "python"],
   icon: "bot",
   iconColor: "teal",
-  source: { git: "https://github.com/shpyrd-io/fluxyr", revision: "main" },
+  commit: "0123456789abcdef0123456789abcdef01234567",
+  source: { git: "https://github.com/shpyrd-io/fluxyr", revision: "v1.4.0" },
   inputs: [
     { name: "FLUXYR_MODEL", label: "Model", default: "minimax/minimax-m3" },
     { name: "OPENROUTER_API_KEY", label: "OpenRouter API key", secret: true, required: true },
@@ -127,13 +128,34 @@ it("asks what the entry needs, never a generated value, and installs with it", a
   expect(toasts.success).toHaveBeenCalled();
 });
 
-it("pins a revision when asked to, instead of following the branch", async () => {
+it("installs the catalog's version by default, says which, and sends no revision", async () => {
+  show("/catalog/fluxyr");
+  await screen.findByRole("button", { name: "Install" });
+  expect(screen.getByText("The project is built from this version and stays on it until you apply an update.")).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Version" }).textContent).toContain("v1.4.0 (0123456789ab)");
+  expect(document.body.textContent).not.toMatch(/Follow|following it|Every new commit|new commits/);
+  fireEvent.change(screen.getByLabelText(/OpenRouter API key/), { target: { value: "sk-or-1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Install" }));
+  await waitFor(() => expect(fake.installFromCatalog).toHaveBeenCalled());
+  expect(fake.installFromCatalog.mock.calls[0][1].revision).toBeUndefined();
+});
+
+it("promises neither updates nor new commits for an entry the catalog published without a commit", async () => {
+  show("/catalog/twenty");
+  await screen.findByRole("button", { name: "Install" });
+  expect(screen.getByText("The project is built from main as it is when you install.")).toBeTruthy();
+  expect(document.body.textContent).not.toMatch(/Follow|following it|Every new commit|new commits|apply an update|updates/);
+  fireEvent.click(screen.getByRole("button", { name: "Install" }));
+  await waitFor(() => expect(fake.installFromCatalog).toHaveBeenCalled());
+  expect(fake.installFromCatalog.mock.calls[0][1].revision).toBeUndefined();
+});
+
+it("pins another tag or commit when asked to, and sends it", async () => {
   show("/catalog/twenty");
   const install = (await screen.findByRole("button", { name: "Install" })) as HTMLButtonElement;
   expect(install.disabled).toBe(false);
-  expect(screen.getByText(/Every new commit of main is built/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("combobox", { name: "Updates" }));
-  fireEvent.click(await screen.findByRole("option", { name: "Pin a tag or commit" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Version" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Another tag or commit" }));
   await waitFor(() => expect(install.disabled).toBe(true));
   fireEvent.change(screen.getByPlaceholderText("v1.2.0"), { target: { value: "v2.0.0" } });
   await waitFor(() => expect(install.disabled).toBe(false));

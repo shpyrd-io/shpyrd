@@ -210,7 +210,7 @@ func catalogVersionServer(t *testing.T, state string, applied *api.CatalogUpdate
 			}{e, commit})
 			_, _ = w.Write(raw)
 		case r.URL.Path == "/api/projects/agent/catalog/update" && r.Method == http.MethodGet:
-			p := api.CatalogUpdatePreview{Entry: "fluxyr", State: state, From: running, Inputs: []api.CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{}, ProcessesAdded: []string{"worker"}, ProcessesChanged: []string{}, EnvChanged: []string{}}
+			p := api.CatalogUpdatePreview{Entry: "fluxyr", State: state, From: running, Inputs: []api.CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{}, ProcessesAdded: []string{"worker"}, ProcessesChanged: []string{}, EnvAdded: []string{"FLUXYR_WORKERS"}, EnvKept: []string{"FLUXYR_HOST"}}
 			switch state {
 			case api.CatalogUpdateAvailable:
 				p.To, p.Repository = offered, "https://github.com/shpyrd-io/fluxyr"
@@ -276,10 +276,13 @@ func TestCatalogStatusShowsTheVersionAndThePreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Runs:     v1 @ aaaaaaaaaaaa", "Offered:  v2 @ 0123456789ab", "makes volumes: extra", "adds processes: worker", "asks for NEW_NEEDED (required): --input NEW_NEEDED=value", "generates VAULT_KEY"} {
+	for _, want := range []string{"Runs:     v1 @ aaaaaaaaaaaa", "Offered:  v2 @ 0123456789ab", "makes volumes: extra", "adds processes: worker", "adds variables: FLUXYR_WORKERS", "keeps the variables at your value: FLUXYR_HOST", "asks for NEW_NEEDED (required): --input NEW_NEEDED=value", "generates VAULT_KEY"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "sets variables") || strings.Contains(text, "adds variables: FLUXYR_HOST") {
+		t.Fatalf("a kept variable is not one the update sets: %s", text)
 	}
 	out, err := runCLI(t, "catalog", "status", "agent", "--jq", ".to.commit")
 	if err != nil || strings.TrimSpace(out) != "0123456789abcdef0123456789abcdef01234567" {

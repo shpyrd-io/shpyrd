@@ -950,7 +950,8 @@ export type CatalogUpdatePreview = {
   resources: string[];
   processesAdded: string[];
   processesChanged: string[];
-  envChanged: string[];
+  envAdded: string[];
+  envKept: string[];
   buildChanged: boolean;
   overlayChanged: boolean;
 };

@@ -38,7 +38,8 @@ const preview: CatalogUpdatePreview = {
   resources: [],
   processesAdded: ["worker"],
   processesChanged: [],
-  envChanged: [],
+  envAdded: ["FLUXYR_WORKERS"],
+  envKept: ["FLUXYR_HOST"],
   buildChanged: false,
   overlayChanged: false,
 };
@@ -81,6 +82,9 @@ it("previews the update, asks for the new input, never shows what is generated, 
   expect(screen.getByText("Makes volumes: cache.")).toBeTruthy();
   expect(screen.getByText("Adds processes: worker.")).toBeTruthy();
   expect(screen.getByText("Generates VAULT_ENCRYPTION_KEY.")).toBeTruthy();
+  expect(screen.getByText("Adds variables: FLUXYR_WORKERS.")).toBeTruthy();
+  expect(screen.getByText(/Kept at the project's value, not the new version's: FLUXYR_HOST\./)).toBeTruthy();
+  expect(screen.queryByText(/Sets variables/)).toBeNull();
   const button = screen.getByRole("button", { name: "Update to v1.4.0 (222222222222)" }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
   fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: "tok" } });
@@ -98,15 +102,18 @@ it("shows the server's words when it refuses", async () => {
   expect(fake.applyCatalogUpdate.mock.calls[0][1]).toEqual({ digest: "sha256:bbbb", inputs: {} });
 });
 
-it("offers no action to who may not deploy, or may not make what the update makes", async () => {
+it("shows no action and no field to who may not deploy, or may not make what the update makes", async () => {
   fake.catalogUpdate.mockResolvedValue(preview);
   show(fluxyr, { deploy: false, config: false, resource: false });
   expect(await screen.findByText(/The catalog offers/)).toBeTruthy();
-  expect((screen.getByRole("button", { name: /Update to/ }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/needs the permission to deploy the project and change its config/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Update to/ })).toBeNull();
+  expect(screen.queryByLabelText(/Access token/)).toBeNull();
   cleanup();
   show(fluxyr, { deploy: true, config: true, resource: false });
   expect(await screen.findByText(/needs the permission to manage resources/)).toBeTruthy();
-  expect((screen.getByRole("button", { name: /Update to/ }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: /Update to/ })).toBeNull();
+  expect(screen.queryByLabelText(/Access token/)).toBeNull();
 });
 
 it("names the version on the releases that have one", () => {

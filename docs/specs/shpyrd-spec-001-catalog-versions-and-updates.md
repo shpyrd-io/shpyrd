@@ -52,9 +52,18 @@ release's version, absent when unknown), `state` and `offered`.
 - `up-to-date`: running equals the catalog's current version (commit and
   digest).
 - `updating`: not running it, the target is the catalog's current version,
-  and the image is not pinned: it is rolling out, or its build failed. No
-  second offer.
-- `update-available`: otherwise.
+  and the source is that version: the entry's repository at its commit, with
+  its sub-path and overlay, and no image pinned. It is rolling out, or its
+  build failed. No second offer.
+- `update-available`: otherwise, including a project whose source was moved
+  by a deploy to another commit or branch of the entry's repository (the
+  annotations still name the target, the source does not), before and after
+  the controller records a release for it.
+- An image pinned on the project that a rollback did not pin (a deploy of an
+  image) ends the offer: empty state. A rollback's pin is told from it by the
+  history: a release of that image is followed by a release of another.
+  `up-to-date` needs the source to be the version, or the pinned image to be
+  the current release's.
 - Empty state: the server reads no catalog, or another than the one recorded,
   the entry is gone or has no commit, or the project's source is not the
   entry's git repository. The read never fails and waits at most 2 seconds
@@ -75,7 +84,9 @@ the history is taken back; else generated, defaulted, or the value given);
 then one update of the App: commit, sub-path, overlay, build, the entry's
 processes (command, arguments, port, mounts and health check of existing
 ones, whole new ones; replicas, size, sleep and autoscale kept; dropped
-ones kept), the entry's plain variables, bindings, the target annotations,
+ones kept), the entry's plain variables that the project lacks (one it has is kept as it
+is, whatever the version declares; the preview lists `envAdded` and, apart,
+`envKept`), bindings, the target annotations,
 the release note, the deploy request, and `spec.image` cleared. It is
 audited as `catalog.update`.
 

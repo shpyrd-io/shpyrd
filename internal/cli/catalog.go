@@ -357,7 +357,8 @@ func printCatalogPreview(w io.Writer, project string, p api.CatalogUpdatePreview
 	list("makes resources", p.Resources)
 	list("adds processes", p.ProcessesAdded)
 	list("changes processes", p.ProcessesChanged)
-	list("sets variables", p.EnvChanged)
+	list("adds variables", p.EnvAdded)
+	list("keeps the variables at your value", p.EnvKept)
 	for _, in := range p.Inputs {
 		switch in.Action {
 		case "ask":
@@ -378,7 +379,7 @@ func printCatalogPreview(w io.Writer, project string, p api.CatalogUpdatePreview
 			}
 		}
 	}
-	fmt.Fprintln(w, "\nIt keeps every config var, replica count and size you set, and removes nothing.")
+	fmt.Fprintln(w, "\nIt keeps every config var, variable, replica count and size the project has, and removes nothing.")
 }
 
 func newCatalogUpdateCmd(g *globalFlags) *cobra.Command {
@@ -391,7 +392,7 @@ func newCatalogUpdateCmd(g *globalFlags) *cobra.Command {
 		Short: "Update a project to the version of its entry the catalog offers",
 		Long: `Shows what the update does, asks for confirmation (--yes skips it), then
 applies it: the code moves to the offered commit and is deployed. An update
-only adds: it keeps every config var, replica count and size you set, and
+only adds: it keeps every config var, variable, replica count and size the project has, and
 removes nothing. Inputs the entry adds are given with --input NAME=value;
 see them with 'shpyrd catalog status <project>'.`,
 		Args: cobra.ExactArgs(1),

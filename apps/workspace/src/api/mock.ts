@@ -847,7 +847,7 @@ export const mock: Api = {
     if (!c) throw new ApiError(404, "this project was not made from the catalog");
     const preview: CatalogUpdatePreview = {
       entry: c.entry, state: c.state, from: c.running, to: c.offered,
-      inputs: [], volumes: [], resources: [], processesAdded: [], processesChanged: [], envChanged: [],
+      inputs: [], volumes: [], resources: [], processesAdded: [], processesChanged: [], envAdded: [], envKept: [],
       buildChanged: false, overlayChanged: false,
     };
     if (c.state !== "update-available") {
@@ -863,7 +863,8 @@ export const mock: Api = {
       ],
       volumes: ["cache"],
       processesAdded: ["worker"],
-      envChanged: ["FLUXYR_WORKERS"],
+      envAdded: ["FLUXYR_WORKERS"],
+      envKept: ["FLUXYR_HOST"],
     };
   },
   applyCatalogUpdate: async (slug, body) => {

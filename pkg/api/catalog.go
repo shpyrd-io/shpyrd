@@ -595,16 +595,61 @@ func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
 	if src := a.Spec.Source; src == nil || src.Git == nil || src.Git.URL != e.Catalog.Source.Git {
 		return pc
 	}
+	// An image deployed by hand is no longer the entry's code. An image
+	// pinned by a rollback is: the project is held on an older version.
+	pinned := a.Spec.Image != ""
+	if pinned && !heldByRollback(a) {
+		return pc
+	}
 	offered := &shpyrdv1.CatalogVersion{Entry: name, Digest: e.Digest, Commit: e.Commit, Revision: e.Revision()}
+	here := !pinned && sourceIsVersion(a, e)
 	switch {
-	case pc.Running != nil && pc.Running.Commit == e.Commit && pc.Running.Digest == e.Digest:
+	case pc.Running != nil && pc.Running.Commit == e.Commit && pc.Running.Digest == e.Digest && (here || (pinned && cur != nil && cur.Image == a.Spec.Image)):
 		pc.State = CatalogUpToDate
-	case a.Annotations[shpyrdv1.AnnotationCatalogCommit] == e.Commit && a.Annotations[shpyrdv1.AnnotationCatalogDigest] == e.Digest && a.Spec.Image == "":
-		// Set to the offered version and not held back by a pinned image:
-		// it is rolling out, or its build failed. No second offer.
+	case here && a.Annotations[shpyrdv1.AnnotationCatalogCommit] == e.Commit && a.Annotations[shpyrdv1.AnnotationCatalogDigest] == e.Digest:
+		// Set to the offered version, with its code in the source and no
+		// pinned image: it is rolling out, or its build failed. No second
+		// offer.
 		pc.State, pc.Offered = CatalogUpdating, versionView(offered)
 	default:
 		pc.State, pc.Offered = CatalogUpdateAvailable, versionView(offered)
 	}
 	return pc
+}
+
+// sourceIsVersion says the project's source is the entry's code at the
+// version's commit, with the entry's sub-path and overlay.
+func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
+	src := a.Spec.Source
+	if src == nil || src.Git == nil || src.Git.URL != e.Catalog.Source.Git || src.Git.Revision != e.Commit || src.SubPath != e.Catalog.Source.SubPath {
+		return false
+	}
+	have, want := "", ""
+	if src.Overlay != nil {
+		have = src.Overlay.SHA256
+	}
+	if e.Overlay != nil {
+		want = e.Overlay.SHA256
+	}
+	return have == want
+}
+
+// heldByRollback says the image pinned on the project is one a rollback
+// pinned, not one a person deployed: a release of that image is followed
+// in the history by a release of another, so it was left and came back. An
+// image deployed by hand is new, or, if it was a release's before, is the
+// latest one.
+func heldByRollback(a *shpyrdv1.App) bool {
+	rels := a.Status.Releases
+	for i := range rels {
+		if rels[i].Image != a.Spec.Image {
+			continue
+		}
+		for j := i + 1; j < len(rels); j++ {
+			if rels[j].Image != a.Spec.Image {
+				return true
+			}
+		}
+	}
+	return false
 }

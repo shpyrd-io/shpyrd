@@ -73,7 +73,7 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
     <Stack gap="normal">
       <Alert>
         <AlertDescription>
-          The catalog offers {versionText(p.to)}. Applying it moves the code to that commit and deploys it. It keeps every config var, replica count and size you set, and removes nothing.
+          The catalog offers {versionText(p.to)}. Applying it moves the code to that commit and deploys it. It keeps every config var, variable, replica count and size the project has, and removes nothing.
         </AlertDescription>
       </Alert>
       <ul className="grid gap-1 text-sm">
@@ -83,7 +83,7 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
         {p.resources.length > 0 && <li>Makes resources: {p.resources.join(", ")}.</li>}
         {p.processesAdded.length > 0 && <li>Adds processes: {p.processesAdded.join(", ")}.</li>}
         {p.processesChanged.length > 0 && <li>Changes processes: {p.processesChanged.join(", ")}.</li>}
-        {p.envChanged.length > 0 && <li>Sets variables: {p.envChanged.join(", ")}.</li>}
+        {p.envAdded.length > 0 && <li>Adds variables: {p.envAdded.join(", ")}.</li>}
         {p.inputs.filter((i) => i.action === "generate").map((i) => (
           <li key={i.name}>Generates {i.name}.</li>
         ))}
@@ -94,17 +94,27 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
           <li key={i.name}>Sets {i.name}{i.default ? ` to ${i.default}` : " to its default"}.</li>
         ))}
       </ul>
-      {asked.map((i) => (
-        <InputField key={i.name} input={i} value={values[i.name] ?? ""} disabled={!allowed || apply.isPending} onChange={(v) => setValues((cur) => ({ ...cur, [i.name]: v }))} />
-      ))}
-      {makes && !perms.resource && perms.deploy && (
-        <p className="text-sm text-muted-foreground">This update makes volumes or resources, which needs the permission to manage resources.</p>
+      {p.envKept.length > 0 && (
+        <p className="text-sm text-muted-foreground">Kept at the project&apos;s value, not the new version&apos;s: {p.envKept.join(", ")}.</p>
       )}
-      <div>
-        <Button disabled={!allowed || missing || apply.isPending} onClick={() => apply.mutate()}>
-          Update to {versionText(p.to)}
-        </Button>
-      </div>
+      {allowed ? (
+        <>
+          {asked.map((i) => (
+            <InputField key={i.name} input={i} value={values[i.name] ?? ""} disabled={apply.isPending} onChange={(v) => setValues((cur) => ({ ...cur, [i.name]: v }))} />
+          ))}
+          <div>
+            <Button disabled={missing || apply.isPending} onClick={() => apply.mutate()}>
+              Update to {versionText(p.to)}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {perms.deploy && perms.config
+            ? "This update makes volumes or resources, which needs the permission to manage resources."
+            : "Applying an update needs the permission to deploy the project and change its config."}
+        </p>
+      )}
     </Stack>
   );
 }
