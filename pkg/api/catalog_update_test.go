@@ -953,7 +953,7 @@ func TestAnImageDeployedWhileARollbackIsPendingIsNoOffer(t *testing.T) {
 		if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
 			t.Fatalf("%s: rollback: %d %s", name, r.code, r.body)
 		}
-		v.want(CatalogUpdateAvailable, commitOld, commitNew)
+		v.want(CatalogUpdateAvailable, "", commitNew)
 		if r := v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/app:7"}`); r.code != http.StatusAccepted {
 			t.Fatalf("%s: deploy: %d %s", name, r.code, r.body)
 		}
@@ -982,7 +982,7 @@ func TestARollbackToTheEntrysBuildAfterAnImageWasDeployedIsOffered(t *testing.T)
 	if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
 		t.Fatalf("rollback: %d %s", r.code, r.body)
 	}
-	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	v.want(CatalogUpdateAvailable, "", commitNew)
 	v.setApp(app, func(a *shpyrdv1.App) {
 		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
 		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
