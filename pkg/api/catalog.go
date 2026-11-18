@@ -29,8 +29,9 @@ import (
 // install makes the project the entry describes, step by step, as a
 // person would by hand: the project, its volumes and resources, the
 // config vars the person gave, then the source, which is the first
-// deploy; from then on it is a project like any other, following the
-// upstream branch.
+// deploy, pinned to the commit the catalog published; from then on it is
+// a project like any other, and the catalog says when it publishes a
+// different version of the entry.
 
 // CatalogView is the catalog as the dashboard lists it.
 type CatalogView struct {
@@ -483,4 +484,124 @@ func sortedNames(maps ...map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// The states of a project from the catalog.
+const (
+	CatalogUpToDate        = "up-to-date"
+	CatalogUpdateAvailable = "update-available"
+	CatalogUpdating        = "updating"
+)
+
+// CatalogVersionView is one version of an entry: what a person reads as
+// "v1.4.0 (3f2a9c1b8d7e)".
+type CatalogVersionView struct {
+	// Revision is the name the entry gave the commit (a tag or a branch).
+	Revision    string `json:"revision,omitempty"`
+	Commit      string `json:"commit"`
+	ShortCommit string `json:"shortCommit"`
+	Digest      string `json:"digest"`
+}
+
+// ProjectCatalog is what a project from the catalog says of it: the entry,
+// the version its current release runs (absent when that is not known: a
+// project installed before versions, or deployed from other code), and,
+// when the catalog is read and still offers the project's entry, whether
+// it is up to date, has an update available, or is rolling the offered
+// version out.
+type ProjectCatalog struct {
+	Entry   string              `json:"entry"`
+	Running *CatalogVersionView `json:"running,omitempty"`
+	// State is empty when the catalog offers the project nothing: it is not
+	// read, or is another one, the entry is gone or has no commit, or the
+	// project's source is no longer the entry's repository.
+	State   string              `json:"state,omitempty"`
+	Offered *CatalogVersionView `json:"offered,omitempty"`
+}
+
+func versionView(v *shpyrdv1.CatalogVersion) *CatalogVersionView {
+	if v == nil {
+		return nil
+	}
+	return &CatalogVersionView{Revision: v.Revision, Commit: v.Commit, ShortCommit: shortCommit(v.Commit), Digest: v.Digest}
+}
+
+func shortCommit(c string) string {
+	if len(c) > 12 {
+		return c[:12]
+	}
+	return c
+}
+
+// How long a project read waits for the catalog when it has to be read
+// again; the fetcher serves from memory the rest of the time.
+const catalogReadWait = 2 * time.Second
+
+// catalogLookup reads the catalog once for the projects of one request,
+// and only if one of them comes from it.
+type catalogLookup struct {
+	s    *Server
+	ctx  context.Context
+	done bool
+	ix   *catalog.Index
+	url  string
+}
+
+func (s *Server) catalogLookup(ctx context.Context) *catalogLookup {
+	return &catalogLookup{s: s, ctx: ctx}
+}
+
+func (l *catalogLookup) index() (*catalog.Index, string) {
+	if l.done {
+		return l.ix, l.url
+	}
+	l.done = true
+	if l.s.appCatalog == nil {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(l.ctx, catalogReadWait)
+	defer cancel()
+	ix, err := l.s.appCatalog.Index(ctx)
+	if err != nil || ix == nil {
+		return nil, ""
+	}
+	l.ix, l.url = ix, l.s.appCatalog.Status().URL
+	return l.ix, l.url
+}
+
+// of is the catalog state of a project, or nil when it is not from the
+// catalog. It never fails: whatever cannot be read leaves State empty.
+func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
+	name := a.Annotations[shpyrdv1.AnnotationCatalogEntry]
+	if name == "" {
+		return nil
+	}
+	pc := &ProjectCatalog{Entry: name}
+	cur := a.CurrentRelease()
+	if cur != nil && cur.Catalog != nil && cur.Catalog.Entry == name {
+		pc.Running = versionView(cur.Catalog)
+	}
+	ix, url := l.index()
+	if ix == nil || url != a.Annotations[shpyrdv1.AnnotationCatalogSource] {
+		return pc
+	}
+	e := ix.Find(name)
+	if e == nil || e.Commit == "" {
+		return pc
+	}
+	if src := a.Spec.Source; src == nil || src.Git == nil || src.Git.URL != e.Catalog.Source.Git {
+		return pc
+	}
+	offered := &shpyrdv1.CatalogVersion{Entry: name, Digest: e.Digest, Commit: e.Commit, Revision: e.Revision()}
+	switch {
+	case pc.Running != nil && pc.Running.Commit == e.Commit && pc.Running.Digest == e.Digest:
+		pc.State = CatalogUpToDate
+	case a.Annotations[shpyrdv1.AnnotationCatalogCommit] == e.Commit && a.Annotations[shpyrdv1.AnnotationCatalogDigest] == e.Digest && a.Spec.Image == "":
+		// Set to the offered version and not held back by a pinned image:
+		// it is rolling out, or its build failed. No second offer.
+		pc.State, pc.Offered = CatalogUpdating, versionView(offered)
+	default:
+		pc.State, pc.Offered = CatalogUpdateAvailable, versionView(offered)
+	}
+	return pc
 }

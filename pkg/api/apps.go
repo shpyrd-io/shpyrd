@@ -46,16 +46,18 @@ type AppSummary struct {
 	Featured    bool   `json:"featured,omitempty"`
 	// CatalogEntry names the catalog entry the project was installed
 	// from, when it was (pkg/catalog).
-	CatalogEntry string                            `json:"catalogEntry,omitempty"`
-	Namespace    string                            `json:"namespace"`
-	Phase        string                            `json:"phase"`
-	Message      string                            `json:"message,omitempty"`
-	URL          string                            `json:"url,omitempty"`
-	Digest       string                            `json:"digest,omitempty"`
-	Release      int                               `json:"release"`
-	Source       string                            `json:"source,omitempty"`
-	Processes    map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
-	CreatedAt    time.Time                         `json:"createdAt"`
+	CatalogEntry string `json:"catalogEntry,omitempty"`
+	// Catalog is the project's state against the catalog it came from.
+	Catalog   *ProjectCatalog                   `json:"catalog,omitempty"`
+	Namespace string                            `json:"namespace"`
+	Phase     string                            `json:"phase"`
+	Message   string                            `json:"message,omitempty"`
+	URL       string                            `json:"url,omitempty"`
+	Digest    string                            `json:"digest,omitempty"`
+	Release   int                               `json:"release"`
+	Source    string                            `json:"source,omitempty"`
+	Processes map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
+	CreatedAt time.Time                         `json:"createdAt"`
 	// Exposure is "external" (public LB, default) or "internal" (private LB,
 	// RFC-0036). Empty means external.
 	Exposure string `json:"exposure,omitempty"`
@@ -146,12 +148,14 @@ type AppDetail struct {
 	// CatalogEntry names the catalog entry the project was installed
 	// from, when it was (pkg/catalog).
 	CatalogEntry string `json:"catalogEntry,omitempty"`
-	Icon         string `json:"icon,omitempty"`
-	IconColor    string `json:"iconColor,omitempty"`
-	IconURL      string `json:"iconUrl,omitempty"`
-	IconType     string `json:"iconType,omitempty"`
-	Domain       string `json:"domain,omitempty"`
-	Namespace    string `json:"namespace"`
+	// Catalog is the project's state against the catalog it came from.
+	Catalog   *ProjectCatalog `json:"catalog,omitempty"`
+	Icon      string          `json:"icon,omitempty"`
+	IconColor string          `json:"iconColor,omitempty"`
+	IconURL   string          `json:"iconUrl,omitempty"`
+	IconType  string          `json:"iconType,omitempty"`
+	Domain    string          `json:"domain,omitempty"`
+	Namespace string          `json:"namespace"`
 	// InternalHost is the project's qualified internal name (#311),
 	// <slug>.<workspace>.internal; <slug>.internal is the short form from
 	// inside the workspace.
@@ -224,6 +228,9 @@ type ReleaseView struct {
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 	Processes   []string  `json:"processes,omitempty"`
+	// Catalog is the version of the catalog entry the release runs, when
+	// it is known.
+	Catalog *CatalogVersionView `json:"catalog,omitempty"`
 	// Kind classifies the release: deploy, config or rollback.
 	Kind string `json:"kind"`
 }
@@ -306,7 +313,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 		}
 		d.Status.Releases = append(d.Status.Releases, ReleaseView{
 			Number: r.Number, Digest: dg, Build: buildByDigest[dg], Source: r.Source, Description: r.Description,
-			CreatedAt: r.CreatedAt.Time, Processes: r.Processes, Kind: releaseKind(prev, r),
+			CreatedAt: r.CreatedAt.Time, Processes: r.Processes, Catalog: versionView(r.Catalog), Kind: releaseKind(prev, r),
 		})
 	}
 	return d
@@ -343,12 +350,14 @@ func (s *Server) listApps(c *gin.Context) {
 	out := make([]AppSummary, 0, len(list.Items))
 	ws := s.workspace(c)
 	teams := s.teamsByProject(c.Request.Context(), ws)
+	cat := s.catalogLookup(c.Request.Context())
 	for i := range list.Items {
 		if workspaceOf(&list.Items[i]) != ws || !s.canViewApp(c, &list.Items[i]) {
 			continue
 		}
 		sum := summarize(&list.Items[i])
 		sum.Teams = teams[projectGrantKey(&list.Items[i])]
+		sum.Catalog = cat.of(&list.Items[i])
 		out = append(out, sum)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -452,7 +461,9 @@ func (s *Server) getApp(c *gin.Context) {
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, s.projectDetail(c.Request.Context(), app))
+	d := s.projectDetail(c.Request.Context(), app)
+	d.Catalog = s.catalogLookup(c.Request.Context()).of(app)
+	c.JSON(http.StatusOK, d)
 }
 
 // CreateAppRequest creates a project: namespace app-<slug> plus the App.
