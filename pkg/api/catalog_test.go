@@ -709,3 +709,26 @@ func TestAProjectNotFromTheCatalogReadsAsBefore(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTheEntryViewCarriesTheCommitTheCatalogPublished(t *testing.T) {
+	s, _ := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true)
+	var f CatalogEntryView
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &f) != nil || f.Commit != publishedCommit {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, s, "GET", "/api/catalog", "", true)
+	var view CatalogView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range view.Entries {
+		if e.Commit == "" {
+			t.Fatalf("%s has no commit in the list", e.Name)
+		}
+	}
+	s, _ = catalogServer(t)
+	if rec := do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true); strings.Contains(rec.Body.String(), `"commit"`) {
+		t.Fatalf("an entry without a commit says none: %s", rec.Body.String())
+	}
+}

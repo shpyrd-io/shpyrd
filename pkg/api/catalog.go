@@ -43,8 +43,11 @@ type CatalogView struct {
 
 // CatalogEntryView is one entry, as the dashboard and the CLI show it.
 type CatalogEntryView struct {
-	Name        string   `json:"name"`
-	Digest      string   `json:"digest"`
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	// Commit is the commit the catalog published for the entry; with the
+	// digest, its version. Empty when the catalog published none.
+	Commit      string   `json:"commit,omitempty"`
 	DisplayName string   `json:"displayName"`
 	Description string   `json:"description"`
 	Category    string   `json:"category"`
@@ -93,7 +96,7 @@ type CatalogInstallResponse struct {
 
 func (s *Server) catalogEntryView(e *catalog.IndexEntry) CatalogEntryView {
 	v := CatalogEntryView{
-		Name: e.Name, Digest: e.Digest, DisplayName: e.Catalog.Name, Description: e.Catalog.Description,
+		Name: e.Name, Digest: e.Digest, Commit: e.Commit, DisplayName: e.Catalog.Name, Description: e.Catalog.Description,
 		Category: e.Catalog.Category, Tags: e.Catalog.Tags, Icon: e.Catalog.Icon, IconColor: e.Catalog.Color,
 		Publisher: e.Catalog.Publisher, License: e.Catalog.License, Homepage: e.Catalog.Homepage,
 		Source: catalog.Source{Git: e.Catalog.Source.Git, Revision: e.Revision(), SubPath: e.Catalog.Source.SubPath},
