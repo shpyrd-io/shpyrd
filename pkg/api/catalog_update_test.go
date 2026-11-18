@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -323,48 +325,141 @@ func TestNothingIsAppliedWhenThereIsNothingToApply(t *testing.T) {
 	}
 }
 
+// settle plays the controller recording release n: the pending config vars
+// become the live ones and are deleted, and the live ones are copied to the
+// release's snapshot (internal/controller/snapshots.go, snapshotRelease).
+func (v *versionedCatalog) settle(app *shpyrdv1.App, n int) {
+	v.t.Helper()
+	ctx := context.Background()
+	a := v.fresh(app)
+	sec, pending, err := configvars.Read(ctx, v.cr, a)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	data := map[string][]byte{}
+	for k, b := range sec.Data {
+		data[k] = append([]byte(nil), b...)
+	}
+	live := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: a.EnvSecretName(), Namespace: a.Namespace}}
+	if err := v.cr.Get(ctx, client.ObjectKeyFromObject(live), live); err == nil {
+		live.Data = data
+		err = v.cr.Update(ctx, live)
+	} else {
+		live.Data = data
+		err = v.cr.Create(ctx, live)
+	}
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	if pending {
+		if err := v.cr.Delete(ctx, sec); err != nil {
+			v.t.Fatal(err)
+		}
+	}
+	snap := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: a.ReleaseSnapshotName(n), Namespace: a.Namespace}, Data: data}
+	if err := v.cr.Create(ctx, snap); err != nil {
+		v.t.Fatal(err)
+	}
+}
+
+// rollbackConfig plays the controller restoring release n's config vars:
+// the live Secret becomes the snapshot, whatever it held before
+// (internal/controller/snapshots.go, restoreRelease).
+func (v *versionedCatalog) rollbackConfig(app *shpyrdv1.App, n int) {
+	v.t.Helper()
+	ctx := context.Background()
+	a := v.fresh(app)
+	snap := &corev1.Secret{}
+	if err := v.cr.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: a.ReleaseSnapshotName(n)}, snap); err != nil {
+		v.t.Fatal(err)
+	}
+	live := &corev1.Secret{}
+	if err := v.cr.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: a.EnvSecretName()}, live); err != nil {
+		v.t.Fatal(err)
+	}
+	live.Data = map[string][]byte{}
+	for k, b := range snap.Data {
+		live.Data[k] = append([]byte(nil), b...)
+	}
+	if err := v.cr.Update(ctx, live); err != nil {
+		v.t.Fatal(err)
+	}
+}
+
 func TestApplyingAfterARollbackReleasesThePinAndMakesNothingAgain(t *testing.T) {
 	v := newVersionedCatalog(t)
 	app := v.installedAndRunning()
+	v.settle(app, 1)
 	v.publishNext(commitNew, fluxyrNext())
 	digest := v.currentDigest()
 	if r := v.apply(`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
 		t.Fatalf("%d %s", r.code, r.body)
 	}
-	vars := v.vars(app)
-	// The controller records the release; then a rollback to release 1.
+	// The controller records release 2 with its config vars, then a rollback
+	// to release 1 restores release 1's: what the update added is gone.
+	updatedVars := v.vars(app)
+	v.settle(app, 2)
 	v.setApp(app, func(a *shpyrdv1.App) {
 		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digest, Commit: commitNew, Revision: "main"})
 		a.Spec.Image = "r/a@sha256:1"
+		a.Spec.Bindings = nil // the rollback restores release 1's bindings
 		ranRelease(a, 3, "r/a@sha256:1", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: a.Status.Releases[0].Catalog.Digest, Commit: commitOld, Revision: "main"})
 	})
+	v.rollbackConfig(app, 1)
+	rolled := v.vars(app)
+	if rolled["NEW_TOKEN"] != "" || rolled["NEW_NEEDED"] != "" || rolled["OPENROUTER_API_KEY"] == "" {
+		t.Fatalf("a rollback leaves release 1's config vars: %v", keysOf(rolled))
+	}
 	v.want(CatalogUpdateAvailable, commitOld, commitNew)
-	// Everything the first update made is still there: nothing to make.
+
+	// Volumes and the resource are still there, so nothing is made again;
+	// the values the project had are taken back, not generated again.
 	rec := do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
 	var p CatalogUpdatePreview
 	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Volumes) != 0 || len(p.Resources) != 0 || len(p.Inputs) != 0 {
+	if len(p.Volumes) != 0 || len(p.Resources) != 0 {
 		t.Fatalf("nothing is made again: %+v", p)
+	}
+	actions := map[string]string{}
+	for _, in := range p.Inputs {
+		actions[in.Name] = in.Action
+	}
+	if !reflect.DeepEqual(actions, map[string]string{"NEW_TOKEN": "restore", "NEW_MODE": "restore", "NEW_NEEDED": "restore"}) {
+		t.Fatalf("inputs %v", actions)
 	}
 	r := v.apply(`{"digest":"` + digest + `"}`)
 	if r.code != http.StatusAccepted {
 		t.Fatalf("%d %s", r.code, r.body)
 	}
 	got := v.fresh(app)
-	if got.Spec.Image != "" || got.Spec.Source.Git.Revision != commitNew || got.Annotations[configvars.AnnotationDeployRequested] == "" {
-		t.Fatalf("the pin is not released: %q %+v", got.Spec.Image, got.Spec.Source.Git)
+	if got.Spec.Image != "" || got.Spec.Source.Git.Revision != commitNew || !bound(got, "Widget", "cache") {
+		t.Fatalf("the pin is not released or the resource not bound again: %q %+v", got.Spec.Image, got.Spec.Bindings)
 	}
-	if after := v.vars(app); !reflect.DeepEqual(after, vars) {
-		t.Fatal("config vars were made or changed again")
+	after := v.vars(app)
+	for _, k := range []string{"NEW_TOKEN", "NEW_MODE", "NEW_NEEDED", "VAULT_ENCRYPTION_KEY", "OPENROUTER_API_KEY"} {
+		if after[k] == "" || after[k] != updatedVars[k] {
+			t.Fatalf("%s is not what the project had: %q, want %q", k, after[k], updatedVars[k])
+		}
 	}
 	var vols shpyrdv1.VolumeList
 	if err := v.cr.List(context.Background(), &vols, client.InNamespace(app.Namespace)); err != nil || len(vols.Items) != 2 {
 		t.Fatalf("volumes %d", len(vols.Items))
 	}
-	// Now it is rolling out to the new version.
 	v.want(CatalogUpdating, commitOld, commitNew)
+
+	// An input no earlier release held is still made new.
+	v.publishNext(commitNew, strings.Replace(fluxyrNext(), "  inputs:\n", "  inputs:\n    - name: BRAND_NEW\n      generate: 4\n", 1))
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Annotations[shpyrdv1.AnnotationCatalogDigest] = "sha256:old"
+	})
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `"}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	if got := v.vars(app)["BRAND_NEW"]; len(got) != 8 {
+		t.Fatalf("a new generated input is generated: %q", got)
+	}
 }
 
 func TestWhoMayPreviewAndApplyAnUpdate(t *testing.T) {

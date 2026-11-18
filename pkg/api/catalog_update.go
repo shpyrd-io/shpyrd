@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -79,7 +80,9 @@ type CatalogUpdateInput struct {
 	Label    string `json:"label,omitempty"`
 	Secret   bool   `json:"secret,omitempty"`
 	Required bool   `json:"required,omitempty"`
-	// Action is "ask" (the person gives it), "generate" or "default".
+	// Action is "ask" (the person gives it), "generate", "default", or
+	// "restore": the project had a value in an earlier release, which a
+	// rollback took away, and it is taken back.
 	Action  string `json:"action"`
 	Default string `json:"default,omitempty"`
 }
@@ -113,6 +116,10 @@ type updatePlan struct {
 
 	// known: the input names the project already has as config vars.
 	existing map[string]bool
+	// restored holds the value of a new input the project had in an
+	// earlier release (a rollback removes what a later release added to
+	// the config vars): it is taken back, not made again.
+	restored map[string]string
 	volumes  []catalog.Volume
 	// resources to make, with their types.
 	resources []catalog.Resource
@@ -195,12 +202,21 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 	for k := range sec.Data {
 		p.existing[k] = true
 	}
+	var newInputs []string
+	for _, in := range e.Catalog.Inputs {
+		if !p.existing[in.Name] {
+			newInputs = append(newInputs, in.Name)
+		}
+	}
+	p.restored = s.earlierValues(ctx, app, newInputs)
 	for _, in := range e.Catalog.Inputs {
 		if p.existing[in.Name] {
 			continue
 		}
 		ui := CatalogUpdateInput{Name: in.Name, Label: in.Label, Secret: in.Secret || in.Generate > 0, Required: in.Required}
 		switch {
+		case p.restored[in.Name] != "":
+			ui.Action = "restore"
 		case in.Generate > 0:
 			ui.Action = "generate"
 		case in.Default != "":
@@ -401,7 +417,10 @@ func (s *Server) catalogUpdateApply(c *gin.Context) {
 	for _, ui := range plan.preview.Inputs {
 		in := asked[ui.Name]
 		value := strings.TrimSpace(req.Inputs[in.Name])
+		restored := plan.restored[in.Name]
 		switch {
+		case restored != "" && (in.Generate > 0 || value == ""):
+			value = restored
 		case in.Generate > 0:
 			b := make([]byte, in.Generate)
 			if _, err := rand.Read(b); err != nil {
@@ -564,4 +583,31 @@ func setEnvValue(env *[]corev1.EnvVar, v corev1.EnvVar) {
 		}
 	}
 	*env = append(*env, v)
+}
+
+// earlierValues finds, for each name, the value the project's config vars
+// had in the newest earlier release that held one. A rollback replaces
+// the live config vars with the snapshot of the release it returns to
+// (internal/controller/snapshots.go, restoreRelease), so a variable a
+// later release added, a generated key above all, is gone from them; the
+// snapshots of the releases still in the history keep it. Reading is
+// best effort: a snapshot that cannot be read is skipped.
+func (s *Server) earlierValues(ctx context.Context, app *shpyrdv1.App, names []string) map[string]string {
+	out := map[string]string{}
+	if len(names) == 0 {
+		return out
+	}
+	for i := len(app.Status.Releases) - 1; i >= 0 && len(out) < len(names); i-- {
+		var snap corev1.Secret
+		key := types.NamespacedName{Namespace: app.Namespace, Name: app.ReleaseSnapshotName(app.Status.Releases[i].Number)}
+		if err := s.apps.Get(ctx, key, &snap); err != nil {
+			continue
+		}
+		for _, n := range names {
+			if _, have := out[n]; !have && len(snap.Data[n]) > 0 {
+				out[n] = string(snap.Data[n])
+			}
+		}
+	}
+	return out
 }
