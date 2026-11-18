@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/catalog"
@@ -79,6 +81,10 @@ func TestCatalogValidateAndPublishNeedNoServer(t *testing.T) {
 		t.Fatalf("validate: %v\n%s", err, text)
 	}
 
+	defer func(prev catalog.RefLister) { catalogRefs = prev }(catalogRefs)
+	catalogRefs = func(context.Context, string) (map[string]string, error) {
+		return map[string]string{"refs/heads/main": strings.Repeat("a", 40)}, nil
+	}
 	out := t.TempDir()
 	text, err = runCLI(t, "catalog", "publish", dir, "--out", out)
 	if err != nil || !strings.Contains(text, "Published 1 entries") || !strings.Contains(text, "fluxyr (overlay: Dockerfile)") {
@@ -146,5 +152,35 @@ func TestCatalogListShowAndInstallThroughTheAPI(t *testing.T) {
 	stdout, err := runCLI(t, "catalog", "list", "--jq", ".entries[].name")
 	if err != nil || stdout != "fluxyr\n" {
 		t.Fatalf("--jq: %v %q", err, stdout)
+	}
+}
+
+func TestCatalogPublishSaysTheRevisionAndTheCommit(t *testing.T) {
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	dir := t.TempDir()
+	writeCatalogEntry(t, dir, "tagged", strings.Replace(fluxyrEntryYAML, "https://github.com/shpyrd-io/fluxyr", "https://github.com/shpyrd-io/fluxyr\n    revision: v1", 1), map[string]string{})
+	writeCatalogEntry(t, dir, "branched", fluxyrEntryYAML, map[string]string{})
+	list := func(_ context.Context, _ string) (map[string]string, error) {
+		return map[string]string{"refs/heads/main": commit, "refs/tags/v1": strings.Repeat("b", 40)}, nil
+	}
+	root := New()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	cmd, _, err := root.Find([]string{"catalog", "publish"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	g := &globalFlags{}
+	if err := publishCatalog(cmd, g, dir, t.TempDir(), time.Now(), list); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "tagged: v1 at bbbbbbbbbbbb\n") || !strings.Contains(text, "branched: main at 0123456789ab (BRANCH)") || !strings.Contains(text, "1 entry names a branch") {
+		t.Fatalf("publish said:\n%s", text)
+	}
+	if strings.Contains(text, "tagged: v1 at bbbbbbbbbbbb (BRANCH)") {
+		t.Fatalf("a tag is not marked:\n%s", text)
 	}
 }

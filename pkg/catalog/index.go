@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // IndexFile is the file the catalog is published as, at its source's
@@ -36,11 +39,15 @@ type Index struct {
 }
 
 // IndexEntry is one entry of the index: the entry's shpyrd.yaml, its
-// name (its folder) and digest (its version: the content of the folder,
-// hashed), and where its files are, as paths from the index.
+// name (its folder), its digest (the content of the folder, hashed), the
+// commit of the code (together they are a version of the entry), and
+// where its files are, as paths from the index.
 type IndexEntry struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
+	// Commit is the full commit the entry's revision named when the
+	// catalog was published. An index written before versions have none.
+	Commit string `json:"commit,omitempty"`
 	Entry
 	Readme  string   `json:"readme,omitempty"`
 	Icon    string   `json:"iconFile,omitempty"`
@@ -100,6 +107,9 @@ func ParseIndex(b []byte) (*Index, error) {
 		if err := e.Validate(e.Name, e.overlayFiles()); err != nil {
 			return nil, err
 		}
+		if e.Commit != "" && !IsFullCommit(e.Commit) {
+			return nil, fmt.Errorf("%s: entry %s: commit %q is not a full commit name (40 or 64 lowercase hexadecimal digits)", IndexFile, e.Name, e.Commit)
+		}
 	}
 	return &ix, nil
 }
@@ -111,45 +121,148 @@ func (e *IndexEntry) overlayFiles() []string {
 	return e.Overlay.Files
 }
 
+// RefLister lists the branches and tags of the git repository at url, as
+// `git ls-remote` does: ref name (refs/heads/main, refs/tags/v1) to commit.
+// PublishResolved takes one so that tests, and a catalog that wants no
+// network, can say what a repository holds.
+type RefLister func(ctx context.Context, url string) (map[string]string, error)
+
+// Resolved is what publishing found for one entry: the revision it names,
+// the commit that is, and whether the revision is a branch (a branch
+// moves; the version stays the commit it had at publish).
+type Resolved struct {
+	Name     string
+	Revision string
+	Commit   string
+	Branch   bool
+}
+
+// IsFullCommit says s is a full commit name: 40 (SHA-1) or 64 (SHA-256)
+// lowercase hexadecimal digits.
+func IsFullCommit(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // Publish reads the entry folders under dir (one per entry, named by it)
 // and writes the index and the entries' files to out: index.json, and
 // entries/<name>/{README.md,icon.*,overlay.tgz}. The entries are
 // validated; the first one that is not stops the build. It returns the
-// index written.
+// index written. The entries carry no commit: PublishResolved adds it.
 func Publish(dir, out string, now time.Time) (*Index, error) {
+	ix, _, err := PublishResolved(context.Background(), dir, out, now, nil)
+	return ix, err
+}
+
+// PublishResolved is Publish, and also resolves each entry's revision to
+// the commit it names now, with list, and writes that commit in the
+// index. A revision that is a full commit needs no listing. When a
+// revision cannot be found, or a repository cannot be listed, nothing is
+// written, and the error names every such entry and its revision. With a
+// nil list, entries are published without a commit.
+func PublishResolved(ctx context.Context, dir, out string, now time.Time, list RefLister) (*Index, []Resolved, error) {
 	folders, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ix := &Index{Version: IndexVersion, GeneratedAt: now.UTC().Truncate(time.Second)}
+	var read []*Folder
+	var resolved []Resolved
+	var problems []string
+	listings := map[string]map[string]string{}
+	listErrs := map[string]error{}
 	for _, f := range folders {
 		if !f.IsDir() || strings.HasPrefix(f.Name(), ".") {
 			continue
 		}
 		e, err := ReadEntry(filepath.Join(dir, f.Name()))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := e.write(filepath.Join(dir, f.Name()), out); err != nil {
-			return nil, err
+		if list != nil {
+			r, err := resolve(ctx, e, list, listings, listErrs)
+			if err != nil {
+				problems = append(problems, err.Error())
+			} else {
+				e.Commit = r.Commit
+				resolved = append(resolved, r)
+			}
+		}
+		read = append(read, e)
+	}
+	if len(problems) > 0 {
+		plural := "ies"
+		if len(problems) == 1 {
+			plural = "y"
+		}
+		return nil, nil, fmt.Errorf("no index written; the revision of %d entr%s cannot be resolved:\n  - %s", len(problems), plural, strings.Join(problems, "\n  - "))
+	}
+	for _, e := range read {
+		if err := e.write(filepath.Join(dir, e.Name), out); err != nil {
+			return nil, nil, err
 		}
 		ix.Entries = append(ix.Entries, e.IndexEntry)
 	}
 	if len(ix.Entries) == 0 {
-		return nil, fmt.Errorf("%s holds no entry: an entry is a folder with a %s", dir, EntryFile)
+		return nil, nil, fmt.Errorf("%s holds no entry: an entry is a folder with a %s", dir, EntryFile)
 	}
 	sort.Slice(ix.Entries, func(i, j int) bool { return ix.Entries[i].Name < ix.Entries[j].Name })
+	sort.Slice(resolved, func(i, j int) bool { return resolved[i].Name < resolved[j].Name })
 	b, err := json.MarshalIndent(ix, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := os.WriteFile(filepath.Join(out, IndexFile), append(b, '\n'), 0o644); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ix, nil
+	return ix, resolved, nil
+}
+
+// resolve finds the commit e's revision names. A full commit is taken as
+// it is; anything else is looked up among the repository's refs, listed
+// once per repository.
+func resolve(ctx context.Context, e *Folder, list RefLister, listings map[string]map[string]string, listErrs map[string]error) (Resolved, error) {
+	rev := e.Revision()
+	r := Resolved{Name: e.Name, Revision: rev}
+	if lower := strings.ToLower(rev); IsFullCommit(lower) {
+		r.Commit = lower
+		return r, nil
+	}
+	repo := e.Catalog.Source.Git
+	refs, ok := listings[repo]
+	if !ok {
+		if err, failed := listErrs[repo]; failed {
+			return r, fmt.Errorf("entry %s, revision %q: %w", e.Name, rev, err)
+		}
+		var err error
+		refs, err = list(ctx, repo)
+		if err != nil {
+			err = fmt.Errorf("cannot read the repository %s: %w", repo, err)
+			listErrs[repo] = err
+			return r, fmt.Errorf("entry %s, revision %q: %w", e.Name, rev, err)
+		}
+		listings[repo] = refs
+	}
+	commit, found := gitauth.ResolveBranch(refs, rev)
+	if !found {
+		return r, fmt.Errorf("entry %s, revision %q: no branch, tag or full commit of that name in %s", e.Name, rev, repo)
+	}
+	r.Commit = commit
+	_, r.Branch = refs["refs/heads/"+rev]
+	if strings.HasPrefix(rev, "refs/heads/") {
+		r.Branch = true
+	}
+	return r, nil
 }
 
 // Folder is an entry read from its folder: what the index says of it,

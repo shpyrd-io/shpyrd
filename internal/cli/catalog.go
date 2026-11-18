@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/catalog"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // The catalog (pkg/catalog): the applications a project can be made
@@ -322,25 +324,74 @@ func newCatalogPublishCmd(g *globalFlags) *cobra.Command {
 		Long: `Reads the entry folders under <dir> and writes to --out what a web server
 publishes as the catalog: index.json, and under entries/<name>/ the readme,
 the icon and the overlay archive of each entry. The server reads the index
-by its address (SHPYRD_CATALOG_URL).`,
+by its address (SHPYRD_CATALOG_URL).
+
+A version of an entry is its folder together with the commit its revision
+names when you publish. Publishing looks each entry's repository up and
+writes that commit in the index; a revision that cannot be found stops the
+publish, and nothing is written. A revision that is a full commit needs no
+lookup. A branch is accepted, but the version is then the branch's head at
+the moment you publish: pin a tag or a commit for a version that does not
+depend on when the catalog was published.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ix, err := catalog.Publish(args[0], out, time.Now())
-			if err != nil {
-				return err
-			}
-			return g.print(cmd, ix, func(w io.Writer) {
-				fmt.Fprintf(w, "Published %d entries to %s\n", len(ix.Entries), filepath.Join(out, catalog.IndexFile))
-				for _, e := range ix.Entries {
-					line := "  " + e.Name
-					if e.Overlay != nil {
-						line += " (overlay: " + strings.Join(e.Overlay.Files, ", ") + ")"
-					}
-					fmt.Fprintln(w, line)
-				}
-			})
+			return publishCatalog(cmd, g, args[0], out, time.Now(), catalogRefs)
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "public", "the folder to write")
 	return cmd
+}
+
+// catalogRefs lists a public repository's branches and tags over the
+// network; tests of the command replace it.
+var catalogRefs catalog.RefLister = lsRemoteRefs
+
+func lsRemoteRefs(ctx context.Context, url string) (map[string]string, error) {
+	return gitauth.LsRemote(ctx, url, gitauth.Build{})
+}
+
+// publishCatalog is `catalog publish`, with the repository listing given
+// so that tests need no network.
+func publishCatalog(cmd *cobra.Command, g *globalFlags, dir, out string, now time.Time, list catalog.RefLister) error {
+	ix, resolved, err := catalog.PublishResolved(cmd.Context(), dir, out, now, list)
+	if err != nil {
+		return err
+	}
+	byName := map[string]catalog.Resolved{}
+	for _, r := range resolved {
+		byName[r.Name] = r
+	}
+	return g.print(cmd, ix, func(w io.Writer) {
+		fmt.Fprintf(w, "Published %d entries to %s\n", len(ix.Entries), filepath.Join(out, catalog.IndexFile))
+		branches := 0
+		for _, e := range ix.Entries {
+			line := "  " + e.Name
+			if e.Overlay != nil {
+				line += " (overlay: " + strings.Join(e.Overlay.Files, ", ") + ")"
+			}
+			if r, ok := byName[e.Name]; ok {
+				line += ": " + r.Revision + " at " + shortCommit(r.Commit)
+				if r.Branch {
+					line += " (BRANCH)"
+					branches++
+				}
+			}
+			fmt.Fprintln(w, line)
+		}
+		if branches > 0 {
+			noun := "entries name a branch"
+			if branches == 1 {
+				noun = "entry names a branch"
+			}
+			fmt.Fprintf(w, "\nWarning: %d %s. Its version is the branch's head as of this publish, so it\nchanges only when the catalog is published again. Pin a tag or a commit to make the version\nindependent of when you publish.\n", branches, noun)
+		}
+	})
+}
+
+// shortCommit is the first 12 characters of a commit name.
+func shortCommit(c string) string {
+	if len(c) > 12 {
+		return c[:12]
+	}
+	return c
 }
