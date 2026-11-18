@@ -1280,6 +1280,12 @@ spec:
                       items:
                         type: string
                       type: array
+                    rollbackTo:
+                      description: |-
+                        RollbackTo is the number of the release this one returned to, set by
+                        the controller when it records the release a rollback asked for, and
+                        by nothing else: no request can fill it, unlike the release note.
+                      type: integer
                     sizes:
                       additionalProperties:
                         type: string

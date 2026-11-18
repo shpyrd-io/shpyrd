@@ -845,3 +845,37 @@ func TestRollbackReleaseCarriesTheCatalogVersionOfTheReleaseItReturnsTo(t *testi
 		t.Fatalf("second pass: %d releases", n)
 	}
 }
+
+// The release a rollback asked for records what it returned to, in a field
+// the release note cannot fill; a deploy with the same note records none.
+func TestRollbackReleaseRecordsWhatItReturnedTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	history := []shpyrdv1.Release{
+		{Number: 1, Image: imgA, Description: "Initial deploy", Source: "aaaa11112222"},
+		{Number: 2, Image: imgB, Description: "Deploy", Source: "bbbb33334444"},
+	}
+	app := func(name string, annotations map[string]string) *shpyrdv1.App {
+		return &shpyrdv1.App{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app-" + name, Generation: 3, Annotations: annotations},
+			Spec: shpyrdv1.AppSpec{
+				Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: "main"}},
+				Image:  imgA,
+			},
+			Status: shpyrdv1.AppStatus{Releases: append([]shpyrdv1.Release(nil), history...)},
+		}
+	}
+	rollback := app("rb", map[string]string{shpyrdv1.AnnotationReleaseNote: "Rollback to v1", shpyrdv1.AnnotationRollbackTo: "1"})
+	r, _ := newTestReconciler(t, rollback)
+	got := runReconcile(t, r, rollback)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("the rollback release: %+v", got.Status.Releases)
+	}
+	// A deploy of the same image with the same words in its note.
+	deploy := app("dp", map[string]string{shpyrdv1.AnnotationReleaseNote: "Rollback to v1"})
+	r, _ = newTestReconciler(t, deploy)
+	got = runReconcile(t, r, deploy)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 0 {
+		t.Fatalf("a deploy records no rollback: %+v", got.Status.Releases)
+	}
+}

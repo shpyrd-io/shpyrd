@@ -652,6 +652,11 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 	if recordRelease(app, image, hash, ghash, source, metav1.Now(), configDesc, sizeByProcess) {
 		stampCatalogVersion(app)
 		out.newRelease = app.CurrentRelease()
+		// The release a rollback asked for says so, in a field the release
+		// note, which a deploy may set, cannot stand in for.
+		if n, err := strconv.Atoi(app.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
+			out.newRelease.RollbackTo = n
+		}
 		for _, p := range processes(app) {
 			out.newRelease.Processes = append(out.newRelease.Processes, p.Name)
 		}

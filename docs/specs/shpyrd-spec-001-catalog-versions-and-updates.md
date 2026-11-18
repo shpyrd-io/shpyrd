@@ -61,7 +61,8 @@ release's version, absent when unknown), `state` and `offered`.
   the controller records a release for it.
 - An image pinned on the project that a rollback did not pin (a deploy of an
   image) ends the offer: empty state. A rollback's pin is told from it by the
-  history: a release of that image is followed by a release of another.
+  rollback annotation, then by `rollbackTo` on the release recorded for it
+  (see the limit below).
   `up-to-date` needs the source to be the version, or the pinned image to be
   the current release's.
 - Empty state: the server reads no catalog, or another than the one recorded,
@@ -99,15 +100,23 @@ no volume or resource. The version shown follows the release.
 
 ## The limit of the offer after a rollback
 
-After a rollback, the update is offered again only while the project's
-history of 20 releases still holds a release from before the update: a
-release of the build the project was rolled back to that is older than a
-release of another build. That is how a pinned image is told from an image
-deployed by hand. Each change of config vars or sizes makes a release, so a
-project kept on the older version through enough of them (eighteen, or
-fewer when the newer version had more than one release) loses the offer.
-The version the project runs is still shown, since it is read from its
-current release.
+A rollback is recognised by what only the rollback paths write. Both (the
+API, and the CLI writing the App with a kubeconfig) set the rollback
+annotation, which the offer treats as a rollback until the controller
+consumes it; the controller then records the release a rollback asked for
+with `rollbackTo`, the number of the release it returned to. No request can
+fill that field, and a release note, which a deploy may set freely, does not
+stand in for it. The image pinned on the project is held by a rollback when
+the first release of the run of releases that run it carries `rollbackTo`.
+An image pinned any other way (a deploy of an image) is not, whichever
+images and note it had before, and ends the offer.
+
+So after a rollback, the update is offered again only while the release the
+controller recorded for the rollback is still in the project's history of 20
+releases. Each change of config vars or sizes after the rollback makes
+another release, so once 20 releases have been recorded after the rollback
+release (19 still keep it) the project loses the offer. The version the
+project runs is still shown, since it is read from its current release.
 
 What a person sees then: the project shows the entry and the version it
 runs, with an empty state. No update is offered in the dashboard or by

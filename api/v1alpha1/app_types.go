@@ -883,6 +883,11 @@ type Release struct {
 	// anything else carries none.
 	// +optional
 	Catalog *CatalogVersion `json:"catalog,omitempty"`
+	// RollbackTo is the number of the release this one returned to, set by
+	// the controller when it records the release a rollback asked for, and
+	// by nothing else: no request can fill it, unlike the release note.
+	// +optional
+	RollbackTo int `json:"rollbackTo,omitempty"`
 }
 
 // CatalogVersion is one published version of a catalog entry: the entry,

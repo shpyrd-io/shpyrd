@@ -639,12 +639,12 @@ func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
 // rollback, not deployed by hand. Both ways of rolling back (the API, and
 // the CLI writing the App with a kubeconfig) leave the same marks: the
 // request, until the controller has recorded it (the rollback annotation),
-// and then a release whose note is "Rollback to vN", the first of the
-// releases that run the pinned image since the build last changed. A deploy
-// of an image leaves neither, whichever images were deployed before, so an
-// image that is deployed again after another is not mistaken for a rollback.
-// Releases made after a rollback by a change of config vars or sizes run the
-// same image and sit after the rollback release in that run.
+// and then, on the release the controller records for it, the number of the
+// release it returned to (Release.RollbackTo), which only the controller
+// writes. The first release of the run that runs the pinned image carries
+// it; releases after it by a change of config vars or sizes run the same
+// image. A deploy of an image leaves neither mark, whatever note it gives
+// and whichever images were deployed before.
 func heldByRollback(a *shpyrdv1.App) bool {
 	if a.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
 		return true
@@ -654,5 +654,5 @@ func heldByRollback(a *shpyrdv1.App) bool {
 	for i > 0 && rels[i-1].Image == a.Spec.Image {
 		i--
 	}
-	return i < len(rels) && strings.HasPrefix(rels[i].Description, "Rollback")
+	return i < len(rels) && rels[i].RollbackTo > 0
 }

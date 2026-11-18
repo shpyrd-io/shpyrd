@@ -833,3 +833,28 @@ func TestApplyingAnUpdateThatAttachesAResourceNeedsTheResourcePermission(t *test
 		t.Fatal("bound again")
 	}
 }
+
+// A deploy may give any release note, "Rollback to v1" included: it is no
+// rollback, which only the controller records (Release.RollbackTo).
+func TestADeployWithTheNoteOfARollbackIsNoRollback(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	v.setApp(app, func(a *shpyrdv1.App) { ranDeploy(a, 2, "registry.example.test/app:1") })
+	if r := v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/app:2","note":"Rollback to v1"}`); r.code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", r.code, r.body)
+	}
+	v.wantEmpty()
+	// The controller records it with the note a deploy gave, and no rollback.
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Status.Releases = append(a.Status.Releases, shpyrdv1.Release{Number: 3, Image: "registry.example.test/app:2", Source: "x", Description: "Rollback to v1"})
+		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+	})
+	v.wantEmpty()
+	// The same note on an image deployed again after another.
+	v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/app:1","note":"Rollback to v1"}`)
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Status.Releases = append(a.Status.Releases, shpyrdv1.Release{Number: 4, Image: "registry.example.test/app:1", Source: "x", Description: "Rollback to v1"})
+	})
+	v.wantEmpty()
+}
