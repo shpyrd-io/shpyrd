@@ -404,7 +404,7 @@ func TestApplyingAfterARollbackReleasesThePinAndMakesNothingAgain(t *testing.T) 
 		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digest, Commit: commitNew, Revision: "main"})
 		a.Spec.Image = "r/a@sha256:1"
 		a.Spec.Bindings = nil // the rollback restores release 1's bindings
-		ranRelease(a, 3, "r/a@sha256:1", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: a.Status.Releases[0].Catalog.Digest, Commit: commitOld, Revision: "main"})
+		ranRollback(a, 3, "r/a@sha256:1", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: a.Status.Releases[0].Catalog.Digest, Commit: commitOld, Revision: "main"}, 1)
 	})
 	v.rollbackConfig(app, 1)
 	rolled := v.vars(app)
@@ -651,8 +651,11 @@ func TestARollbackThroughTheEndpointHoldsTheProjectOnTheOlderVersion(t *testing.
 	}
 	// Before the controller records the rollback release, and after.
 	v.want(CatalogUpdateAvailable, commitNew, commitNew)
+	// The controller records the rollback and consumes the request.
 	v.setApp(app, func(a *shpyrdv1.App) {
-		ranRelease(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog)
+		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+		ranRollback(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog, 1)
 	})
 	v.want(CatalogUpdateAvailable, commitOld, commitNew)
 	if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusAccepted {
@@ -709,5 +712,124 @@ func TestAnUpdateKeepsAPlainVariableTheProjectHas(t *testing.T) {
 	}
 	if got := v.fresh(app); !hasEnvValue(got.Spec.Env, "FLUXYR_HOST", "0.0.0.0") {
 		t.Fatalf("env %+v", got.Spec.Env)
+	}
+}
+
+// ---- an image deployed by hand is not a rollback, however it came to be an
+// image the project ran before; and what attaches a resource needs the
+// permission to
+
+// ranDeploy is the release the controller records for a deploy of image.
+func ranDeploy(app *shpyrdv1.App, n int, image string) {
+	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Description: "Deploy"})
+}
+
+func TestAnImageDeployedAgainAfterAnotherIsStillNoRollback(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	for n, image := range []string{"registry.example.test/app:1", "registry.example.test/app:2", "registry.example.test/app:1"} {
+		if r := v.post("/api/projects/fluxyr/deploy", `{"image":"`+image+`"}`); r.code != http.StatusAccepted {
+			t.Fatalf("deploy %s: %d %s", image, r.code, r.body)
+		}
+		v.wantEmpty()
+		v.setApp(app, func(a *shpyrdv1.App) { ranDeploy(a, n+2, image) })
+		v.wantEmpty()
+	}
+	before := v.snapshot(app)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusConflict {
+		t.Fatalf("an update is not applied over an image: %d %s", r.code, r.body)
+	}
+	if v.snapshot(app) != before {
+		t.Fatal("changed")
+	}
+}
+
+// The CLI, with a kubeconfig, writes the App itself (internal/cli
+// appcmds.go): the same marks as the API leaves.
+func TestARollbackWrittenByTheCLIHoldsTheProjectOnTheOlderVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	digestNew := v.currentDigest()
+	if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digestNew, Commit: commitNew, Revision: "main"})
+	})
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Spec.Image = "r/a@sha256:1"
+		a.Annotations[shpyrdv1.AnnotationReleaseNote] = "Rollback to v1"
+		a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+	})
+	// The request, not yet recorded.
+	v.want(CatalogUpdateAvailable, commitNew, commitNew)
+	// The controller records it and consumes the request.
+	v.setApp(app, func(a *shpyrdv1.App) {
+		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+		ranRollback(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog, 1)
+	})
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	// Releases of config vars after it keep it held.
+	v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 4, "r/a@sha256:1", a.Status.Releases[0].Catalog) })
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", r.code, r.body)
+	}
+}
+
+func TestApplyingAnUpdateThatAttachesAResourceNeedsTheResourcePermission(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	digest := v.currentDigest()
+	// The first update makes the resource and binds it; a rollback restores
+	// the older bindings and leaves the resource: it exists, unbound.
+	if r := v.apply(`{"digest":"` + digest + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("%d %s", r.code, r.body)
+	}
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digest, Commit: commitNew, Revision: "main"})
+		a.Spec.Image = "r/a@sha256:1"
+		a.Spec.Bindings = nil
+		ranRollback(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog, 1)
+	})
+	if !v.widget(app, "cache") || bound(v.fresh(app), "Widget", "cache") {
+		t.Fatal("the resource exists and is not bound")
+	}
+	// Whoever may deploy and change config, but not manage resources, may not
+	// attach it by hand, nor by an update.
+	key := projectGrantKey(v.fresh(app))
+	sid, csrf, _ := signInPerson(t, v.s, "dev@example.test", store.WorkspaceRoleMember)
+	if _, err := v.s.store.AddGrant(context.Background(), store.DefaultWorkspace, store.Grant{Project: key, Role: shpyrdv1.RoleDeveloper, User: "dev@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	v.s.authz.Invalidate()
+	body := `{"digest":"` + digest + `"}`
+	preview := doCookie(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", sid, "")
+	var p CatalogUpdatePreview
+	if err := json.Unmarshal(preview.Body.Bytes(), &p); err != nil || !reflect.DeepEqual(p.Binds, []string{"widget cache"}) || len(p.Resources) != 0 {
+		t.Fatalf("the preview names what it attaches: %v %+v", err, p)
+	}
+	before := v.snapshot(app)
+	if r := doCookie(t, v.s, "POST", "/api/projects/fluxyr/catalog/update", body, sid, csrf); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "manage resources") {
+		t.Fatalf("a developer attaches by an update: %d %s", r.Code, r.Body.String())
+	}
+	if v.snapshot(app) != before || bound(v.fresh(app), "Widget", "cache") {
+		t.Fatal("a refusal changes nothing")
+	}
+	// An administrator of the project may.
+	adminSID, adminCSRF, _ := signInPerson(t, v.s, "admin@example.test", store.WorkspaceRoleMember)
+	if _, err := v.s.store.AddGrant(context.Background(), store.DefaultWorkspace, store.Grant{Project: key, Role: shpyrdv1.RoleAdmin, User: "admin@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	v.s.authz.Invalidate()
+	if r := doCookie(t, v.s, "POST", "/api/projects/fluxyr/catalog/update", body, adminSID, adminCSRF); r.Code != http.StatusAccepted {
+		t.Fatalf("an admin applies: %d %s", r.Code, r.Body.String())
+	}
+	if !bound(v.fresh(app), "Widget", "cache") {
+		t.Fatal("bound again")
 	}
 }

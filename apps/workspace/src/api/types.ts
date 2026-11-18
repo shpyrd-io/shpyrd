@@ -948,6 +948,8 @@ export type CatalogUpdatePreview = {
   inputs: CatalogUpdateInput[];
   volumes: string[];
   resources: string[];
+  // Resources of the entry that exist and that applying attaches.
+  binds: string[];
   processesAdded: string[];
   processesChanged: string[];
   envAdded: string[];

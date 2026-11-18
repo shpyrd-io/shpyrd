@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -558,6 +559,12 @@ func ranRelease(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVer
 	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver})
 }
 
+// ranRollback is the release the controller records for a rollback to
+// release to: its note is the one both rollback paths write.
+func ranRollback(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVersion, to int) {
+	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver, Description: fmt.Sprintf("Rollback to v%d", to)})
+}
+
 func TestAProjectSaysWhatItRunsAndWhenTheCatalogOffersAnotherVersion(t *testing.T) {
 	v := newVersionedCatalog(t)
 	app := v.install()
@@ -602,7 +609,7 @@ func TestAProjectSaysWhatItRunsAndWhenTheCatalogOffersAnotherVersion(t *testing.
 	// old version with an update available, across reads and a config change.
 	v.setApp(app, func(a *shpyrdv1.App) {
 		a.Spec.Image = "r/a@sha256:1"
-		ranRelease(a, 3, "r/a@sha256:1", ver(commitOld, digestOld))
+		ranRollback(a, 3, "r/a@sha256:1", ver(commitOld, digestOld), 1)
 	})
 	v.want(CatalogUpdateAvailable, commitOld, commitNew)
 	v.want(CatalogUpdateAvailable, commitOld, commitNew)

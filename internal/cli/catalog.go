@@ -355,6 +355,7 @@ func printCatalogPreview(w io.Writer, project string, p api.CatalogUpdatePreview
 	}
 	list("makes volumes", p.Volumes)
 	list("makes resources", p.Resources)
+	list("attaches resources", p.Binds)
 	list("adds processes", p.ProcessesAdded)
 	list("changes processes", p.ProcessesChanged)
 	list("adds variables", p.EnvAdded)

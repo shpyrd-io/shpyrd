@@ -66,7 +66,7 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
   if (preview.isError || !preview.data) return <Failed what="the update" error={preview.error} />;
   const p = preview.data;
   const asked = p.inputs.filter((i) => i.action === "ask");
-  const makes = p.volumes.length > 0 || p.resources.length > 0;
+  const makes = p.volumes.length > 0 || p.resources.length > 0 || p.binds.length > 0;
   const missing = asked.some((i) => i.required && !values[i.name]?.trim());
   const allowed = perms.deploy && perms.config && (!makes || perms.resource);
   return (
@@ -81,6 +81,7 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
         {p.overlayChanged && <li>Changes the files the entry lays over the code.</li>}
         {p.volumes.length > 0 && <li>Makes volumes: {p.volumes.join(", ")}.</li>}
         {p.resources.length > 0 && <li>Makes resources: {p.resources.join(", ")}.</li>}
+        {p.binds.length > 0 && <li>Attaches resources: {p.binds.join(", ")}.</li>}
         {p.processesAdded.length > 0 && <li>Adds processes: {p.processesAdded.join(", ")}.</li>}
         {p.processesChanged.length > 0 && <li>Changes processes: {p.processesChanged.join(", ")}.</li>}
         {p.envAdded.length > 0 && <li>Adds variables: {p.envAdded.join(", ")}.</li>}
@@ -111,7 +112,7 @@ function Offer({ project, perms }: { project: Project; perms: Perms }) {
       ) : (
         <p className="text-sm text-muted-foreground">
           {perms.deploy && perms.config
-            ? "This update makes volumes or resources, which needs the permission to manage resources."
+            ? "This update makes or attaches volumes or resources, which needs the permission to manage resources."
             : "Applying an update needs the permission to deploy the project and change its config."}
         </p>
       )}

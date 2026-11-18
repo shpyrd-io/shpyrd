@@ -63,9 +63,12 @@ type CatalogUpdatePreview struct {
 	Repository string `json:"repository,omitempty"`
 	// Inputs are the entry's inputs the project does not have yet.
 	Inputs []CatalogUpdateInput `json:"inputs"`
-	// Volumes and Resources are what applying makes.
+	// Volumes and Resources are what applying makes. Binds are the resources
+	// of the entry that exist and are not attached to the project: applying
+	// attaches them.
 	Volumes   []string `json:"volumes"`
 	Resources []string `json:"resources"`
+	Binds     []string `json:"binds"`
 	// ProcessesAdded and ProcessesChanged are the entry's process types
 	// that are new to the project, or whose definition differs.
 	ProcessesAdded   []string `json:"processesAdded"`
@@ -165,7 +168,7 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 	p := &updatePlan{app: app, state: st}
 	p.preview = CatalogUpdatePreview{
 		Entry: name, State: st.State, From: st.Running, To: st.Offered,
-		Inputs: []CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{},
+		Inputs: []CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{}, Binds: []string{},
 		ProcessesAdded: []string{}, ProcessesChanged: []string{}, EnvAdded: []string{}, EnvKept: []string{},
 	}
 	switch st.State {
@@ -270,6 +273,7 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 		}
 		if t.Bindable && !bound(app, t.Kind, r.Name) {
 			p.bind = append(p.bind, shpyrdv1.Binding{Kind: t.Kind, Name: r.Name})
+			p.preview.Binds = append(p.preview.Binds, r.Kind+" "+r.Name)
 		}
 	}
 
@@ -406,7 +410,7 @@ func (s *Server) catalogUpdateApply(c *gin.Context) {
 		abort(c, http.StatusConflict, errors.New("the catalog has published another version since you previewed this one: preview the update again"))
 		return
 	}
-	if (len(plan.volumes) > 0 || len(plan.resources) > 0) && !s.can(c, app, authz.ProjectResource) {
+	if (len(plan.volumes) > 0 || len(plan.resources) > 0 || len(plan.bind) > 0) && !s.can(c, app, authz.ProjectResource) {
 		roles, _ := s.rolesOf(c)
 		abort(c, http.StatusForbidden, projectDenial(roles, authz.ProjectResource, project.SlugOf(app), projectGrantKey(app)))
 		return

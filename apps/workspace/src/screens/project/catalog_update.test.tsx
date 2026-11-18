@@ -36,6 +36,7 @@ const preview: CatalogUpdatePreview = {
   ],
   volumes: ["cache"],
   resources: [],
+  binds: [],
   processesAdded: ["worker"],
   processesChanged: [],
   envAdded: ["FLUXYR_WORKERS"],
