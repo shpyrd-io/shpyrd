@@ -59,10 +59,15 @@ release's version, absent when unknown), `state` and `offered`.
   by a deploy to another commit or branch of the entry's repository (the
   annotations still name the target, the source does not), before and after
   the controller records a release for it.
-- An image pinned on the project that a rollback did not pin (a deploy of an
-  image) ends the offer: empty state. A rollback's pin is told from it by the
-  rollback annotation, then by `rollbackTo` on the release recorded for it
-  (see the limit below).
+- An image pinned on the project ends the offer (empty state) unless a
+  rollback pinned it to a release that ran a version of this entry. A deploy
+  of an image, a rollback to a release that carries no version of the entry,
+  and an image deployed while a rollback was still pending all end it. A
+  rollback's pin is told by the rollback annotation (whose release must
+  carry a version of the entry and run the pinned image), then by
+  `rollbackTo` on the release recorded for it, which the controller sets only
+  when the release runs the image the rollback returned to (see the limit
+  below).
   `up-to-date` needs the source to be the version, or the pinned image to be
   the current release's.
 - Empty state: the server reads no catalog, or another than the one recorded,
@@ -107,7 +112,8 @@ consumes it; the controller then records the release a rollback asked for
 with `rollbackTo`, the number of the release it returned to. No request can
 fill that field, and a release note, which a deploy may set freely, does not
 stand in for it. The image pinned on the project is held by a rollback when
-the first release of the run of releases that run it carries `rollbackTo`.
+the first release of the run of releases that run it carries `rollbackTo` and a
+version of this entry.
 An image pinned any other way (a deploy of an image) is not, whichever
 images and note it had before, and ends the offer.
 

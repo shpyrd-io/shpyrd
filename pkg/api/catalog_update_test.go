@@ -907,3 +907,86 @@ func TestTheOfferAfterARollbackLastsWhileItsReleaseIsInTheHistory(t *testing.T) 
 		}
 	}
 }
+
+// B: a rollback to a release that came from a deploy of an image holds the
+// project on that image, which is not the entry's code.
+func TestARollbackToAnImageDeployedByHandIsNoOffer(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	for n, image := range []string{"registry.example.test/app:1", "registry.example.test/app:2"} {
+		if r := v.post("/api/projects/fluxyr/deploy", `{"image":"`+image+`"}`); r.code != http.StatusAccepted {
+			t.Fatalf("deploy: %d %s", r.code, r.body)
+		}
+		v.setApp(app, func(a *shpyrdv1.App) { ranDeploy(a, n+2, image) })
+	}
+	v.wantEmpty()
+	if r := v.post("/api/projects/fluxyr/rollback", `{"release":2,"force":true}`); r.code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", r.code, r.body)
+	}
+	// While the request is pending, and once the controller has recorded it
+	// (release 4, which ran no version of the entry, carries none).
+	v.wantEmpty()
+	v.setApp(app, func(a *shpyrdv1.App) {
+		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+		ranRollback(a, 4, "registry.example.test/app:1", nil, 2)
+	})
+	v.wantEmpty()
+	before := v.snapshot(app)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusConflict {
+		t.Fatalf("an update is not applied over an image: %d %s", r.code, r.body)
+	}
+	if v.snapshot(app) != before {
+		t.Fatal("changed")
+	}
+}
+
+// A: an image deployed while a rollback request is still pending is not the
+// rollback's, before and after the controller records it.
+func TestAnImageDeployedWhileARollbackIsPendingIsNoOffer(t *testing.T) {
+	for name, rollbackTo := range map[string]int{"the controller records no rollback": 0, "an older controller records the pending one": 1} {
+		v := newVersionedCatalog(t)
+		app := v.installedAndRunning()
+		v.publishNext(commitNew, fluxyrNext())
+		v.setApp(app, func(a *shpyrdv1.App) { ranDeploy(a, 2, "r/b@sha256:2") })
+		if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+			t.Fatalf("%s: rollback: %d %s", name, r.code, r.body)
+		}
+		v.want(CatalogUpdateAvailable, commitOld, commitNew)
+		if r := v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/app:7"}`); r.code != http.StatusAccepted {
+			t.Fatalf("%s: deploy: %d %s", name, r.code, r.body)
+		}
+		v.wantEmpty()
+		v.setApp(app, func(a *shpyrdv1.App) {
+			delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+			delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+			a.Status.Releases = append(a.Status.Releases, shpyrdv1.Release{Number: 3, Image: "registry.example.test/app:7", Source: "x", RollbackTo: rollbackTo})
+		})
+		v.wantEmpty()
+		if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusConflict {
+			t.Fatalf("%s: apply %d %s", name, r.code, r.body)
+		}
+	}
+}
+
+// A rollback to a release that ran a version of the entry is still offered
+// (the C23 cases above); so is one after a hand-deployed image was left.
+func TestARollbackToTheEntrysBuildAfterAnImageWasDeployedIsOffered(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	v.post("/api/projects/fluxyr/deploy", `{"image":"registry.example.test/app:1"}`)
+	v.setApp(app, func(a *shpyrdv1.App) { ranDeploy(a, 2, "registry.example.test/app:1") })
+	v.wantEmpty()
+	if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", r.code, r.body)
+	}
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	v.setApp(app, func(a *shpyrdv1.App) {
+		delete(a.Annotations, shpyrdv1.AnnotationReleaseNote)
+		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+		ranRollback(a, 3, "r/a@sha256:1", a.Status.Releases[0].Catalog, 1)
+	})
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+}

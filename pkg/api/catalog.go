@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -599,7 +600,7 @@ func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
 	// An image deployed by hand is no longer the entry's code. An image
 	// pinned by a rollback is: the project is held on an older version.
 	pinned := a.Spec.Image != ""
-	if pinned && !heldByRollback(a) {
+	if pinned && !heldByRollback(a, name) {
 		return pc
 	}
 	offered := &shpyrdv1.CatalogVersion{Entry: name, Digest: e.Digest, Commit: e.Commit, Revision: e.Revision()}
@@ -635,24 +636,36 @@ func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
 	return have == want
 }
 
-// heldByRollback says the image pinned on the project was pinned by a
-// rollback, not deployed by hand. Both ways of rolling back (the API, and
-// the CLI writing the App with a kubeconfig) leave the same marks: the
-// request, until the controller has recorded it (the rollback annotation),
-// and then, on the release the controller records for it, the number of the
-// release it returned to (Release.RollbackTo), which only the controller
-// writes. The first release of the run that runs the pinned image carries
-// it; releases after it by a change of config vars or sizes run the same
-// image. A deploy of an image leaves neither mark, whatever note it gives
-// and whichever images were deployed before.
-func heldByRollback(a *shpyrdv1.App) bool {
-	if a.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
-		return true
+// heldByRollback says the image pinned on the project is the entry's code,
+// held there by a rollback: a rollback to a release that ran a version of
+// this entry. An image deployed by hand is not, and neither is a rollback to
+// a release that came from one (a release that carries no version of the
+// entry), nor an image deployed while a rollback was still pending.
+//
+// Both ways of rolling back (the API, and the CLI writing the App with a
+// kubeconfig) leave the same marks: the rollback annotation, until the
+// controller has recorded the release, and then, on the release the
+// controller records for it, the number of the release it returned to
+// (Release.RollbackTo), which only the controller writes. A release note,
+// which a deploy may set freely, stands in for neither. The first release of
+// the run of releases that run the pinned image carries it; releases after
+// it by a change of config vars or sizes run the same image.
+func heldByRollback(a *shpyrdv1.App, entry string) bool {
+	if n, err := strconv.Atoi(a.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
+		// Not yet recorded: the image on the App must be the one the
+		// rollback pinned, not one deployed since, and the release it
+		// returns to must have run this entry.
+		rel := a.ReleaseByNumber(n)
+		return rel != nil && rel.Image == a.Spec.Image && runsEntry(rel.Catalog, entry)
 	}
 	rels := a.Status.Releases
 	i := len(rels)
 	for i > 0 && rels[i-1].Image == a.Spec.Image {
 		i--
 	}
-	return i < len(rels) && rels[i].RollbackTo > 0
+	return i < len(rels) && rels[i].RollbackTo > 0 && runsEntry(rels[i].Catalog, entry)
+}
+
+func runsEntry(v *shpyrdv1.CatalogVersion, entry string) bool {
+	return v != nil && v.Entry == entry
 }

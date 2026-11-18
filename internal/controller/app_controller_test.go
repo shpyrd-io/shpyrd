@@ -919,3 +919,29 @@ func TestRollbackReleaseCarriesItsVersionAndWhatItReturnedTo(t *testing.T) {
 		}
 	}
 }
+
+// An image deployed while a rollback request is still pending is no
+// rollback: the release recorded for it says nothing of the rollback.
+func TestAnImageDeployedWhileARollbackIsPendingRecordsNoRollback(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	imgC := "10.96.0.50:5000/apps/rb@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "rp", Namespace: "app-rp", Generation: 3, Annotations: map[string]string{
+			shpyrdv1.AnnotationRollbackTo: "1",
+		}},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: "main"}},
+			Image:  imgC, // deployed after the rollback to v1 (imgA) was asked for
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Description: "Initial deploy", Source: "aaaa11112222"},
+			{Number: 2, Image: imgB, Description: "Deploy", Source: "bbbb33334444"},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Image != imgC || got.Status.Releases[2].RollbackTo != 0 {
+		t.Fatalf("releases: %+v", got.Status.Releases)
+	}
+}
