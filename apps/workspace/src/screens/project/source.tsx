@@ -331,8 +331,8 @@ function DeployOnPush({ slug }: { slug: string }) {
         <DialogHeader>
           <DialogTitle>Deploy on push</DialogTitle>
           <DialogDescription>
-            Add this webhook to the repository and every push to the branch deploys within seconds. Without it, shpyrd checks the
-            branch every few minutes.
+            Add this webhook to the repository and every push to the branch deploys within seconds. Without it, and without the shpyrd
+            GitHub App covering the repository, a push deploys nothing until someone deploys.
           </DialogDescription>
         </DialogHeader>
         {hooks.isLoading ? (

@@ -253,8 +253,12 @@ func TestGitHookIsRateLimitedAndCapped(t *testing.T) {
 	s.gitHookDeliveries = newRateLimiter(1)
 	body := githubPush("refs/heads/main")
 	deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "r-1", body))
-	if rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "r-2", body)); rec.Code != http.StatusTooManyRequests {
+	rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "r-2", body))
+	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("past the limit: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "deploys nothing until a person deploys") || strings.Contains(rec.Body.String(), "checks the branch") {
+		t.Errorf("the refusal must not say shpyrd reads the branch itself: %s", rec.Body.String())
 	}
 }
 

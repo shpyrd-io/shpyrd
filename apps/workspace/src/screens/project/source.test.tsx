@@ -300,3 +300,11 @@ it("says pushes do not deploy until the webhook is set up", () => {
   show(p);
   expect(screen.getByText("Pushes do not deploy until its webhook is set up. Deploy to build the branch's latest commit.")).toBeTruthy();
 });
+
+it("says a push deploys nothing, until someone deploys, without the webhook or the GitHub App", async () => {
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) }));
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  const text = await screen.findByText(/a push deploys nothing until someone deploys/);
+  expect(text.textContent).not.toMatch(/few minutes|checks the branch/);
+});
