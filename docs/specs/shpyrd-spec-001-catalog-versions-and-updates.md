@@ -97,6 +97,35 @@ snapshot of the release), sizes and bindings of the release. It does not
 restore process definitions, build settings or plain variables, and removes
 no volume or resource. The version shown follows the release.
 
+## The limit of the offer after a rollback
+
+After a rollback, the update is offered again only while the project's
+history of 20 releases still holds a release from before the update: a
+release of the build the project was rolled back to that is older than a
+release of another build. That is how a pinned image is told from an image
+deployed by hand. Each change of config vars or sizes makes a release, so a
+project kept on the older version through enough of them (eighteen, or
+fewer when the newer version had more than one release) loses the offer.
+The version the project runs is still shown, since it is read from its
+current release.
+
+What a person sees then: the project shows the entry and the version it
+runs, with an empty state. No update is offered in the dashboard or by
+`shpyrd catalog status`. `shpyrd catalog update` and the apply call are
+refused (409) with "the catalog offers this project no update". The reasons
+that message lists (the catalog is not read or is another one, the entry is
+gone or has no version, the source is no longer the entry's repository) do
+not apply in this case.
+
+The way out that works today: deploy a commit of the entry's repository to
+the project by hand. That clears the pinned image and keeps the entry's
+records, so the update is offered again. The deploy starts a build of that
+commit without the files the entry lays over the code, which for an entry
+with an overlay may fail, so the update should be applied straight after: it
+sets the catalog's commit and the overlay again.
+
+This gap is tracked in https://github.com/shpyrd-io/shpyrd/issues/371.
+
 ## The CLI and the dashboard
 
 `catalog list` and `show` show the entry's version; `catalog status
