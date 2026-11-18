@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -182,5 +182,143 @@ func TestCatalogPublishSaysTheRevisionAndTheCommit(t *testing.T) {
 	}
 	if strings.Contains(text, "tagged: v1 at bbbbbbbbbbbb (BRANCH)") {
 		t.Fatalf("a tag is not marked:\n%s", text)
+	}
+}
+
+// catalogVersionServer is a fake API that publishes fluxyr at a commit and
+// serves the update endpoints; applied records what the apply received.
+func catalogVersionServer(t *testing.T, state string, applied *api.CatalogUpdateRequest, refuse bool) {
+	t.Helper()
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	offered := &api.CatalogVersionView{Revision: "v2", Commit: commit, ShortCommit: commit[:12], Digest: "sha256:new"}
+	running := &api.CatalogVersionView{Revision: "v1", Commit: strings.Repeat("a", 40), ShortCommit: strings.Repeat("a", 12), Digest: "sha256:old"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/catalog":
+			e := api.CatalogEntryView{Name: "fluxyr", Digest: "sha256:new", DisplayName: "Fluxyr", Category: "agents", Source: catalog.Source{Git: "https://github.com/shpyrd-io/fluxyr", Revision: "v2"}}
+			raw, _ := json.Marshal(map[string]any{"url": "https://catalog.test/index.json", "categories": []string{"agents"}, "entries": []any{struct {
+				api.CatalogEntryView
+				Commit string `json:"commit"`
+			}{e, commit}}})
+			_, _ = w.Write(raw)
+		case r.URL.Path == "/api/catalog/entries/fluxyr":
+			e := api.CatalogEntryView{Name: "fluxyr", Digest: "sha256:0123abcd", DisplayName: "Fluxyr", Category: "agents", Source: catalog.Source{Git: "https://github.com/shpyrd-io/fluxyr", Revision: "v2"}, Build: "dockerfile"}
+			raw, _ := json.Marshal(struct {
+				api.CatalogEntryView
+				Commit string `json:"commit"`
+			}{e, commit})
+			_, _ = w.Write(raw)
+		case r.URL.Path == "/api/projects/agent/catalog/update" && r.Method == http.MethodGet:
+			p := api.CatalogUpdatePreview{Entry: "fluxyr", State: state, From: running, Inputs: []api.CatalogUpdateInput{}, Volumes: []string{}, Resources: []string{}, ProcessesAdded: []string{"worker"}, ProcessesChanged: []string{}, EnvChanged: []string{}}
+			switch state {
+			case api.CatalogUpdateAvailable:
+				p.To, p.Repository = offered, "https://github.com/shpyrd-io/fluxyr"
+				p.Inputs = []api.CatalogUpdateInput{{Name: "NEW_NEEDED", Required: true, Action: "ask"}, {Name: "VAULT_KEY", Secret: true, Action: "generate"}}
+				p.Volumes = []string{"extra"}
+			case api.CatalogUpToDate:
+				p.From, p.Reason = offered, "the project already runs the version the catalog offers"
+			}
+			_ = json.NewEncoder(w).Encode(p)
+		case r.URL.Path == "/api/projects/agent/catalog/update" && r.Method == http.MethodPost:
+			_ = json.NewDecoder(r.Body).Decode(applied)
+			if refuse {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"error":"the update needs Needed (NEW_NEEDED)"}`))
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(api.CatalogUpdateResult{Changed: true, From: running, To: offered})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("SHPYRD_URL", srv.URL)
+	t.Setenv("SHPYRD_TOKEN", "test-token")
+	prev := preferKubeconfig
+	t.Cleanup(func() { preferKubeconfig = prev })
+}
+
+func TestCatalogListAndShowSayTheEntrysVersion(t *testing.T) {
+	catalogVersionServer(t, api.CatalogUpToDate, &api.CatalogUpdateRequest{}, false)
+	text, err := runCLI(t, "catalog", "list")
+	if err != nil || !strings.Contains(text, "VERSION") || !strings.Contains(text, "v2 @ 0123456789ab") {
+		t.Fatalf("list: %v\n%s", err, text)
+	}
+	text, err = runCLI(t, "catalog", "show", "fluxyr")
+	if err != nil || !strings.Contains(text, "Version") || !strings.Contains(text, "v2 (commit 0123456789abcdef0123456789abcdef01234567, digest 0123abcd)") {
+		t.Fatalf("show: %v\n%s", err, text)
+	}
+	out, err := runCLI(t, "catalog", "list", "--jq", ".entries[0].commit")
+	if err != nil || strings.TrimSpace(out) != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("--jq: %v %q", err, out)
+	}
+}
+
+func TestCatalogHelpSaysTheProjectStaysOnTheCatalogsVersion(t *testing.T) {
+	for _, args := range [][]string{{"catalog", "--help"}, {"catalog", "install", "--help"}} {
+		text, err := runCLI(t, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(text, "follows the upstream branch") || strings.Contains(text, "follow the entry's branch") || strings.Contains(text, "follows the entry's branch") || !strings.Contains(text, "version") {
+			t.Fatalf("%v:\n%s", args, text)
+		}
+	}
+}
+
+func TestCatalogStatusShowsTheVersionAndThePreview(t *testing.T) {
+	catalogVersionServer(t, api.CatalogUpdateAvailable, &api.CatalogUpdateRequest{}, false)
+	text, err := runCLI(t, "catalog", "status", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Runs:     v1 @ aaaaaaaaaaaa", "Offered:  v2 @ 0123456789ab", "makes volumes: extra", "adds processes: worker", "asks for NEW_NEEDED (required): --input NEW_NEEDED=value", "generates VAULT_KEY"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
+	}
+	out, err := runCLI(t, "catalog", "status", "agent", "--jq", ".to.commit")
+	if err != nil || strings.TrimSpace(out) != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("--jq: %v %q", err, out)
+	}
+}
+
+func TestCatalogUpdateAppliesWithTheInputsAndTheDigestPreviewed(t *testing.T) {
+	var applied api.CatalogUpdateRequest
+	catalogVersionServer(t, api.CatalogUpdateAvailable, &applied, false)
+	// Without --yes and with no terminal, nothing is applied.
+	if _, err := runCLI(t, "catalog", "update", "agent", "--input", "NEW_NEEDED=yes"); err == nil || !strings.Contains(err.Error(), "aborted") || applied.Digest != "" {
+		t.Fatalf("no confirmation: %v %+v", err, applied)
+	}
+	text, err := runCLI(t, "catalog", "update", "agent", "--yes", "--input", "NEW_NEEDED=yes")
+	if err != nil || !strings.Contains(text, "Updating agent to v2 @ 0123456789ab") {
+		t.Fatalf("update: %v\n%s", err, text)
+	}
+	if applied.Digest != "sha256:new" || applied.Inputs["NEW_NEEDED"] != "yes" || len(applied.Inputs) != 1 {
+		t.Fatalf("the server received %+v", applied)
+	}
+	out, err := runCLI(t, "catalog", "update", "agent", "-y", "--json")
+	if err != nil || !strings.Contains(out, `"changed": true`) && !strings.Contains(out, `"changed":true`) {
+		t.Fatalf("--json: %v %s", err, out)
+	}
+	if _, err := runCLI(t, "catalog", "update", "agent", "--yes", "--input", "nope"); err == nil || !strings.Contains(err.Error(), "NAME=value") {
+		t.Fatalf("a bad --input: %v", err)
+	}
+}
+
+func TestCatalogUpdateSaysWhyWhenThereIsNothingToApplyAndRelaysRefusals(t *testing.T) {
+	var applied api.CatalogUpdateRequest
+	catalogVersionServer(t, api.CatalogUpToDate, &applied, false)
+	text, err := runCLI(t, "catalog", "update", "agent", "--yes")
+	if err != nil || !strings.Contains(text, "up to date") || applied.Digest != "" {
+		t.Fatalf("up to date: %v %s %+v", err, text, applied)
+	}
+	catalogVersionServer(t, api.CatalogUpdateAvailable, &applied, true)
+	if _, err := runCLI(t, "catalog", "update", "agent", "--yes"); err == nil || !strings.Contains(err.Error(), "the update needs Needed (NEW_NEEDED)") {
+		t.Fatalf("the server's words: %v", err)
 	}
 }
