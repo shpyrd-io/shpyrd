@@ -879,3 +879,43 @@ func TestRollbackReleaseRecordsWhatItReturnedTo(t *testing.T) {
 		t.Fatalf("a deploy records no rollback: %+v", got.Status.Releases)
 	}
 }
+
+// The release recorded for a rollback carries the version of the release it
+// returned to and what it returned to. Both rollback paths (the API, and the
+// CLI writing the App) leave the same note and annotation, so this is the
+// state either leaves; the release of a deploy carries neither rollbackTo.
+func TestRollbackReleaseCarriesItsVersionAndWhatItReturnedTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	verA := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:a", Commit: "0123456789abcdef0123456789abcdef01234567", Revision: "v1"}
+	verB := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:b", Commit: "89abcdef0123456789abcdef0123456789abcdef", Revision: "v2"}
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "rc", Namespace: "app-rc", Generation: 3, Annotations: map[string]string{
+			shpyrdv1.AnnotationReleaseNote:     "Rollback to v1",
+			shpyrdv1.AnnotationRollbackTo:      "1",
+			shpyrdv1.AnnotationCatalogEntry:    "fluxyr",
+			shpyrdv1.AnnotationCatalogDigest:   "sha256:b",
+			shpyrdv1.AnnotationCatalogCommit:   verB.Commit,
+			shpyrdv1.AnnotationCatalogRevision: "v2",
+		}},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: verB.Commit}},
+			Image:  imgA,
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Source: "012345678901", Catalog: verA},
+			{Number: 2, Image: imgB, Source: short(verB.Commit), Catalog: verB},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	rel := got.Status.Releases[len(got.Status.Releases)-1]
+	if rel.Number != 3 || rel.RollbackTo != 1 || rel.Catalog == nil || *rel.Catalog != *verA {
+		t.Fatalf("the rollback release: %+v", rel)
+	}
+	for _, earlier := range got.Status.Releases[:2] {
+		if earlier.RollbackTo != 0 {
+			t.Fatalf("a release recorded for anything else carries no rollbackTo: %+v", earlier)
+		}
+	}
+}

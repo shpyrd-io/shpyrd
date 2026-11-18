@@ -858,3 +858,52 @@ func TestADeployWithTheNoteOfARollbackIsNoRollback(t *testing.T) {
 	})
 	v.wantEmpty()
 }
+
+// The limit of the offer after a rollback: the release the controller
+// recorded for it must be in the history of 20 releases.
+func TestTheOfferAfterARollbackLastsWhileItsReleaseIsInTheHistory(t *testing.T) {
+	for name, further := range map[string]int{"19 further releases keep the rollback release": 19, "20 push it out": 20} {
+		v := newVersionedCatalog(t)
+		app := v.installedAndRunning()
+		v.publishNext(commitNew, fluxyrNext())
+		digestNew := v.currentDigest()
+		if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+			t.Fatalf("%s: %d %s", name, r.code, r.body)
+		}
+		v.setApp(app, func(a *shpyrdv1.App) {
+			versionA := a.Status.Releases[0].Catalog
+			// The history as the controller keeps it: the last 20 releases.
+			a.Status.Releases = nil
+			a.Spec.Image = "r/a@sha256:1"
+			n := 3
+			if further < 20 {
+				ranRollback(a, n, "r/a@sha256:1", versionA, 1)
+				for i := 0; i < further; i++ {
+					n++
+					ranRelease(a, n, "r/a@sha256:1", versionA)
+				}
+			} else {
+				for i := 0; i < further; i++ {
+					ranRelease(a, n+i+1, "r/a@sha256:1", versionA)
+				}
+			}
+			if len(a.Status.Releases) > 20 {
+				t.Fatalf("the history holds 20: %d", len(a.Status.Releases))
+			}
+		})
+		if further < 20 {
+			v.want(CatalogUpdateAvailable, commitOld, commitNew)
+			if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusAccepted {
+				t.Fatalf("%s: apply %d %s", name, r.code, r.body)
+			}
+		} else {
+			s, d := v.stateNow()
+			if s == nil || d == nil || s.State != "" || commitOf(s.Running) != commitOld {
+				t.Fatalf("%s: the version shown, no offer: %+v %+v", name, s, d)
+			}
+			if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusConflict || !strings.Contains(r.body, "the catalog offers this project no update") {
+				t.Fatalf("%s: apply %d %s", name, r.code, r.body)
+			}
+		}
+	}
+}
