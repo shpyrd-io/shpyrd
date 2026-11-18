@@ -516,8 +516,9 @@ type ProjectCatalog struct {
 	Entry   string              `json:"entry"`
 	Running *CatalogVersionView `json:"running,omitempty"`
 	// State is empty when the catalog offers the project nothing: it is not
-	// read, or is another one, the entry is gone or has no commit, or the
-	// project's source is no longer the entry's repository.
+	// read, or is another one, the entry is gone or has no commit, the
+	// project's source is no longer the entry's repository, or an image
+	// deployed by hand is pinned on it.
 	State   string              `json:"state,omitempty"`
 	Offered *CatalogVersionView `json:"offered,omitempty"`
 }

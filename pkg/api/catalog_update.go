@@ -33,14 +33,16 @@ import (
 // overwrites a value a person set. What it does with each part of the
 // project:
 //
-//   - the source (commit, sub-path, overlay) and the build settings are the
-//     entry's, and are set;
+//   - the source (commit, sub-path, overlay) is the entry's, and is set,
+//     and so are the build settings when the entry declares them; an image
+//     pinned by a rollback is released;
 //   - the entry's processes are applied (command, arguments, port, mounts,
 //     health check); the replicas, size and sleep and autoscale settings
 //     of a process that exists stay the person's, new processes are
 //     added, and a process the entry no longer declares is kept;
-//   - the entry's plain variables are set for the keys the entry
-//     declares;
+//   - a plain variable the project already has is kept, whatever value the
+//     entry declares for it; one the entry declares and the project lacks
+//     is added, and one the entry no longer declares stays;
 //   - an input that is already a config var is left as it is; a new
 //     generated input is generated, a new one with a default takes it,
 //     and a new required one must be given;
@@ -117,7 +119,7 @@ type updatePlan struct {
 	state   *ProjectCatalog
 	preview CatalogUpdatePreview
 
-	// known: the input names the project already has as config vars.
+	// existing: the input names the project already has as config vars.
 	existing map[string]bool
 	// restored holds the value of a new input the project had in an
 	// earlier release (a rollback removes what a later release added to
@@ -133,7 +135,9 @@ type updatePlan struct {
 
 	processes map[string]shpyrdv1.Process
 	build     *shpyrdv1.Build
-	env       []corev1.EnvVar
+	// env is the entry's plain variables; only the ones the project lacks
+	// are added.
+	env []corev1.EnvVar
 }
 
 // catalogUpdateError is a refusal with the HTTP status it takes.
