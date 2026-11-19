@@ -139,8 +139,8 @@ func TestAutoscaleRendersOneScaledObjectWithBothTriggers(t *testing.T) {
 	if target, _, _ := unstructured.NestedInt64(ir.Object, "spec", "scalingMetric", "concurrency", "targetValue"); target != 20 {
 		t.Errorf("requests in flight per instance = %d, want the default 20", target)
 	}
-	if _, found, _ := unstructured.NestedMap(ir.Object, "spec", "scalingMetric", "requestRate"); found {
-		t.Error("no request rate in wait mode: concurrency is the signal")
+	if rate, found, _ := unstructured.NestedInt64(ir.Object, "spec", "scalingMetric", "requestRate", "targetValue"); !found || rate != wakeOnlyTarget {
+		t.Errorf("request rate target = %d (found %v), want the wake-only %d: both metrics are declared in wait mode too", rate, found, wakeOnlyTarget)
 	}
 	if b := ingressBackend(t, c, "app-shop", "shop"); b != webInterceptorService {
 		t.Errorf("backend = %s, want the interceptor", b)
@@ -365,5 +365,264 @@ func TestLegacySleepObjectsAreReplaced(t *testing.T) {
 	}
 	if idle, found, _ := unstructured.NestedInt64(so.Object, "spec", "idleReplicaCount"); !found || idle != 0 {
 		t.Error("sleep alone still sleeps: idle count 0")
+	}
+}
+
+// scalingCase is one configuration of the web process's scaling: the
+// bounds, the sleep policy, and whether a disk pins the process.
+type scalingCase struct {
+	name   string
+	bounds *shpyrdv1.AutoscaleSpec
+	sleep  *shpyrdv1.SleepSpec
+	disk   bool
+}
+
+// scalingCases are the configurations the route must render both metrics
+// in, whatever the mode or the bounds.
+func scalingCases() []scalingCase {
+	bounds := &shpyrdv1.AutoscaleSpec{Min: 2, Max: 6}
+	return []scalingCase{
+		{name: "sleep in wait mode", sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "wait"}},
+		{name: "sleep in page mode", sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "page"}},
+		{name: "bounds only", bounds: bounds},
+		{name: "bounds with sleep in wait mode", bounds: bounds, sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "wait"}},
+		{name: "bounds with sleep in page mode", bounds: bounds, sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "page"}},
+		{name: "sleep in wait mode with a disk", sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "wait"}, disk: true},
+	}
+}
+
+// app builds the App of the case; with a disk it is the "demo" app of the
+// volume helpers.
+func (tc scalingCase) app() (*shpyrdv1.App, []client.Object) {
+	app := autoscaledApp(tc.bounds, tc.sleep)
+	if !tc.disk {
+		return app, nil
+	}
+	app.Name, app.Namespace = "demo", "app-demo"
+	p := app.Spec.Processes["web"]
+	p.Volumes = []shpyrdv1.VolumeMount{{Name: "data", Path: "/data"}}
+	app.Spec.Processes["web"] = p
+	return app, []client.Object{testVolume("data", "5Gi", "")}
+}
+
+// page says the case resumes behind the waiting page: asked for, or forced
+// by a disk.
+func (tc scalingCase) page() bool {
+	return tc.sleep != nil && (tc.sleep.Resuming == "page" || tc.disk)
+}
+
+func getInterceptorRoute(t *testing.T, c client.Client, ns, name string) *unstructured.Unstructured {
+	t.Helper()
+	ir := makeUnstructured(InterceptorRouteGVK, name, ns)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, ir); err != nil {
+		t.Fatal(err)
+	}
+	return ir
+}
+
+// checkRoute asserts the route of the case: both metrics with their
+// targets, the cold start's placeholder only in page mode.
+func checkRoute(t *testing.T, ir *unstructured.Unstructured, tc scalingCase) {
+	t.Helper()
+	wantConcurrency := wakeOnlyTarget
+	if tc.bounds != nil {
+		wantConcurrency = int64(tc.bounds.TargetConcurrency())
+	}
+	conc, found, _ := unstructured.NestedInt64(ir.Object, "spec", "scalingMetric", "concurrency", "targetValue")
+	if !found || conc != wantConcurrency {
+		t.Errorf("concurrency target = %d (found %v), want %d", conc, found, wantConcurrency)
+	}
+	rate, found, _ := unstructured.NestedInt64(ir.Object, "spec", "scalingMetric", "requestRate", "targetValue")
+	if !found || rate != wakeOnlyTarget {
+		t.Errorf("request rate target = %d (found %v), want the wake-only %d", rate, found, wakeOnlyTarget)
+	}
+	if w, _, _ := unstructured.NestedString(ir.Object, "spec", "scalingMetric", "requestRate", "window"); w != "1m" {
+		t.Errorf("request rate window = %q, want 1m", w)
+	}
+	if g, _, _ := unstructured.NestedString(ir.Object, "spec", "scalingMetric", "requestRate", "granularity"); g != "1s" {
+		t.Errorf("request rate granularity = %q, want 1s", g)
+	}
+	if _, ok, _ := unstructured.NestedMap(ir.Object, "spec", "coldStart", "placeholder"); ok != tc.page() {
+		t.Errorf("cold start placeholder present = %v, want %v", ok, tc.page())
+	}
+}
+
+// checkScaledObject asserts the ScaledObject of the case is what it was
+// before the route declared both metrics: the metric set on the route
+// never reaches it.
+func checkScaledObject(t *testing.T, so *unstructured.Unstructured, app *shpyrdv1.App, tc scalingCase, metrics bool) {
+	t.Helper()
+	wantMin, wantMax := int64(1), int64(1)
+	if tc.bounds != nil {
+		wantMin, wantMax = int64(tc.bounds.Min), int64(tc.bounds.Max)
+	}
+	if v, _, _ := unstructured.NestedInt64(so.Object, "spec", "minReplicaCount"); v != wantMin {
+		t.Errorf("minReplicaCount = %d, want %d", v, wantMin)
+	}
+	if v, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount"); v != wantMax {
+		t.Errorf("maxReplicaCount = %d, want %d", v, wantMax)
+	}
+	wantTypes := []string{"external-push"}
+	if tc.bounds != nil && metrics {
+		wantTypes = append(wantTypes, "cpu")
+	}
+	got := triggerTypes(so)
+	if len(got) != len(wantTypes) || got[0] != "external-push" || (len(got) == 2 && got[1] != "cpu") {
+		t.Fatalf("triggers = %v, want %v", got, wantTypes)
+	}
+	triggers, _, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+	md, _ := triggers[0].(map[string]interface{})["metadata"].(map[string]interface{})
+	if md["scalerAddress"] != "keda-add-ons-http-external-scaler.keda:9090" || md["interceptorRoute"] != app.Name {
+		t.Errorf("external-push metadata = %v, want the scaler address and the route", md)
+	}
+	idle, idleFound, _ := unstructured.NestedInt64(so.Object, "spec", "idleReplicaCount")
+	cd, cdFound, _ := unstructured.NestedInt64(so.Object, "spec", "cooldownPeriod")
+	icd, icdFound, _ := unstructured.NestedInt64(so.Object, "spec", "initialCooldownPeriod")
+	if tc.sleep != nil {
+		if !idleFound || idle != 0 || !cdFound || cd != 900 || !icdFound || icd != 900 {
+			t.Errorf("idle %d/%v cooldown %d/%v initial %d/%v, want 0 and the quiet period 900 twice", idle, idleFound, cd, cdFound, icd, icdFound)
+		}
+	} else if idleFound || cdFound || icdFound {
+		t.Error("without sleep the object has no idle count or cooldown")
+	}
+	if restore, found, _ := unstructured.NestedBool(so.Object, "spec", "advanced", "restoreToOriginalReplicaCount"); !found || restore {
+		t.Errorf("restoreToOriginalReplicaCount = %v (found %v), want false", restore, found)
+	}
+	if win, _, _ := unstructured.NestedInt64(so.Object, "spec", "advanced", "horizontalPodAutoscalerConfig", "behavior", "scaleDown", "stabilizationWindowSeconds"); win != 300 {
+		t.Errorf("scale-down stabilisation = %d, want 300", win)
+	}
+}
+
+// The route declares both metrics, whatever the mode or the bounds: the
+// add-on's scaler serves one metric per declared entry, and the HPA KEDA
+// built keeps asking for the names it was built with.
+func TestInterceptorRouteDeclaresBothMetricsInEveryConfiguration(t *testing.T) {
+	for _, tc := range scalingCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			app, extra := tc.app()
+			r, c := newScalingTestReconciler(t, true, append([]client.Object{app}, extra...)...)
+			runReconcile(t, r, app)
+			checkRoute(t, getInterceptorRoute(t, c, app.Namespace, app.Name), tc)
+			so, ok := getScaledObject(t, c, app.Namespace, app.Name+"-web")
+			if !ok {
+				t.Fatal("no ScaledObject")
+			}
+			checkScaledObject(t, so, app, tc, true)
+		})
+	}
+}
+
+// updateWebProcess changes the web process of the stored App.
+func updateWebProcess(t *testing.T, c client.Client, app *shpyrdv1.App, change func(*shpyrdv1.Process)) {
+	t.Helper()
+	cur := &shpyrdv1.App{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), cur); err != nil {
+		t.Fatal(err)
+	}
+	p := cur.Spec.Processes["web"]
+	change(&p)
+	cur.Spec.Processes["web"] = p
+	if err := c.Update(context.Background(), cur); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A change of mode or bounds removes no metric from the route, updates the
+// ScaledObject in place and leaves a sleeping Deployment asleep.
+func TestScalingChangeKeepsEveryMetricAndUpdatesInPlace(t *testing.T) {
+	bounds := &shpyrdv1.AutoscaleSpec{Min: 2, Max: 6}
+	wait := &shpyrdv1.SleepSpec{After: "15m", Resuming: "wait"}
+	page := &shpyrdv1.SleepSpec{After: "15m", Resuming: "page"}
+	changes := []struct {
+		name     string
+		from, to scalingCase
+	}{
+		{"page to wait", scalingCase{sleep: page}, scalingCase{sleep: wait}},
+		{"wait to page", scalingCase{sleep: wait}, scalingCase{sleep: page}},
+		{"bounds added", scalingCase{sleep: wait}, scalingCase{sleep: wait, bounds: bounds}},
+		{"bounds removed", scalingCase{sleep: page, bounds: bounds}, scalingCase{sleep: page}},
+	}
+	for _, ch := range changes {
+		t.Run(ch.name, func(t *testing.T) {
+			app, _ := ch.from.app()
+			r, c := newScalingTestReconciler(t, true, app)
+			runReconcile(t, r, app)
+			before := getInterceptorRoute(t, c, app.Namespace, app.Name)
+			checkRoute(t, before, ch.from)
+
+			// Marks the ScaledObject, and puts the app to sleep as the
+			// scaler does: both must survive the change.
+			so, ok := getScaledObject(t, c, app.Namespace, "shop-web")
+			if !ok {
+				t.Fatal("no ScaledObject")
+			}
+			so.SetAnnotations(map[string]string{"test/marker": "first"})
+			if err := c.Update(context.Background(), so); err != nil {
+				t.Fatal(err)
+			}
+			web := &appsv1.Deployment{}
+			key := types.NamespacedName{Namespace: app.Namespace, Name: "shop-web"}
+			if err := c.Get(context.Background(), key, web); err != nil {
+				t.Fatal(err)
+			}
+			web.Spec.Replicas = ptr.To[int32](0)
+			if err := c.Update(context.Background(), web); err != nil {
+				t.Fatal(err)
+			}
+
+			updateWebProcess(t, c, app, func(p *shpyrdv1.Process) {
+				p.Autoscale, p.Sleep = ch.to.bounds, ch.to.sleep
+			})
+			runReconcile(t, r, app)
+
+			after := getInterceptorRoute(t, c, app.Namespace, app.Name)
+			checkRoute(t, after, ch.to)
+			for _, metric := range []string{"concurrency", "requestRate"} {
+				if _, found, _ := unstructured.NestedMap(before.Object, "spec", "scalingMetric", metric); found {
+					if _, still, _ := unstructured.NestedMap(after.Object, "spec", "scalingMetric", metric); !still {
+						t.Errorf("the change removed the %s metric", metric)
+					}
+				}
+			}
+			so, ok = getScaledObject(t, c, app.Namespace, "shop-web")
+			if !ok || so.GetAnnotations()["test/marker"] != "first" {
+				t.Fatal("the ScaledObject must be updated in place, not deleted and recreated")
+			}
+			checkScaledObject(t, so, app, ch.to, true)
+			if err := c.Get(context.Background(), key, web); err != nil {
+				t.Fatal(err)
+			}
+			if web.Spec.Replicas == nil || *web.Spec.Replicas != 0 {
+				t.Errorf("a sleeping Deployment must stay at 0 after the change, replicas = %v", web.Spec.Replicas)
+			}
+		})
+	}
+}
+
+// A route rendered by the previous version, with one metric only, is
+// repaired by one reconcile with no change to the App.
+func TestStaleInterceptorRouteIsRepaired(t *testing.T) {
+	rate := map[string]interface{}{"targetValue": wakeOnlyTarget, "window": "1m", "granularity": "1s"}
+	stale := map[string]map[string]interface{}{
+		"only concurrency": {"concurrency": map[string]interface{}{"targetValue": wakeOnlyTarget}},
+		"only requestRate": {"requestRate": rate},
+	}
+	for _, tc := range scalingCases() {
+		for name, metric := range stale {
+			t.Run(tc.name+", "+name, func(t *testing.T) {
+				app, extra := tc.app()
+				r, c := newScalingTestReconciler(t, true, append([]client.Object{app}, extra...)...)
+				runReconcile(t, r, app)
+				ir := getInterceptorRoute(t, c, app.Namespace, app.Name)
+				if err := unstructured.SetNestedField(ir.Object, metric, "spec", "scalingMetric"); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Update(context.Background(), ir); err != nil {
+					t.Fatal(err)
+				}
+				runReconcile(t, r, app)
+				checkRoute(t, getInterceptorRoute(t, c, app.Namespace, app.Name), tc)
+			})
+		}
 	}
 }

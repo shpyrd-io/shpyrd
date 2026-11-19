@@ -225,30 +225,34 @@ func (r *AppReconciler) reconcileWebScaling(ctx context.Context, app *shpyrdv1.A
 		for _, h := range hosts {
 			rules = append(rules, map[string]interface{}{"hosts": []interface{}{h}})
 		}
-		// What the interceptor measures. The requests in flight per
-		// instance: with bounds, the target an instance may carry before
-		// another is added; without, a number so high it only decides
-		// asleep versus awake. In wait mode held requests count too, so
-		// that is what wakes the app. In page mode the placeholder is
-		// answered at once and concurrency is back to zero before the
-		// scaler looks, so the wake signal is the request rate instead
-		// (every placeholder-served request counts for a minute); with
-		// bounds both are set, and KEDA follows whichever asks for more.
+		// What the interceptor measures: both metrics, in every
+		// configuration. The add-on's scaler serves one external metric
+		// per declared scalingMetric entry, and KEDA builds the HPA's
+		// metric names from them once; it does not rebuild the HPA when
+		// the route changes and the ScaledObject does not. A route that
+		// declared a different set per mode left the HPA asking for a
+		// name the scaler no longer served. Declaring both always keeps
+		// every name served across a change of mode or bounds.
+		//   - concurrency, the requests in flight per instance: with
+		//     bounds, the target an instance may carry before another is
+		//     added; without, a number so high it only decides asleep
+		//     versus awake. In wait mode held requests count too, so this
+		//     is what wakes the app.
+		//   - requestRate, always at the wake-only target: in page mode the
+		//     placeholder is answered at once and concurrency is back to
+		//     zero before the scaler looks, so the wake signal is the rate
+		//     (every placeholder-served request counts for a minute).
+		// KEDA follows whichever asks for more instances.
 		concurrency := wakeOnlyTarget
 		if as != nil {
 			concurrency = int64(as.TargetConcurrency())
 		}
 		scalingMetric := map[string]interface{}{
 			"concurrency": map[string]interface{}{"targetValue": concurrency},
+			"requestRate": map[string]interface{}{"targetValue": wakeOnlyTarget, "window": "1m", "granularity": "1s"},
 		}
 		coldStart := map[string]interface{}{"maxPendingRequests": int64(100), "overflow": "Reject"}
 		if resuming == "page" {
-			rate := map[string]interface{}{"targetValue": wakeOnlyTarget, "window": "1m", "granularity": "1s"}
-			if as != nil {
-				scalingMetric["requestRate"] = rate
-			} else {
-				scalingMetric = map[string]interface{}{"requestRate": rate}
-			}
 			if cmErr := r.ensureSleepPage(ctx, app); cmErr != nil {
 				return cmErr
 			}
