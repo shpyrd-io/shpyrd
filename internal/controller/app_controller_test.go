@@ -805,3 +805,143 @@ func TestInternalNameIngress(t *testing.T) {
 		t.Errorf("internal ingress should be gone without a web process: %v", err)
 	}
 }
+
+// A rollback records the version of the release it returns to, whichever
+// way it was asked for: the image is pinned and the App still names the
+// newer version it was set to deploy.
+func TestRollbackReleaseCarriesTheCatalogVersionOfTheReleaseItReturnsTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	commitB := "89abcdef0123456789abcdef0123456789abcdef"
+	verA := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:a", Commit: "0123456789abcdef0123456789abcdef01234567", Revision: "v1"}
+	verB := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:b", Commit: commitB, Revision: "v2"}
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "rb", Namespace: "app-rb", Generation: 3,
+			Annotations: map[string]string{
+				shpyrdv1.AnnotationReleaseNote:     "Rollback to v1",
+				shpyrdv1.AnnotationCatalogEntry:    "fluxyr",
+				shpyrdv1.AnnotationCatalogDigest:   "sha256:b",
+				shpyrdv1.AnnotationCatalogCommit:   commitB,
+				shpyrdv1.AnnotationCatalogRevision: "v2",
+			},
+		},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: commitB}},
+			Image:  imgA,
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Source: "012345678901", Catalog: verA},
+			{Number: 2, Image: imgB, Source: short(commitB), Catalog: verB},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Catalog == nil || *got.Status.Releases[2].Catalog != *verA {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	got = runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 {
+		t.Fatalf("second pass: %d releases", n)
+	}
+}
+
+// The release a rollback asked for records what it returned to, in a field
+// the release note cannot fill; a deploy with the same note records none.
+func TestRollbackReleaseRecordsWhatItReturnedTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	history := []shpyrdv1.Release{
+		{Number: 1, Image: imgA, Description: "Initial deploy", Source: "aaaa11112222"},
+		{Number: 2, Image: imgB, Description: "Deploy", Source: "bbbb33334444"},
+	}
+	app := func(name string, annotations map[string]string) *shpyrdv1.App {
+		return &shpyrdv1.App{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app-" + name, Generation: 3, Annotations: annotations},
+			Spec: shpyrdv1.AppSpec{
+				Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: "main"}},
+				Image:  imgA,
+			},
+			Status: shpyrdv1.AppStatus{Releases: append([]shpyrdv1.Release(nil), history...)},
+		}
+	}
+	rollback := app("rb", map[string]string{shpyrdv1.AnnotationReleaseNote: "Rollback to v1", shpyrdv1.AnnotationRollbackTo: "1"})
+	r, _ := newTestReconciler(t, rollback)
+	got := runReconcile(t, r, rollback)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("the rollback release: %+v", got.Status.Releases)
+	}
+	// A deploy of the same image with the same words in its note.
+	deploy := app("dp", map[string]string{shpyrdv1.AnnotationReleaseNote: "Rollback to v1"})
+	r, _ = newTestReconciler(t, deploy)
+	got = runReconcile(t, r, deploy)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 0 {
+		t.Fatalf("a deploy records no rollback: %+v", got.Status.Releases)
+	}
+}
+
+// The release recorded for a rollback carries the version of the release it
+// returned to and what it returned to. Both rollback paths (the API, and the
+// CLI writing the App) leave the same note and annotation, so this is the
+// state either leaves; the release of a deploy carries neither rollbackTo.
+func TestRollbackReleaseCarriesItsVersionAndWhatItReturnedTo(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	verA := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:a", Commit: "0123456789abcdef0123456789abcdef01234567", Revision: "v1"}
+	verB := &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: "sha256:b", Commit: "89abcdef0123456789abcdef0123456789abcdef", Revision: "v2"}
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "rc", Namespace: "app-rc", Generation: 3, Annotations: map[string]string{
+			shpyrdv1.AnnotationReleaseNote:     "Rollback to v1",
+			shpyrdv1.AnnotationRollbackTo:      "1",
+			shpyrdv1.AnnotationCatalogEntry:    "fluxyr",
+			shpyrdv1.AnnotationCatalogDigest:   "sha256:b",
+			shpyrdv1.AnnotationCatalogCommit:   verB.Commit,
+			shpyrdv1.AnnotationCatalogRevision: "v2",
+		}},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: verB.Commit}},
+			Image:  imgA,
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Source: "012345678901", Catalog: verA},
+			{Number: 2, Image: imgB, Source: short(verB.Commit), Catalog: verB},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	rel := got.Status.Releases[len(got.Status.Releases)-1]
+	if rel.Number != 3 || rel.RollbackTo != 1 || rel.Catalog == nil || *rel.Catalog != *verA {
+		t.Fatalf("the rollback release: %+v", rel)
+	}
+	for _, earlier := range got.Status.Releases[:2] {
+		if earlier.RollbackTo != 0 {
+			t.Fatalf("a release recorded for anything else carries no rollbackTo: %+v", earlier)
+		}
+	}
+}
+
+// An image deployed while a rollback request is still pending is no
+// rollback: the release recorded for it says nothing of the rollback.
+func TestAnImageDeployedWhileARollbackIsPendingRecordsNoRollback(t *testing.T) {
+	imgA := "10.96.0.50:5000/apps/rb@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB := "10.96.0.50:5000/apps/rb@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	imgC := "10.96.0.50:5000/apps/rb@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "rp", Namespace: "app-rp", Generation: 3, Annotations: map[string]string{
+			shpyrdv1.AnnotationRollbackTo: "1",
+		}},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r", Revision: "main"}},
+			Image:  imgC, // deployed after the rollback to v1 (imgA) was asked for
+		},
+		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
+			{Number: 1, Image: imgA, Description: "Initial deploy", Source: "aaaa11112222"},
+			{Number: 2, Image: imgB, Description: "Deploy", Source: "bbbb33334444"},
+		}},
+	}
+	r, _ := newTestReconciler(t, app)
+	got := runReconcile(t, r, app)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Image != imgC || got.Status.Releases[2].RollbackTo != 0 {
+		t.Fatalf("releases: %+v", got.Status.Releases)
+	}
+}

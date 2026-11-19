@@ -942,6 +942,11 @@ func (s *Server) routes() error {
 	api.GET("/catalog/entries/:name", s.require(authz.ClusterCreate), s.catalogEntry)
 	api.GET("/catalog/entries/:name/icon", s.require(authz.ClusterCreate), s.catalogEntryIcon)
 	api.POST("/catalog/entries/:name/install", s.require(authz.ClusterCreate), s.catalogInstall)
+	// An update the catalog offers a project made from it: previewed by whoever
+	// may view the project, applied by whoever may deploy it and change its
+	// config (and, when it makes a resource, manage resources).
+	api.GET("/projects/:slug/catalog/update", s.require(authz.ProjectView), s.catalogUpdatePreview)
+	api.POST("/projects/:slug/catalog/update", s.require(authz.ProjectDeploy), s.catalogUpdateApply)
 	api.GET("/tokens", s.listTokens) // RFC-0031: the caller's tokens
 	api.POST("/tokens", s.createToken)
 	api.DELETE("/tokens/:id", s.deleteToken)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,8 +30,9 @@ import (
 // install makes the project the entry describes, step by step, as a
 // person would by hand: the project, its volumes and resources, the
 // config vars the person gave, then the source, which is the first
-// deploy; from then on it is a project like any other, following the
-// upstream branch.
+// deploy, pinned to the commit the catalog published; from then on it is
+// a project like any other, and the catalog says when it publishes a
+// different version of the entry.
 
 // CatalogView is the catalog as the dashboard lists it.
 type CatalogView struct {
@@ -42,8 +44,11 @@ type CatalogView struct {
 
 // CatalogEntryView is one entry, as the dashboard and the CLI show it.
 type CatalogEntryView struct {
-	Name        string   `json:"name"`
-	Digest      string   `json:"digest"`
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	// Commit is the commit the catalog published for the entry; with the
+	// digest, its version. Empty when the catalog published none.
+	Commit      string   `json:"commit,omitempty"`
 	DisplayName string   `json:"displayName"`
 	Description string   `json:"description"`
 	Category    string   `json:"category"`
@@ -92,7 +97,7 @@ type CatalogInstallResponse struct {
 
 func (s *Server) catalogEntryView(e *catalog.IndexEntry) CatalogEntryView {
 	v := CatalogEntryView{
-		Name: e.Name, Digest: e.Digest, DisplayName: e.Catalog.Name, Description: e.Catalog.Description,
+		Name: e.Name, Digest: e.Digest, Commit: e.Commit, DisplayName: e.Catalog.Name, Description: e.Catalog.Description,
 		Category: e.Catalog.Category, Tags: e.Catalog.Tags, Icon: e.Catalog.Icon, IconColor: e.Catalog.Color,
 		Publisher: e.Catalog.Publisher, License: e.Catalog.License, Homepage: e.Catalog.Homepage,
 		Source: catalog.Source{Git: e.Catalog.Source.Git, Revision: e.Revision(), SubPath: e.Catalog.Source.SubPath},
@@ -413,9 +418,19 @@ func (s *Server) catalogInstall(c *gin.Context) {
 		s.audit(c, slug, "config.set", slug, "set "+strings.Join(sortedNames(secrets, plain), ", "))
 	}
 	// 4. The source: the first deploy, attributed to whoever installs.
-	revision := firstNonEmpty(req.Revision, e.Revision())
+	// An entry published with a commit installs pinned to it; an explicit
+	// --revision installs as it always did.
+	pinned := req.Revision == "" && e.Commit != ""
+	revision := firstNonEmpty(req.Revision, e.Commit, e.Revision())
 	app, err = s.updateAppIn(ctx, app, func(a *shpyrdv1.App) error {
 		a.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: git, Revision: revision}, SubPath: e.Catalog.Source.SubPath, Overlay: overlay}
+		if pinned {
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[shpyrdv1.AnnotationCatalogCommit] = e.Commit
+			a.Annotations[shpyrdv1.AnnotationCatalogRevision] = e.Revision()
+		}
 		a.Spec.Bindings = bindings
 		if len(icon) > 0 {
 			project.SetIconFile(a, iconVersion(icon), iconKinds[iconTyp])
@@ -473,4 +488,184 @@ func sortedNames(maps ...map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// The states of a project from the catalog.
+const (
+	CatalogUpToDate        = "up-to-date"
+	CatalogUpdateAvailable = "update-available"
+	CatalogUpdating        = "updating"
+)
+
+// CatalogVersionView is one version of an entry: what a person reads as
+// "v1.4.0 (3f2a9c1b8d7e)".
+type CatalogVersionView struct {
+	// Revision is the name the entry gave the commit (a tag or a branch).
+	Revision    string `json:"revision,omitempty"`
+	Commit      string `json:"commit"`
+	ShortCommit string `json:"shortCommit"`
+	Digest      string `json:"digest"`
+}
+
+// ProjectCatalog is what a project from the catalog says of it: the entry,
+// the version its current release runs (absent when that is not known: a
+// project installed before versions, or deployed from other code), and,
+// when the catalog is read and still offers the project's entry, whether
+// it is up to date, has an update available, or is rolling the offered
+// version out.
+type ProjectCatalog struct {
+	Entry   string              `json:"entry"`
+	Running *CatalogVersionView `json:"running,omitempty"`
+	// State is empty when the catalog offers the project nothing: it is not
+	// read, or is another one, the entry is gone or has no commit, the
+	// project's source is no longer the entry's repository, or an image
+	// deployed by hand is pinned on it.
+	State   string              `json:"state,omitempty"`
+	Offered *CatalogVersionView `json:"offered,omitempty"`
+}
+
+func versionView(v *shpyrdv1.CatalogVersion) *CatalogVersionView {
+	if v == nil {
+		return nil
+	}
+	return &CatalogVersionView{Revision: v.Revision, Commit: v.Commit, ShortCommit: shortCommit(v.Commit), Digest: v.Digest}
+}
+
+func shortCommit(c string) string {
+	if len(c) > 12 {
+		return c[:12]
+	}
+	return c
+}
+
+// How long a project read waits for the catalog when it has to be read
+// again; the fetcher serves from memory the rest of the time.
+const catalogReadWait = 2 * time.Second
+
+// catalogLookup reads the catalog once for the projects of one request,
+// and only if one of them comes from it.
+type catalogLookup struct {
+	s    *Server
+	ctx  context.Context
+	done bool
+	ix   *catalog.Index
+	url  string
+}
+
+func (s *Server) catalogLookup(ctx context.Context) *catalogLookup {
+	return &catalogLookup{s: s, ctx: ctx}
+}
+
+func (l *catalogLookup) index() (*catalog.Index, string) {
+	if l.done {
+		return l.ix, l.url
+	}
+	l.done = true
+	if l.s.appCatalog == nil {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(l.ctx, catalogReadWait)
+	defer cancel()
+	ix, err := l.s.appCatalog.Index(ctx)
+	if err != nil || ix == nil {
+		return nil, ""
+	}
+	l.ix, l.url = ix, l.s.appCatalog.Status().URL
+	return l.ix, l.url
+}
+
+// of is the catalog state of a project, or nil when it is not from the
+// catalog. It never fails: whatever cannot be read leaves State empty.
+func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
+	name := a.Annotations[shpyrdv1.AnnotationCatalogEntry]
+	if name == "" {
+		return nil
+	}
+	pc := &ProjectCatalog{Entry: name}
+	cur := a.CurrentRelease()
+	if cur != nil && cur.Catalog != nil && cur.Catalog.Entry == name {
+		pc.Running = versionView(cur.Catalog)
+	}
+	ix, url := l.index()
+	if ix == nil || url != a.Annotations[shpyrdv1.AnnotationCatalogSource] {
+		return pc
+	}
+	e := ix.Find(name)
+	if e == nil || e.Commit == "" {
+		return pc
+	}
+	if src := a.Spec.Source; src == nil || src.Git == nil || !sameRepository(src.Git.URL, e.Catalog.Source.Git) {
+		return pc
+	}
+	// An image deployed by hand is no longer the entry's code. An image
+	// pinned by a rollback is: the project is held on an older version.
+	pinned := a.Spec.Image != ""
+	if pinned && !heldByRollback(a, name) {
+		return pc
+	}
+	offered := &shpyrdv1.CatalogVersion{Entry: name, Digest: e.Digest, Commit: e.Commit, Revision: e.Revision()}
+	here := !pinned && sourceIsVersion(a, e)
+	switch {
+	case pc.Running != nil && pc.Running.Commit == e.Commit && pc.Running.Digest == e.Digest && (here || (pinned && cur != nil && cur.Image == a.Spec.Image)):
+		pc.State = CatalogUpToDate
+	case here && a.Annotations[shpyrdv1.AnnotationCatalogCommit] == e.Commit && a.Annotations[shpyrdv1.AnnotationCatalogDigest] == e.Digest:
+		// Set to the offered version, with its code in the source and no
+		// pinned image: it is rolling out, or its build failed. No second
+		// offer.
+		pc.State, pc.Offered = CatalogUpdating, versionView(offered)
+	default:
+		pc.State, pc.Offered = CatalogUpdateAvailable, versionView(offered)
+	}
+	return pc
+}
+
+// sourceIsVersion says the project's source is the entry's code at the
+// version's commit, with the entry's sub-path and overlay.
+func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
+	src := a.Spec.Source
+	if src == nil || src.Git == nil || !sameRepository(src.Git.URL, e.Catalog.Source.Git) || src.Git.Revision != e.Commit || src.SubPath != e.Catalog.Source.SubPath {
+		return false
+	}
+	have, want := "", ""
+	if src.Overlay != nil {
+		have = src.Overlay.SHA256
+	}
+	if e.Overlay != nil {
+		want = e.Overlay.SHA256
+	}
+	return have == want
+}
+
+// heldByRollback says the image pinned on the project is the entry's code,
+// held there by a rollback: a rollback to a release that ran a version of
+// this entry. An image deployed by hand is not, and neither is a rollback to
+// a release that came from one (a release that carries no version of the
+// entry), nor an image deployed while a rollback was still pending.
+//
+// Both ways of rolling back (the API, and the CLI writing the App with a
+// kubeconfig) leave the same marks: the rollback annotation, until the
+// controller has recorded the release, and then, on the release the
+// controller records for it, the number of the release it returned to
+// (Release.RollbackTo), which only the controller writes. A release note,
+// which a deploy may set freely, stands in for neither. The first release of
+// the run of releases that run the pinned image carries it; releases after
+// it by a change of config vars or sizes run the same image.
+func heldByRollback(a *shpyrdv1.App, entry string) bool {
+	if n, err := strconv.Atoi(a.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
+		// Not yet recorded: the image on the App must be the one the
+		// rollback pinned, not one deployed since, and the release it
+		// returns to must have run this entry.
+		rel := a.ReleaseByNumber(n)
+		return rel != nil && rel.Image == a.Spec.Image && runsEntry(rel.Catalog, entry)
+	}
+	rels := a.Status.Releases
+	i := len(rels)
+	for i > 0 && rels[i-1].Image == a.Spec.Image {
+		i--
+	}
+	return i < len(rels) && rels[i].RollbackTo > 0 && runsEntry(rels[i].Catalog, entry)
+}
+
+func runsEntry(v *shpyrdv1.CatalogVersion, entry string) bool {
+	return v != nil && v.Entry == entry
 }

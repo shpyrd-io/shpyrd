@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,8 +101,22 @@ func (widgetExt) Types() []ext.ResourceType {
 
 // A published catalog on a test server, and a server reading it.
 func catalogServer(t *testing.T) (*Server, client.Client) {
+	return catalogServerWith(t, nil)
+}
+
+// catalogServerWith publishes the catalog resolving each entry's revision
+// with list, as the catalog's CI does; with nil, entries carry no commit.
+func catalogServerWith(t *testing.T, list catalog.RefLister) (*Server, client.Client) {
 	t.Helper()
 	dir, out := t.TempDir(), t.TempDir()
+	publishEntries(t, dir, out, list, fluxyrEntry)
+	return catalogServerAt(t, out)
+}
+
+// publishEntries writes the test entries (fluxyr with the given yaml, and
+// crm) under dir and publishes them to out.
+func publishEntries(t *testing.T, dir, out string, list catalog.RefLister, fluxyrYAML string) {
+	t.Helper()
 	write := func(name, yaml string, files map[string]string) {
 		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
 			t.Fatal(err)
@@ -113,11 +128,16 @@ func catalogServer(t *testing.T) (*Server, client.Client) {
 			}
 		}
 	}
-	write("fluxyr", fluxyrEntry, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim", "icon.svg": fluxyrIcon})
+	write("fluxyr", fluxyrYAML, map[string]string{"README.md": "# Fluxyr\n\nAn agent.", "Dockerfile": "FROM python:3.12-slim", "icon.svg": fluxyrIcon})
 	write("crm", crmEntry, map[string]string{})
-	if _, err := catalog.Publish(dir, out, time.Now()); err != nil {
+	if _, _, err := catalog.PublishResolved(context.Background(), dir, out, time.Now(), list); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// catalogServerAt is a server reading the catalog published in out.
+func catalogServerAt(t *testing.T, out string) (*Server, client.Client) {
+	t.Helper()
 	srv := httptest.NewServer(http.FileServer(http.Dir(out)))
 	t.Cleanup(srv.Close)
 
@@ -367,4 +387,355 @@ func TestTheCatalogNeedsSomeoneWhoMayMakeAProject(t *testing.T) {
 		t.Fatalf("%d", rec.Code)
 	}
 	_ = gin.Mode()
+}
+
+const publishedCommit = "0123456789abcdef0123456789abcdef01234567"
+
+func publishedRefs(context.Context, string) (map[string]string, error) {
+	return map[string]string{"refs/heads/main": publishedCommit, "refs/tags/v2": "89abcdef0123456789abcdef0123456789abcdef", "refs/tags/v3": "89abcdef0123456789abcdef0123456789abcdef"}, nil
+}
+
+func TestAnInstallOfAnEntryWithACommitPinsItAndRecordsTheVersion(t *testing.T) {
+	s, cr := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "POST", "/api/catalog/entries/fluxyr/install", `{"inputs":{"OPENROUTER_API_KEY":"sk-or-123"}}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app := appBySlug(t, cr, "fluxyr")
+	src := app.Spec.Source
+	if src == nil || src.Git == nil || src.Git.URL != "https://github.com/shpyrd-io/fluxyr" || src.Git.Revision != publishedCommit || src.Overlay == nil {
+		t.Fatalf("source %+v", src)
+	}
+	a := app.Annotations
+	if a[shpyrdv1.AnnotationCatalogEntry] != "fluxyr" || !strings.HasPrefix(a[shpyrdv1.AnnotationCatalogDigest], "sha256:") || a[shpyrdv1.AnnotationCatalogSource] == "" ||
+		a[shpyrdv1.AnnotationCatalogCommit] != publishedCommit || a[shpyrdv1.AnnotationCatalogRevision] != "main" {
+		t.Fatalf("annotations %v", a)
+	}
+}
+
+func TestAnInstallWithARevisionOrWithoutACommitIsAsItWas(t *testing.T) {
+	s, cr := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "POST", "/api/catalog/entries/crm/install", `{"revision":"v3"}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app := appBySlug(t, cr, "crm")
+	if app.Spec.Source.Git.Revision != "v3" || app.Annotations[shpyrdv1.AnnotationCatalogCommit] != "" {
+		t.Fatalf("--revision: %+v %v", app.Spec.Source.Git, app.Annotations)
+	}
+	s, cr = catalogServer(t)
+	if rec := do(t, s, "POST", "/api/catalog/entries/crm/install", `{}`, true); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	app = appBySlug(t, cr, "crm")
+	if app.Spec.Source.Git.Revision != "v2" || app.Annotations[shpyrdv1.AnnotationCatalogCommit] != "" {
+		t.Fatalf("no commit: %+v %v", app.Spec.Source.Git, app.Annotations)
+	}
+}
+
+// --- what a project says it runs -------------------------------------
+
+const (
+	commitOld = "1111111111111111111111111111111111111111"
+	commitNew = "2222222222222222222222222222222222222222"
+	fluxyrGit = "https://github.com/shpyrd-io/fluxyr"
+)
+
+// A catalog that can publish a new version of fluxyr, and a project
+// installed from the first.
+type versionedCatalog struct {
+	t    *testing.T
+	s    *Server
+	cr   client.Client
+	dir  string
+	out  string
+	refs map[string]string
+}
+
+func (v *versionedCatalog) list(context.Context, string) (map[string]string, error) {
+	return map[string]string{"refs/heads/main": v.refs["main"], "refs/tags/v2": v.refs["main"]}, nil
+}
+
+// publish republishes with fluxyr's main at commit, and has the server
+// read it now.
+func (v *versionedCatalog) publish(commit, extraEnv string) {
+	v.t.Helper()
+	v.refs["main"] = commit
+	yaml := fluxyrEntry
+	if extraEnv != "" {
+		yaml += extraEnv
+	}
+	publishEntries(v.t, v.dir, v.out, v.list, yaml)
+	if _, err := v.s.appCatalog.Refresh(context.Background()); err != nil {
+		v.t.Fatal(err)
+	}
+}
+
+func newVersionedCatalog(t *testing.T) *versionedCatalog {
+	t.Helper()
+	v := &versionedCatalog{t: t, dir: t.TempDir(), out: t.TempDir(), refs: map[string]string{"main": commitOld}}
+	publishEntries(t, v.dir, v.out, v.list, fluxyrEntry)
+	v.s, v.cr = catalogServerAt(t, v.out)
+	return v
+}
+
+func (v *versionedCatalog) install() *shpyrdv1.App {
+	v.t.Helper()
+	rec := do(v.t, v.s, "POST", "/api/catalog/entries/fluxyr/install", `{"inputs":{"OPENROUTER_API_KEY":"k"}}`, true)
+	if rec.Code != http.StatusCreated {
+		v.t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	return appBySlug(v.t, v.cr, "fluxyr")
+}
+
+// setReleases plays the controller: the project's release history, and the
+// image the App is pinned to.
+func (v *versionedCatalog) setApp(app *shpyrdv1.App, mutate func(*shpyrdv1.App)) *shpyrdv1.App {
+	v.t.Helper()
+	if err := v.cr.Get(context.Background(), client.ObjectKeyFromObject(app), app); err != nil {
+		v.t.Fatal(err)
+	}
+	mutate(app)
+	status := app.Status
+	if err := v.cr.Update(context.Background(), app); err != nil {
+		v.t.Fatal(err)
+	}
+	app.Status = status
+	if err := v.cr.Status().Update(context.Background(), app); err != nil {
+		v.t.Fatal(err)
+	}
+	return app
+}
+
+func (v *versionedCatalog) state() (summary, detailView *ProjectCatalog, d AppDetail) {
+	v.t.Helper()
+	rec := do(v.t, v.s, "GET", "/api/projects", "", true)
+	if rec.Code != http.StatusOK {
+		v.t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var list []AppSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		v.t.Fatal(err)
+	}
+	for _, a := range list {
+		if a.Slug == "fluxyr" {
+			summary = a.Catalog
+		}
+	}
+	rec = do(v.t, v.s, "GET", "/api/projects/fluxyr", "", true)
+	if rec.Code != http.StatusOK {
+		v.t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		v.t.Fatal(err)
+	}
+	return summary, d.Catalog, d
+}
+
+func (v *versionedCatalog) want(state, running, offered string) {
+	v.t.Helper()
+	sum, det, _ := v.state()
+	for name, pc := range map[string]*ProjectCatalog{"summary": sum, "detail": det} {
+		if pc == nil || pc.Entry != "fluxyr" || pc.State != state {
+			v.t.Fatalf("%s: %+v, want state %q", name, pc, state)
+		}
+		if got := commitOf(pc.Running); got != running {
+			v.t.Fatalf("%s: running %q, want %q", name, got, running)
+		}
+		if got := commitOf(pc.Offered); got != offered {
+			v.t.Fatalf("%s: offered %q, want %q", name, got, offered)
+		}
+	}
+}
+
+func commitOf(v *CatalogVersionView) string {
+	if v == nil {
+		return ""
+	}
+	return v.Commit
+}
+
+func ranRelease(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVersion) {
+	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver})
+}
+
+// ranRollback is the release the controller records for a rollback to
+// release to: its note is the one both rollback paths write.
+func ranRollback(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVersion, to int) {
+	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver, Description: fmt.Sprintf("Rollback to v%d", to), RollbackTo: to})
+}
+
+func TestAProjectSaysWhatItRunsAndWhenTheCatalogOffersAnotherVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.install()
+	// Set to the commit it installed, no release yet: installing it.
+	v.want(CatalogUpdating, "", commitOld)
+
+	ver := func(commit, digest string) *shpyrdv1.CatalogVersion {
+		return &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digest, Commit: commit, Revision: "main"}
+	}
+	var digestOld string
+	v.setApp(app, func(a *shpyrdv1.App) {
+		digestOld = a.Annotations[shpyrdv1.AnnotationCatalogDigest]
+		ranRelease(a, 1, "r/a@sha256:1", ver(commitOld, digestOld))
+	})
+	v.want(CatalogUpToDate, commitOld, "")
+
+	// The catalog publishes a different commit: an update is available.
+	v.publish(commitNew, "")
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+
+	// The project is set to it (the update applied): rolling out, no second offer.
+	var digestNew string
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ix, _ := v.s.appCatalog.Index(context.Background())
+		digestNew = ix.Find("fluxyr").Digest
+		a.Annotations[shpyrdv1.AnnotationCatalogDigest] = digestNew
+		a.Annotations[shpyrdv1.AnnotationCatalogCommit] = commitNew
+		a.Spec.Source.Git.Revision = commitNew
+	})
+	v.want(CatalogUpdating, commitOld, commitNew)
+
+	// The controller records the release built from it.
+	v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 2, "r/b@sha256:2", ver(commitNew, digestNew)) })
+	v.want(CatalogUpToDate, commitNew, "")
+	_, _, d := v.state()
+	if r := d.Status.Releases; len(r) != 2 || commitOf(r[0].Catalog) != commitOld || commitOf(r[1].Catalog) != commitNew || r[1].Catalog.ShortCommit != commitNew[:12] {
+		t.Fatalf("release history %+v", r)
+	}
+
+	// Rolled back to release 1: pinned image, still set to the new
+	// version, a release recorded with the old one. It reads as running the
+	// old version with an update available, across reads and a config change.
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Spec.Image = "r/a@sha256:1"
+		ranRollback(a, 3, "r/a@sha256:1", ver(commitOld, digestOld), 1)
+	})
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 4, "r/a@sha256:1", ver(commitOld, digestOld)) })
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	_, _, d = v.state()
+	if len(d.Status.Releases) != 4 || commitOf(d.Status.Releases[3].Catalog) != commitOld {
+		t.Fatalf("history after rollback %+v", d.Status.Releases)
+	}
+}
+
+func TestAChangedDigestWithTheSameCommitIsAnotherVersion(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.install()
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 1, "r/a@sha256:1", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: a.Annotations[shpyrdv1.AnnotationCatalogDigest], Commit: commitOld})
+	})
+	v.want(CatalogUpToDate, commitOld, "")
+	v.publish(commitOld, "  # a note\n")
+	if sum, _, _ := v.state(); sum.State != CatalogUpdateAvailable {
+		t.Fatalf("the entry changed and the code did not: %+v", sum)
+	}
+}
+
+func TestAProjectInstalledBeforeVersionsIsOfferedTheFirstOne(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.install()
+	v.setApp(app, func(a *shpyrdv1.App) {
+		// As installed on a branch before the catalog published commits.
+		delete(a.Annotations, shpyrdv1.AnnotationCatalogCommit)
+		delete(a.Annotations, shpyrdv1.AnnotationCatalogRevision)
+		a.Annotations[shpyrdv1.AnnotationCatalogDigest] = "sha256:old"
+		a.Spec.Source.Git.Revision = "main"
+		ranRelease(a, 1, "r/a@sha256:1", nil)
+	})
+	v.want(CatalogUpdateAvailable, "", commitOld)
+}
+
+func TestNoOfferIsMadeWhenTheCatalogCannotOfferOne(t *testing.T) {
+	cases := map[string]func(v *versionedCatalog, a *shpyrdv1.App){
+		"another catalog": func(v *versionedCatalog, a *shpyrdv1.App) {
+			a.Annotations[shpyrdv1.AnnotationCatalogSource] = "https://elsewhere.test/index.json"
+		},
+		"source moved to another repository": func(v *versionedCatalog, a *shpyrdv1.App) {
+			a.Spec.Source.Git.URL = "https://github.com/someone/else"
+		},
+		"source is an image": func(v *versionedCatalog, a *shpyrdv1.App) { a.Spec.Source = nil },
+		"entry gone": func(v *versionedCatalog, a *shpyrdv1.App) {
+			a.Annotations[shpyrdv1.AnnotationCatalogEntry] = "vanished"
+		},
+	}
+	for name, mutate := range cases {
+		v := newVersionedCatalog(t)
+		app := v.install()
+		v.publish(commitNew, "")
+		v.setApp(app, func(a *shpyrdv1.App) { mutate(v, a) })
+		sum, det, _ := v.state()
+		if sum == nil || det == nil || sum.State != "" || sum.Offered != nil || det.State != "" {
+			t.Errorf("%s: %+v %+v", name, sum, det)
+		}
+	}
+}
+
+func TestNoOfferWhenTheServerReadsNoCatalogOrTheEntryHasNoCommit(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.install()
+	v.s.appCatalog = nil
+	if sum, _, _ := v.state(); sum == nil || sum.State != "" {
+		t.Fatalf("no catalog: %+v", sum)
+	}
+	// A catalog that publishes no commits.
+	s, cr := catalogServer(t)
+	if rec := do(t, s, "POST", "/api/catalog/entries/fluxyr/install", `{"inputs":{"OPENROUTER_API_KEY":"k"}}`, true); rec.Code != http.StatusCreated {
+		t.Fatalf("%d", rec.Code)
+	}
+	rec := do(t, s, "GET", "/api/projects/fluxyr", "", true)
+	var d AppDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil || d.Catalog == nil || d.Catalog.State != "" {
+		t.Fatalf("an entry with no commit: %v %+v", err, d.Catalog)
+	}
+	_ = cr
+	_ = app
+}
+
+func TestACatalogThatCannotBeReadDoesNotFailTheRead(t *testing.T) {
+	v := newVersionedCatalog(t)
+	v.install()
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	v.s.appCatalog = &catalog.Fetcher{URL: dead.URL + "/index.json"}
+	sum, det, _ := v.state()
+	if sum == nil || det == nil || sum.State != "" || det.State != "" {
+		t.Fatalf("%+v %+v", sum, det)
+	}
+}
+
+func TestAProjectNotFromTheCatalogReadsAsBefore(t *testing.T) {
+	s, _ := catalogServer(t)
+	if rec := do(t, s, "POST", "/api/projects", `{"name":"plain"}`, true); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec := do(t, s, "GET", "/api/projects/plain", "", true)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"catalog"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTheEntryViewCarriesTheCommitTheCatalogPublished(t *testing.T) {
+	s, _ := catalogServerWith(t, publishedRefs)
+	rec := do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true)
+	var f CatalogEntryView
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &f) != nil || f.Commit != publishedCommit {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, s, "GET", "/api/catalog", "", true)
+	var view CatalogView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range view.Entries {
+		if e.Commit == "" {
+			t.Fatalf("%s has no commit in the list", e.Name)
+		}
+	}
+	s, _ = catalogServer(t)
+	if rec := do(t, s, "GET", "/api/catalog/entries/fluxyr", "", true); strings.Contains(rec.Body.String(), `"commit"`) {
+		t.Fatalf("an entry without a commit says none: %s", rec.Body.String())
+	}
 }

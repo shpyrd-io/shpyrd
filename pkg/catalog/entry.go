@@ -7,9 +7,12 @@
 // publishes the entries as an index over HTTPS (Publish); the server reads
 // the index (Fetcher) and installs an entry as a project.
 //
-// An entry's source is the upstream repository, followed on a branch or
-// pinned to a tag: the project auto-deploys when upstream moves, as any
-// git project does. The files beside the entry's shpyrd.yaml (a
+// An entry's source is the upstream repository, at a revision: a tag, a
+// commit, or a branch. A version of the entry is its folder (the digest)
+// together with the commit its revision names at the moment the catalog
+// is published (Publish), so an install is pinned to that commit and
+// changes only when the catalog publishes a different version; nothing
+// reads the upstream branch on a timer. The files beside the entry's shpyrd.yaml (a
 // Dockerfile, a config file) are an overlay, laid over the checkout before
 // the build; an overlay goes with a Dockerfile build, since the buildpacks
 // builder reads one source.
@@ -76,9 +79,9 @@ type Meta struct {
 	Resources []Resource `json:"resources,omitempty"`
 }
 
-// Source is where the entry's code is: a git repository, followed on a
-// branch (revision "main" when unset) or pinned to a tag, and the folder
-// in it when the application is not at the root.
+// Source is where the entry's code is: a git repository, the revision to
+// publish (a tag, a commit or a branch; "main" when unset), and the
+// folder in it when the application is not at the root.
 type Source struct {
 	Git      string `json:"git"`
 	Revision string `json:"revision,omitempty"`
@@ -362,7 +365,7 @@ func httpURL(s string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// Revision is the revision the entry follows: "main" when unset.
+// Revision is the revision the entry names: "main" when unset.
 func (e *Entry) Revision() string {
 	if e.Catalog.Source.Revision == "" {
 		return "main"

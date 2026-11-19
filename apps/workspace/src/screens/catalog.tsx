@@ -115,7 +115,7 @@ export function Catalog() {
       <div className="mx-auto grid max-w-6xl gap-8 px-6 pt-5 pb-16 @3xl/page-layout:px-8">
         <Top back={{ to: "/", label: "Launcher" }} title="Catalog" />
         <p className="max-w-2xl text-sm text-muted-foreground">
-          Applications ready to run in this workspace. Pick one, give it what it asks, and it becomes a project of yours: built from its repository, following it from then on.
+          Applications ready to run in this workspace. Pick one, give it what it asks, and it becomes a project of yours, built from its repository.
         </p>
         {catalog.isLoading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -184,7 +184,7 @@ export function CatalogEntryPage() {
   const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
-  const [track, setTrack] = useState<"follow" | "pin">("follow");
+  const [track, setTrack] = useState<"catalog" | "pin">("catalog");
   const [revision, setRevision] = useState("");
   const [exposure, setExposure] = useState<Exposure>("external");
   const e = entry.data;
@@ -289,7 +289,7 @@ export function CatalogEntryPage() {
               )}
             </Stack>
 
-            {/* The install: the project's name and address, what the entry asks, and where it follows upstream. */}
+            {/* The install: the project's name and address, what the entry asks, and which version of the code it is built from. */}
             <Card>
               <CardContent>
                 <Stack gap="normal">
@@ -312,12 +312,12 @@ export function CatalogEntryPage() {
                       />
                     </Field>
                   ))}
-                  <Field label="Updates" hint={track === "follow" ? `Every new commit of ${e.source.revision} is built and released.` : "Nothing changes until you change the revision."}>
-                    <Select value={track} onValueChange={(v) => setTrack(v as "follow" | "pin")}>
-                      <SelectTrigger aria-label="Updates" className="w-full"><SelectValue /></SelectTrigger>
+                  <Field label="Version" hint={versionHint(e, track)}>
+                    <Select value={track} onValueChange={(v) => setTrack(v as "catalog" | "pin")}>
+                      <SelectTrigger aria-label="Version" className="w-full"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="follow">Follow {e.source.revision}</SelectItem>
-                        <SelectItem value="pin">Pin a tag or commit</SelectItem>
+                        <SelectItem value="catalog">{e.commit ? `The catalog's version: ${e.source.revision} (${e.commit.slice(0, 12)})` : `The entry's revision: ${e.source.revision}`}</SelectItem>
+                        <SelectItem value="pin">Another tag or commit</SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
@@ -349,4 +349,12 @@ export function CatalogEntryPage() {
       </div>
     </div>
   );
+}
+
+// What the version chosen means: the catalog's, built as published and kept
+// until a person applies an update, or one the person names.
+function versionHint(e: CatalogEntry, track: "catalog" | "pin"): string {
+  if (track === "pin") return "The project is built from this tag or commit.";
+  if (e.commit) return "The project is built from this version and stays on it until you apply an update.";
+  return `The project is built from ${e.source.revision} as it is when you install.`;
 }

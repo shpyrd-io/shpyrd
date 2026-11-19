@@ -276,6 +276,52 @@ func recordRelease(app *shpyrdv1.App, image, hash, globalHash, source string, no
 	return true
 }
 
+// stampCatalogVersion sets the catalog version of the release just
+// recorded (the last one). A release that reuses the image of an earlier
+// one (a rollback, a change of config vars) runs what that release ran,
+// and takes its version. A release with a new image takes the version the
+// App is set to deploy, but only when it was built from that version's
+// commit: after a person deploys any other code it carries none.
+func stampCatalogVersion(app *shpyrdv1.App) {
+	n := len(app.Status.Releases)
+	if n == 0 {
+		return
+	}
+	rel := &app.Status.Releases[n-1]
+	rel.Catalog = nil
+	target := catalogTarget(app)
+	builtFromTarget := target != nil && app.Spec.Image == "" && app.Spec.Source != nil && app.Spec.Source.Git != nil &&
+		app.Spec.Source.Git.Revision == target.Commit && rel.Source != "" && strings.HasPrefix(target.Commit, strings.TrimSuffix(rel.Source, "-dirty")) && !strings.HasSuffix(rel.Source, "-dirty")
+	for i := n - 2; i >= 0; i-- {
+		prev := app.Status.Releases[i]
+		if prev.Image != rel.Image {
+			continue
+		}
+		switch {
+		case i == n-2 && builtFromTarget && prev.Catalog != nil && *prev.Catalog != *target:
+			// Only the config changed, and the App is now set to a newer
+			// version of the same code: the release runs that version.
+			rel.Catalog = target
+		case prev.Catalog != nil:
+			c := *prev.Catalog
+			rel.Catalog = &c
+		}
+		return
+	}
+	if builtFromTarget {
+		rel.Catalog = target
+	}
+}
+
+// catalogTarget is the version the App is set to deploy, or nil.
+func catalogTarget(app *shpyrdv1.App) *shpyrdv1.CatalogVersion {
+	a := app.Annotations
+	if a[shpyrdv1.AnnotationCatalogEntry] == "" || a[shpyrdv1.AnnotationCatalogDigest] == "" || a[shpyrdv1.AnnotationCatalogCommit] == "" {
+		return nil
+	}
+	return &shpyrdv1.CatalogVersion{Entry: a[shpyrdv1.AnnotationCatalogEntry], Digest: a[shpyrdv1.AnnotationCatalogDigest], Commit: a[shpyrdv1.AnnotationCatalogCommit], Revision: a[shpyrdv1.AnnotationCatalogRevision]}
+}
+
 // unreferencedImages lists the images of dropped releases that no kept
 // release still uses (config-only releases share their predecessor's image).
 func unreferencedImages(dropped, kept []shpyrdv1.Release) []string {

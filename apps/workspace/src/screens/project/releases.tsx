@@ -15,6 +15,7 @@ import { api } from "@/api/api";
 import type { Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import { ago } from "@/lib/project";
+import { versionText } from "./catalog_update";
 import { busy } from "./heading";
 import { duration, Failed, Loading, useStream, when } from "./shared";
 
@@ -78,6 +79,7 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
                         {r.kind}
                       </Badge>
                       {r.description}
+                      {r.catalog && <span className="ml-2 text-xs text-muted-foreground">runs {versionText(r.catalog)}</span>}
                       {r.processes?.length ? <span className="ml-2 text-xs text-muted-foreground">{r.processes.join(", ")}</span> : null}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{r.build ? `#${r.build}` : (r.digest?.slice(0, 12) ?? "-")}</TableCell>

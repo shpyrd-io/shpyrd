@@ -64,6 +64,16 @@ func TestGitHooksShowSaysAutoDeployIsOn(t *testing.T) {
 	if err != nil || !strings.Contains(out, "Auto-deploy is on: every push to main deploys") {
 		t.Errorf("%v\n%s", err, out)
 	}
+	if !strings.Contains(out, "Without either, a push deploys nothing until a person deploys.") || strings.Contains(out, "few minutes") || strings.Contains(out, "checks the branch") {
+		t.Errorf("the line must say a push deploys nothing without the App or the webhook:\n%s", out)
+	}
+}
+
+func TestGitHooksHelpSaysAPushDeploysNothingWithoutTheAppOrTheWebhook(t *testing.T) {
+	out, err := runCLI(t, "git-hooks", "--help")
+	if err != nil || !strings.Contains(out, "Without either, a push deploys nothing until a person") || strings.Contains(out, "few minutes") || strings.Contains(out, "checks the branch") {
+		t.Errorf("%v\n%s", err, out)
+	}
 }
 
 func TestGitHooksRotate(t *testing.T) {

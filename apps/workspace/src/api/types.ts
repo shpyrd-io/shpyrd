@@ -244,6 +244,8 @@ export type Release = {
   build?: string | number;
   digest?: string;
   processes?: string[];
+  // The version of the catalog entry the release runs, when it is known.
+  catalog?: CatalogVersion;
   createdAt: string;
 };
 
@@ -254,6 +256,9 @@ export type ProjectSummary = {
   featured?: boolean;
   // The catalog entry it was installed from, when it was.
   catalogEntry?: string;
+  // What it says of that entry: the version it runs and what the catalog
+  // offers. Only for a project from the catalog.
+  catalog?: ProjectCatalog;
   namespace: string;
   // Its name inside the cluster, <slug>.<workspace>.internal, for the
   // projects it lets in; <slug>.internal is the short form (#311).
@@ -866,6 +871,9 @@ export type CatalogInput = {
 export type CatalogEntry = {
   name: string;
   digest: string;
+  // The commit the catalog published for the entry; with the digest, its
+  // version.
+  commit?: string;
   displayName: string;
   description: string;
   category: string;
@@ -902,3 +910,58 @@ export type CatalogInstall = {
   exposure?: Exposure;
 };
 export type CatalogInstallResult = { project: ProjectSummary; notes?: string[] };
+
+// A version of a catalog entry: the revision the entry names and the
+// commit the catalog published for it.
+export type CatalogVersion = {
+  revision?: string;
+  commit: string;
+  shortCommit: string;
+  digest: string;
+};
+// What a project from the catalog says of its entry. `state` is empty when
+// the catalog offers the project nothing.
+export type ProjectCatalog = {
+  entry: string;
+  running?: CatalogVersion;
+  state?: "up-to-date" | "update-available" | "updating";
+  offered?: CatalogVersion;
+};
+// One input an update adds, and what happens to it: "ask" (the person gives
+// it), "generate", "default", or "restore" (the value the project had).
+export type CatalogUpdateInput = {
+  name: string;
+  label?: string;
+  secret?: boolean;
+  required?: boolean;
+  action: "ask" | "generate" | "default" | "restore";
+  default?: string;
+};
+// What applying the offered version does.
+export type CatalogUpdatePreview = {
+  entry: string;
+  state?: ProjectCatalog["state"];
+  reason?: string;
+  from?: CatalogVersion;
+  to?: CatalogVersion;
+  repository?: string;
+  inputs: CatalogUpdateInput[];
+  volumes: string[];
+  resources: string[];
+  // Resources of the entry that exist and that applying attaches.
+  binds: string[];
+  processesAdded: string[];
+  processesChanged: string[];
+  envAdded: string[];
+  envKept: string[];
+  buildChanged: boolean;
+  overlayChanged: boolean;
+};
+export type CatalogUpdate = { digest: string; inputs?: Record<string, string> };
+export type CatalogUpdateResult = {
+  changed: boolean;
+  reason?: string;
+  from?: CatalogVersion;
+  to?: CatalogVersion;
+  notes?: string[];
+};

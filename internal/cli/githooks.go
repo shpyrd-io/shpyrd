@@ -19,8 +19,11 @@ func newGitHooksCmd(g *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "git-hooks",
 		Short: "Deploy on push: the webhook a git host calls",
-		Long: `A project that deploys from a git branch deploys every push to it. shpyrd
-checks the branch every few minutes by itself; a webhook makes it seconds.
+		Long: `A project that deploys from a git branch deploys every push to it, when
+shpyrd hears of the push: through the shpyrd GitHub App, where it covers the
+repository, or through the project's own webhook, which a push makes deploy
+within seconds. Without either, a push deploys nothing until a person
+deploys (shpyrd deploy, or the dashboard).
 
   shpyrd git-hooks show --project shop      the webhook's URL and secret, and how to add them
   shpyrd git-hooks rotate --project shop    a new URL and secret; the old ones are refused
@@ -113,6 +116,6 @@ func printAutoDeploy(w io.Writer, name string, d api.AppDetail) {
 		branch := firstNonEmpty(git.Revision, "main")
 		fmt.Fprintf(w, "Auto-deploy is off: pushes to %s are recorded, not deployed. Switch it on in the dashboard, or: shpyrd deploy --git %s --ref %s --auto-deploy --project %s\n", branch, git.URL, branch, name)
 	default:
-		fmt.Fprintf(w, "Auto-deploy is on: every push to %s deploys. Without the webhook, shpyrd checks the branch every few minutes.\n", firstNonEmpty(git.Revision, "main"))
+		fmt.Fprintf(w, "Auto-deploy is on: every push to %s deploys when shpyrd hears of it, through the GitHub App or this webhook. Without either, a push deploys nothing until a person deploys.\n", firstNonEmpty(git.Revision, "main"))
 	}
 }

@@ -4,6 +4,7 @@ import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
 import { buildFailed } from "./types";
 import type { Api } from "./api";
 import type {
+  CatalogUpdatePreview,
   CatalogView,
   Globals,
   AllowEntry,
@@ -96,7 +97,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "7";
+const shape = "8";
 const projectsOf = collection<Project>(
   `projects${shape}`,
   projects as Project[],
@@ -828,10 +829,53 @@ export const mock: Api = {
     p.icon = e.icon;
     p.iconColor = e.iconColor;
     p.catalogEntry = e.name;
+    if (e.commit) {
+      const v = { revision: e.source.revision, commit: e.commit, shortCommit: e.commit.slice(0, 12), digest: e.digest };
+      p.catalog = { entry: e.name, running: v, state: "up-to-date" };
+    }
     p.phase = "Building";
     p.status.phase = "Building";
     await projectsOf.set(p);
     return { project: { ...made, icon: e.icon, iconColor: e.iconColor, catalogEntry: e.name, phase: "Building" } };
+  },
+  // What an update does is the one the project's file says is offered;
+  // applying it puts the project on "updating".
+  catalogUpdate: async (slug) => {
+    await wait();
+    const p = await projectsOf.find(slug);
+    const c = p.catalog;
+    if (!c) throw new ApiError(404, "this project was not made from the catalog");
+    const preview: CatalogUpdatePreview = {
+      entry: c.entry, state: c.state, from: c.running, to: c.offered,
+      inputs: [], volumes: [], resources: [], binds: [], processesAdded: [], processesChanged: [], envAdded: [], envKept: [],
+      buildChanged: false, overlayChanged: false,
+    };
+    if (c.state !== "update-available") {
+      preview.reason = c.state === "updating" ? "the project is already rolling out the version the catalog offers" : "the project already runs the version the catalog offers";
+      return preview;
+    }
+    return {
+      ...preview,
+      repository: p.spec.source?.git?.url,
+      inputs: [
+        { name: "FLUXYR_TOKEN", label: "Access token", required: true, secret: true, action: "ask" },
+        { name: "VAULT_ENCRYPTION_KEY", secret: true, action: "generate" },
+      ],
+      volumes: ["cache"],
+      processesAdded: ["worker"],
+      envAdded: ["FLUXYR_WORKERS"],
+      envKept: ["FLUXYR_HOST"],
+    };
+  },
+  applyCatalogUpdate: async (slug, body) => {
+    await wait();
+    const p = await projectsOf.find(slug);
+    const c = p.catalog;
+    if (!c || c.state !== "update-available" || !c.offered) return { changed: false, reason: "the catalog offers this project no update" };
+    if (body.digest !== c.offered.digest) throw new ApiError(409, "the catalog has published another version since you previewed this one: preview the update again");
+    if (!body.inputs?.FLUXYR_TOKEN?.trim()) throw new ApiError(422, "the update needs Access token (FLUXYR_TOKEN)");
+    await projectsOf.set({ ...p, catalog: { ...c, state: "updating" } });
+    return { changed: true, from: c.running, to: c.offered };
   },
   updateProject: async (slug, body) => {
     const p = await projectsOf.find(slug);

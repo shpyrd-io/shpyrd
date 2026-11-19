@@ -19,7 +19,7 @@ On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting
 | registry (`registry:3`) | in-cluster OCI registry for builder and application images, TLS from the platform CA, one platform credential, weekly garbage collection; on cloud profiles it can keep its images in object storage (a provider bucket, or the S3 gateway) |
 | [Calico](https://www.tigera.io/project-calico/) (policy only, `oci` profile) | enforces the per-project `NetworkPolicy` where the provider's CNI does not |
 | [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) + an OCI DNS-01 solver (`oci` profile, optional) | publishes records for every hostname and issues the platform's wildcard certificate |
-| [kpack](https://github.com/buildpacks-community/kpack) + [Paketo buildpacks](https://paketo.io) | builds source into images inside the cluster; polls Git branches for new commits |
+| [kpack](https://github.com/buildpacks-community/kpack) + [Paketo buildpacks](https://paketo.io) | builds source into images inside the cluster, each build given one commit to check out: the commit a push (through the GitHub App or the project's webhook) or a deploy pinned |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | Prometheus (its data on a volume sized by `SHPYRD_MONITORING_SIZE` on cloud profiles), node-exporter, kube-state-metrics |
 | local-path provisioner (`shpyrd-local`) | project volumes and databases on the node's own disk: the local profile, and the disks made on a cloud profile before block storage became the default |
 | [CloudNativePG](https://cloudnative-pg.io) + barman-cloud (extension `postgres`) | PostgreSQL databases, their WAL archive and base backups |

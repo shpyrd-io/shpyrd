@@ -147,7 +147,7 @@ func (s *Server) gitHooks(c *gin.Context, rotate bool) {
 func (s *Server) gitHook(c *gin.Context) {
 	if !s.gitHookDeliveries.allow(c.ClientIP()) {
 		c.Header("Retry-After", "60")
-		abort(c, http.StatusTooManyRequests, errors.New("too many webhook deliveries from this address; shpyrd checks the branch by itself meanwhile"))
+		abort(c, http.StatusTooManyRequests, errors.New("too many webhook deliveries from this address; wait a minute and push again. A push whose delivery is refused deploys nothing until a person deploys"))
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, hookBodyLimit))
