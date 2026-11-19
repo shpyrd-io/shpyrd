@@ -540,6 +540,7 @@ func (s *Server) catalogUpdateApply(c *gin.Context) {
 		if a.Spec.Source == nil || a.Spec.Source.Git == nil {
 			return errors.New("the project's source is no longer the entry's repository")
 		}
+		a.Spec.Source.Git.URL = e.Catalog.Source.Git
 		a.Spec.Source.Git.Revision = e.Commit
 		a.Spec.Source.SubPath = e.Catalog.Source.SubPath
 		a.Spec.Source.Overlay = overlay

@@ -594,7 +594,7 @@ func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
 	if e == nil || e.Commit == "" {
 		return pc
 	}
-	if src := a.Spec.Source; src == nil || src.Git == nil || src.Git.URL != e.Catalog.Source.Git {
+	if src := a.Spec.Source; src == nil || src.Git == nil || !sameRepository(src.Git.URL, e.Catalog.Source.Git) {
 		return pc
 	}
 	// An image deployed by hand is no longer the entry's code. An image
@@ -623,7 +623,7 @@ func (l *catalogLookup) of(a *shpyrdv1.App) *ProjectCatalog {
 // version's commit, with the entry's sub-path and overlay.
 func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
 	src := a.Spec.Source
-	if src == nil || src.Git == nil || src.Git.URL != e.Catalog.Source.Git || src.Git.Revision != e.Commit || src.SubPath != e.Catalog.Source.SubPath {
+	if src == nil || src.Git == nil || !sameRepository(src.Git.URL, e.Catalog.Source.Git) || src.Git.Revision != e.Commit || src.SubPath != e.Catalog.Source.SubPath {
 		return false
 	}
 	have, want := "", ""

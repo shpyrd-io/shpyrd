@@ -990,3 +990,43 @@ func TestARollbackToTheEntrysBuildAfterAnImageWasDeployedIsOffered(t *testing.T)
 	})
 	v.want(CatalogUpdateAvailable, commitOld, commitNew)
 }
+
+func TestTheEntrysRepositorySpelledAnotherWayIsStillTheEntrysRepository(t *testing.T) {
+	other := "3333333333333333333333333333333333333333"
+	for name, url := range map[string]string{
+		"a .git suffix":    entryGitURL + ".git",
+		"another case":     strings.ToUpper(entryGitURL),
+		"a trailing slash": entryGitURL + "/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := newVersionedCatalog(t)
+			app := v.installedAndRunning()
+			v.want(CatalogUpToDate, commitOld, "")
+			if r := v.post("/api/projects/fluxyr/deploy", `{"git":{"url":"`+url+`","revision":"`+other+`"}}`); r.code != http.StatusAccepted {
+				t.Fatalf("deploy: %d %s", r.code, r.body)
+			}
+			v.want(CatalogUpdateAvailable, commitOld, commitOld)
+			v.setApp(app, func(a *shpyrdv1.App) { ranRelease(a, 2, "r/x@sha256:3333", nil) })
+			v.want(CatalogUpdateAvailable, "", commitOld)
+			var p CatalogUpdatePreview
+			rec := do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || p.State != CatalogUpdateAvailable || commitOf(p.To) != commitOld {
+				t.Fatalf("preview %d %s", rec.Code, rec.Body.String())
+			}
+			r := v.apply(`{"digest":"` + v.currentDigest() + `"}`)
+			var res CatalogUpdateResult
+			if err := json.Unmarshal([]byte(r.body), &res); err != nil || r.code != http.StatusAccepted || !res.Changed {
+				t.Fatalf("apply: %d %s", r.code, r.body)
+			}
+			got := v.fresh(app)
+			if got.Spec.Source.Git.Revision != commitOld || got.Spec.Source.Overlay == nil || got.Spec.Image != "" {
+				t.Fatalf("source after apply: %+v %+v", got.Spec.Source.Git, got.Spec.Source.Overlay)
+			}
+			v.want(CatalogUpdating, "", commitOld)
+			r = v.apply(`{"digest":"` + v.currentDigest() + `"}`)
+			if err := json.Unmarshal([]byte(r.body), &res); err != nil || res.Changed {
+				t.Fatalf("a second apply changes nothing: %d %s", r.code, r.body)
+			}
+		})
+	}
+}
