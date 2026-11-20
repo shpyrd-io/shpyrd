@@ -49,8 +49,19 @@ rollback, only when it consumes the rollback annotation and the release runs
 the returned-to image. `rollbackTo` is a field of `Release` in
 `api/v1alpha1/app_types.go`. The API reads that field. It no longer infers
 the rollback from images or notes, and the release returned to must carry a
-version of the entry. The limit that remains, the 20-release history, is
-documented in shpyrd-spec-001 and in the user documentation.
+version of the entry. That left a limit, the 20-release history, because the
+mark sat on a release and releases are trimmed.
+
+The limit was closed afterwards (shpyrd-io/shpyrd#371) by moving the mark to
+where the state lives. "Held by a rollback" is a property of the pin, not of
+a release, so the controller writes it on the App's status
+(`status.rollbackHold`) when it carries out the rollback, and removes it
+when the pin changes. The API reads only that. The release-list rule
+survives in one place, to give the mark once to a project held before the
+mark existed. Run on every reconcile, that rule gave the mark back to an
+image deployed by hand after a deploy from source, which a test through the
+real controller found; `status.rollbackHoldSettled` makes it run once per
+project. The details are in shpyrd-spec-001.
 
 ## How to notice next time
 
