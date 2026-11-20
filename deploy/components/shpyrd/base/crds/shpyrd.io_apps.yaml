@@ -1326,6 +1326,15 @@ spec:
                 - image
                 - release
                 type: object
+              rollbackHoldSettled:
+                description: |-
+                  RollbackHoldSettled says the controller has evaluated this project
+                  once for the upgrade backfill of RollbackHold (a project held by a
+                  rollback under a controller that left no mark). The controller sets
+                  it in the first status write of every project and never clears it;
+                  once set, the release list no longer gives the mark. No request can
+                  fill it.
+                type: boolean
               runtime:
                 description: Runtime is the runtime detected in the current image's
                   buildpack metadata.

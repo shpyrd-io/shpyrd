@@ -1127,6 +1127,7 @@ func TestRollbackHoldIsGivenToAProjectHeldBeforeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	old.Status.RollbackHold = nil
+	old.Status.RollbackHoldSettled = false // the previous controller knew no such field
 	if err := p.c.Status().Update(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
@@ -1142,4 +1143,32 @@ func TestRollbackHoldIsGivenToAProjectHeldBeforeIt(t *testing.T) {
 		t.Fatalf("the rollback's release is still in the history")
 	}
 	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+}
+
+// A rollback, a deploy from source that releases the pin before its build
+// releases anything, then the rolled-back image deployed by hand, with a
+// reconcile after each step: the history still ends with the rollback's
+// release, and it must not give the mark back.
+func TestRollbackHoldIsNotGivenBackAfterASourceDeploy(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	p.deploy(holdImgB, "")
+	wantHold(t, p.rollback(1), &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+	got := p.edit(func(a *shpyrdv1.App) { a.Spec.Image = "" })
+	wantHold(t, got, nil)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	got = p.deploy(holdImgA, "")
+	wantHold(t, got, nil)
+	got = p.reconcile()
+	wantHold(t, got, nil)
+}
+
+// A project the controller reconciled from the start is never eligible for
+// the backfill, and the fact it was evaluated is on its status.
+func TestRollbackHoldBackfillRunsOncePerProject(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	if !p.reconcile().Status.RollbackHoldSettled {
+		t.Fatal("the first reconcile must record the evaluation")
+	}
 }

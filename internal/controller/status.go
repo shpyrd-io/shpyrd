@@ -251,15 +251,19 @@ func rollbackReturnedTo(app *shpyrdv1.App, image string) int {
 // history still holds the release a rollback recorded under the old rule
 // (Release.RollbackTo on the first release of the run that runs the pinned
 // image), is given the mark once: this is the only place that rule survives,
-// for projects held before the mark existed.
+// for projects held before the mark existed, and it runs once per project:
+// Status.RollbackHoldSettled records that the project was evaluated, and from
+// then on the release list never gives the mark again, whatever it holds.
 func settleRollbackHold(app *shpyrdv1.App) {
+	settled := app.Status.RollbackHoldSettled
+	app.Status.RollbackHoldSettled = true
 	if h := app.Status.RollbackHold; h != nil {
 		if h.Image != app.Spec.Image {
 			app.Status.RollbackHold = nil
 		}
 		return
 	}
-	if app.Spec.Image == "" || app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+	if settled || app.Spec.Image == "" || app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
 		return
 	}
 	rels := app.Status.Releases

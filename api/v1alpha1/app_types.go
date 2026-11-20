@@ -741,6 +741,14 @@ type AppStatus struct {
 	// fill it, unlike the release note.
 	// +optional
 	RollbackHold *RollbackHold `json:"rollbackHold,omitempty"`
+	// RollbackHoldSettled says the controller has evaluated this project
+	// once for the upgrade backfill of RollbackHold (a project held by a
+	// rollback under a controller that left no mark). The controller sets
+	// it in the first status write of every project and never clears it;
+	// once set, the release list no longer gives the mark. No request can
+	// fill it.
+	// +optional
+	RollbackHoldSettled bool `json:"rollbackHoldSettled,omitempty"`
 	// StaleImages are images of releases that left the history and that no
 	// kept release uses; the controller deletes them from the in-cluster
 	// registry and removes them from the list (RFC-0059).
