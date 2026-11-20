@@ -732,6 +732,15 @@ type AppStatus struct {
 	// Releases is the deployment history, oldest first.
 	// +optional
 	Releases []Release `json:"releases,omitempty"`
+	// RollbackHold says the image pinned on the App is there because a
+	// rollback returned to it. The controller writes it, in the same status
+	// write as the release, when it consumes the rollback request and the
+	// image it reconciles is the one of the release returned to; it removes
+	// it once the App is no longer pinned to that image. It lives outside
+	// Releases, so the history trimming it does not lose it. No request can
+	// fill it, unlike the release note.
+	// +optional
+	RollbackHold *RollbackHold `json:"rollbackHold,omitempty"`
 	// StaleImages are images of releases that left the history and that no
 	// kept release uses; the controller deletes them from the in-cluster
 	// registry and removes them from the list (RFC-0059).
@@ -888,6 +897,15 @@ type Release struct {
 	// by nothing else: no request can fill it, unlike the release note.
 	// +optional
 	RollbackTo int `json:"rollbackTo,omitempty"`
+}
+
+// RollbackHold is the mark of a rollback that holds the App on an image.
+type RollbackHold struct {
+	// Image is the image the rollback pinned: the App is held while
+	// spec.image is this image.
+	Image string `json:"image"`
+	// Release is the number of the release the rollback returned to.
+	Release int `json:"release"`
 }
 
 // CatalogVersion is one published version of a catalog entry: the entry,

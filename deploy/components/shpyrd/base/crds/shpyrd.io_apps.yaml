@@ -1303,6 +1303,29 @@ spec:
                   - number
                   type: object
                 type: array
+              rollbackHold:
+                description: |-
+                  RollbackHold says the image pinned on the App is there because a
+                  rollback returned to it. The controller writes it, in the same status
+                  write as the release, when it consumes the rollback request and the
+                  image it reconciles is the one of the release returned to; it removes
+                  it once the App is no longer pinned to that image. It lives outside
+                  Releases, so the history trimming it does not lose it. No request can
+                  fill it, unlike the release note.
+                properties:
+                  image:
+                    description: |-
+                      Image is the image the rollback pinned: the App is held while
+                      spec.image is this image.
+                    type: string
+                  release:
+                    description: Release is the number of the release the rollback
+                      returned to.
+                    type: integer
+                required:
+                - image
+                - release
+                type: object
               runtime:
                 description: Runtime is the runtime detected in the current image's
                   buildpack metadata.

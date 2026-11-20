@@ -214,3 +214,26 @@ func withTarget(app *shpyrdv1.App, commit, digest string) *shpyrdv1.App {
 	app.Spec.Source.Git.Revision = commit
 	return app
 }
+
+// A deploy from source releases the pin (spec.image empty): the mark of the
+// rollback that held the image ends, and the history's old rollbackTo does
+// not give it back while the pin is released.
+func TestSettleRollbackHoldEndsWhenThePinIsReleased(t *testing.T) {
+	app := &shpyrdv1.App{
+		Spec: shpyrdv1.AppSpec{Image: ""},
+		Status: shpyrdv1.AppStatus{
+			RollbackHold: &shpyrdv1.RollbackHold{Image: "img-a", Release: 1},
+			Releases: []shpyrdv1.Release{
+				{Number: 1, Image: "img-a"}, {Number: 2, Image: "img-b"}, {Number: 3, Image: "img-a", RollbackTo: 1},
+			},
+		},
+	}
+	settleRollbackHold(app)
+	if app.Status.RollbackHold != nil {
+		t.Fatalf("rollbackHold = %+v, want none", app.Status.RollbackHold)
+	}
+	settleRollbackHold(app)
+	if app.Status.RollbackHold != nil {
+		t.Fatalf("a released pin has no mark to give back: %+v", app.Status.RollbackHold)
+	}
+}
