@@ -181,6 +181,9 @@ func (s *Server) planCatalogUpdate(c *gin.Context, app *shpyrdv1.App) (*updatePl
 		return p, nil
 	default:
 		p.preview.Reason = "the catalog offers this project no update: it is not read, is not the one the project came from, no longer has the entry or a version of it, or the project's source is no longer the entry's repository"
+		if app.Spec.Image != "" {
+			p.preview.Reason += "; an image is pinned on the project, and no rollback to a version of the entry holds it: deploying a commit of the entry's repository brings the offer back"
+		}
 		return p, nil
 	}
 	ix, err := s.appCatalog.Index(ctx)

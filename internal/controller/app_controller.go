@@ -335,6 +335,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileApp is reconcile; it sets gitRefresh once <app>-git is written.
 func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, gitRefresh *time.Duration) (outcome, error) {
+	settleRollbackHold(app)
 	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
 		return r.reconcileMaintenance(ctx, app)
 	}
@@ -657,10 +658,8 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 		// Only when the image the release runs is the one the rollback
 		// returned to: an image deployed while the request was pending is
 		// no rollback.
-		if n, err := strconv.Atoi(app.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
-			if target := app.ReleaseByNumber(n); target != nil && target.Image == image {
-				out.newRelease.RollbackTo = n
-			}
+		if n := rollbackReturnedTo(app, image); n > 0 {
+			out.newRelease.RollbackTo = n
 		}
 		for _, p := range processes(app) {
 			out.newRelease.Processes = append(out.newRelease.Processes, p.Name)
@@ -670,6 +669,13 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 			return outcome{}, err
 		}
 		r.pruneSnapshots(ctx, app)
+	}
+	// The mark of the rollback goes in this status write, also when the
+	// rollback recorded no release (it returned to the config the project
+	// already ran). The annotation is removed after the write, so a failed
+	// removal repeats this one.
+	if n := rollbackReturnedTo(app, image); n > 0 {
+		app.Status.RollbackHold = &shpyrdv1.RollbackHold{Image: image, Release: n}
 	}
 	r.pruneImages(ctx, app)
 	// The note and rollback request are one-shot: consume them whether or

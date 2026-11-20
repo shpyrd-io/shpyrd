@@ -1,0 +1,15 @@
+---
+title: "A rolled-back catalog project keeps its update offer"
+description: "A rollback holds a catalog project on its older version, and the update stays on offer however many config or size changes follow."
+date: "2026-11-20"
+type: fix
+draft: false
+---
+
+A catalog project that a rollback had returned to an older version was offered the newer one only while the rollback stayed within the project's last 20 releases. Each change of a config var or a size makes a release, so after enough of them the project lost the offer, and `shpyrd catalog update` answered that the catalog offers it no update.
+
+The rollback now holds the project on the older version for as long as nothing else changes its code, and the update stays on offer however many releases follow. This holds for a rollback that records no release, too. An image deployed by hand, or a rollback to a release that carries no version of the entry, still ends the offer.
+
+When the catalog offers a project no update because an image is pinned on it and no rollback holds it, `shpyrd catalog update` and the preview now say so, and say that deploying a commit of the entry's repository brings the offer back.
+
+Projects that had already lost the offer are not recovered by this change: deploy a commit of the entry's repository, or roll back again. See [Updating a project from the catalog](/docs/deploying#updating-a-project-from-the-catalog).

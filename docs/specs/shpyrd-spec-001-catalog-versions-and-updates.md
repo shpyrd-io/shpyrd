@@ -64,10 +64,9 @@ release's version, absent when unknown), `state` and `offered`.
   of an image, a rollback to a release that carries no version of the entry,
   and an image deployed while a rollback was still pending all end it. A
   rollback's pin is told by the rollback annotation (whose release must
-  carry a version of the entry and run the pinned image), then by
-  `rollbackTo` on the release recorded for it, which the controller sets only
-  when the release runs the image the rollback returned to (see the limit
-  below).
+  carry a version of the entry and run the pinned image), then by the
+  rollback's mark on the App's status, `status.rollbackHold`, which only the
+  controller writes (see "The offer after a rollback" below).
   `up-to-date` needs the source to be the version, or the pinned image to be
   the current release's.
 - Empty state: the server reads no catalog, or another than the one recorded,
@@ -103,43 +102,80 @@ snapshot of the release), sizes and bindings of the release. It does not
 restore process definitions, build settings or plain variables, and removes
 no volume or resource. The version shown follows the release.
 
-## The limit of the offer after a rollback
+## The offer after a rollback
 
 A rollback is recognised by what only the rollback paths write. Both (the
 API, and the CLI writing the App with a kubeconfig) set the rollback
 annotation, which the offer treats as a rollback until the controller
-consumes it; the controller then records the release a rollback asked for
-with `rollbackTo`, the number of the release it returned to. No request can
-fill that field, and a release note, which a deploy may set freely, does not
-stand in for it. The image pinned on the project is held by a rollback when
-the first release of the run of releases that run it carries `rollbackTo` and a
-version of this entry.
-An image pinned any other way (a deploy of an image) is not, whichever
-images and note it had before, and ends the offer.
+consumes it. When the controller consumes it, and the image it reconciles is
+the image of the release returned to, it writes the rollback's mark on the
+App's status: `status.rollbackHold`, with `image` (the image the rollback
+pinned) and `release` (the number of the release returned to). It writes the
+mark in the same status write as the release, and also when the rollback
+records no release (a rollback to a release with the image and the config
+of the current one). It still records `rollbackTo` on the release a rollback
+asked for; the offer no longer reads it.
 
-So after a rollback, the update is offered again only while the release the
-controller recorded for the rollback is still in the project's history of 20
-releases. Each change of config vars or sizes after the rollback makes
-another release, so once 20 releases have been recorded after the rollback
-release (19 still keep it) the project loses the offer. The version the
-project runs is still shown, since it is read from its current release.
+The image pinned on the project is held by a rollback when the mark's image
+is `spec.image` and the current release carries a version of this entry. No
+request can fill the mark, and a release note, which a deploy may set
+freely, does not stand in for it. An image pinned any other way (a deploy of
+an image) is not held, whichever images and note it had before, and ends the
+offer.
 
-What a person sees then: the project shows the entry and the version it
-runs, with an empty state. No update is offered in the dashboard or by
-`shpyrd catalog status`. `shpyrd catalog update` and the apply call are
-refused (409) with "the catalog offers this project no update". The reasons
-that message lists (the catalog is not read or is another one, the entry is
-gone or has no version, the source is no longer the entry's repository) do
-not apply in this case.
+The controller removes the mark at the start of a reconcile in which the
+mark's image is not `spec.image`: after a deploy of another image, and after
+a deploy from source, which clears the pin. A mark that was removed does not
+come back when the same image is deployed by hand afterwards.
 
-The way out that works today: deploy a commit of the entry's repository to
-the project by hand. That clears the pinned image and keeps the entry's
-records, so the update is offered again. The deploy starts a build of that
-commit without the files the entry lays over the code, which for an entry
-with an overlay may fail, so the update should be applied straight after: it
-sets the catalog's commit and the overlay again.
+So the offer after a rollback does not depend on the project's history of 20
+releases: the project is offered the update however many changes of config
+vars or sizes follow the rollback.
 
-This gap is tracked in https://github.com/shpyrd-io/shpyrd/issues/371.
+### Projects held before the mark existed
+
+A project that a controller older than the mark left held has `rollbackTo`
+on a release and no mark. The controller gives it the mark on its first
+reconcile of the project, by the rule the offer used before: the first
+release of the run of releases that run the pinned image carries
+`rollbackTo`. It applies that rule once per project: `status.rollbackHoldSettled`
+records that the project was evaluated, and from then on the release list
+never gives a mark.
+
+### What remains
+
+- The mark is settled when the controller reconciles. If an image is
+  deployed by hand and then the held image is deployed by hand again with no
+  reconcile in between, the controller never sees the change and the project
+  still reads as held, on the image the rollback pinned.
+- Between the start of a server that reads the mark and the controller's
+  first reconcile of a project held before the mark existed, that project
+  reads an empty state.
+- A project that had already lost the offer, because the release recorded
+  for its rollback had left the history before the mark existed, is not
+  given it back: it cannot be told from an image deployed by hand.
+- A project restored from an archive is pinned to its image with no mark,
+  and is offered no update.
+
+What a person sees on a project whose image is pinned and not held: the
+entry and the version it runs, with an empty state. No update is offered in
+the dashboard or by `shpyrd catalog status`. The preview's `reason` and the
+409 of `shpyrd catalog update` and of the apply call begin "the catalog
+offers this project no update", and say that an image is pinned on the
+project and that deploying a commit of the entry's repository brings the
+offer back.
+
+That way out: deploy a commit of the entry's repository to the project by
+hand, or roll back again to a release that ran a version of the entry. The
+deploy clears the pinned image and keeps the entry's records, so the update
+is offered again. It starts a build of that commit without the files the
+entry lays over the code, which for an entry with an overlay may fail, so
+the update should be applied straight after: it sets the catalog's commit
+and the overlay again.
+
+The App definition gains the two status fields, so it is applied with the
+controller of the same version: an older definition drops them without an
+error.
 
 ## The CLI and the dashboard
 

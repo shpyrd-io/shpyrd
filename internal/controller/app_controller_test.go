@@ -945,3 +945,230 @@ func TestAnImageDeployedWhileARollbackIsPendingRecordsNoRollback(t *testing.T) {
 		t.Fatalf("releases: %+v", got.Status.Releases)
 	}
 }
+
+// The tests below drive the reconciler from a project's start to the state
+// they check, so the mark they read is the one the controller writes.
+
+const (
+	holdImgA = "10.96.0.50:5000/apps/hold@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	holdImgB = "10.96.0.50:5000/apps/hold@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+type holdProject struct {
+	t *testing.T
+	r *AppReconciler
+	c client.Client
+}
+
+func newHoldProject(t *testing.T, image string) *holdProject {
+	t.Helper()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "hold", Namespace: "app-hold", Generation: 1},
+		Spec:       shpyrdv1.AppSpec{Image: image},
+	}
+	env := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "hold-env", Namespace: "app-hold"}, Data: map[string][]byte{"V": []byte("0")}}
+	r, c := newTestReconciler(t, app, env)
+	p := &holdProject{t: t, r: r, c: c}
+	p.reconcile()
+	return p
+}
+
+func (p *holdProject) reconcile() *shpyrdv1.App {
+	p.t.Helper()
+	return runReconcile(p.t, p.r, &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "hold", Namespace: "app-hold"}})
+}
+
+// config changes the config vars and reconciles: a release of the same image.
+func (p *holdProject) config(value string) *shpyrdv1.App {
+	p.t.Helper()
+	env := &corev1.Secret{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: "app-hold", Name: "hold-env"}, env); err != nil {
+		p.t.Fatal(err)
+	}
+	env.Data["V"] = []byte(value)
+	if err := p.c.Update(context.Background(), env); err != nil {
+		p.t.Fatal(err)
+	}
+	return p.reconcile()
+}
+
+// edit writes the App as a client does, then reconciles.
+func (p *holdProject) edit(f func(*shpyrdv1.App)) *shpyrdv1.App {
+	p.t.Helper()
+	cur := &shpyrdv1.App{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: "app-hold", Name: "hold"}, cur); err != nil {
+		p.t.Fatal(err)
+	}
+	f(cur)
+	if err := p.c.Update(context.Background(), cur); err != nil {
+		p.t.Fatal(err)
+	}
+	return p.reconcile()
+}
+
+func (p *holdProject) deploy(image, note string) *shpyrdv1.App {
+	p.t.Helper()
+	return p.edit(func(a *shpyrdv1.App) {
+		a.Spec.Image = image
+		if note != "" {
+			a.Annotations = map[string]string{shpyrdv1.AnnotationReleaseNote: note}
+		}
+	})
+}
+
+// rollback pins the image of release n and asks for it, as the API and the
+// CLI both do.
+func (p *holdProject) rollback(n int) *shpyrdv1.App {
+	p.t.Helper()
+	return p.edit(func(a *shpyrdv1.App) {
+		a.Spec.Image = a.ReleaseByNumber(n).Image
+		a.Annotations = map[string]string{shpyrdv1.AnnotationReleaseNote: fmt.Sprintf("Rollback to v%d", n), shpyrdv1.AnnotationRollbackTo: fmt.Sprint(n)}
+	})
+}
+
+func wantHold(t *testing.T, got *shpyrdv1.App, want *shpyrdv1.RollbackHold) {
+	t.Helper()
+	switch h := got.Status.RollbackHold; {
+	case want == nil && h != nil:
+		t.Fatalf("rollbackHold = %+v, want none", *h)
+	case want != nil && (h == nil || *h != *want):
+		t.Fatalf("rollbackHold = %+v, want %+v", h, *want)
+	}
+}
+
+// A rollback leaves the mark when the controller consumes it, and the mark
+// outlives the release recorded for the rollback, which 25 more releases
+// push out of the history.
+func TestRollbackHoldSurvivesTheHistory(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	p.deploy(holdImgB, "")
+	got := p.rollback(1)
+	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+	if got.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		t.Errorf("the request must be consumed: %v", got.Annotations)
+	}
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	for i := 1; i <= 25; i++ {
+		got = p.config(fmt.Sprintf("c%d", i))
+	}
+	if got.Status.Releases[0].Number == 1 {
+		t.Fatalf("the rollback's release is still in the history: %+v", got.Status.Releases[0])
+	}
+	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+}
+
+// A rollback that records no release (the config of the release returned to
+// is the current one) leaves the mark too.
+func TestRollbackThatRecordsNoReleaseLeavesTheHold(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	p.config("y")
+	got := p.config("0") // v3: image A, the config of v1
+	if n := len(got.Status.Releases); n != 3 {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	got = p.rollback(1)
+	if n := len(got.Status.Releases); n != 3 {
+		t.Fatalf("the rollback must record no release: %+v", got.Status.Releases)
+	}
+	if got.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		t.Errorf("the request must be consumed: %v", got.Annotations)
+	}
+	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+}
+
+// What is not a rollback leaves no mark, and ends one: an image deployed
+// again by hand (A, B, A) even with the words of a rollback in its note, an
+// image deployed while a rollback was pending, and an image deployed by hand
+// after a rollback, then the first image again.
+func TestOnlyARollbackLeavesAHold(t *testing.T) {
+	t.Run("an image deployed again", func(t *testing.T) {
+		p := newHoldProject(t, holdImgA)
+		p.deploy(holdImgB, "")
+		got := p.deploy(holdImgA, "Rollback to v1")
+		wantHold(t, got, nil)
+		if n := len(got.Status.Releases); n != 3 {
+			t.Fatalf("releases = %+v", got.Status.Releases)
+		}
+	})
+	t.Run("an image deployed while a rollback was pending", func(t *testing.T) {
+		p := newHoldProject(t, holdImgA)
+		p.deploy(holdImgB, "")
+		got := p.edit(func(a *shpyrdv1.App) {
+			a.Spec.Image = "10.96.0.50:5000/apps/hold@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+			a.Annotations = map[string]string{shpyrdv1.AnnotationRollbackTo: "1"}
+		})
+		wantHold(t, got, nil)
+	})
+	t.Run("a rollback, a deploy by hand, the first image by hand", func(t *testing.T) {
+		p := newHoldProject(t, holdImgA)
+		p.deploy(holdImgB, "")
+		wantHold(t, p.rollback(1), &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+		wantHold(t, p.deploy(holdImgB, ""), nil)
+		wantHold(t, p.deploy(holdImgA, ""), nil)
+	})
+}
+
+// A project held by a rollback under the previous controller has the
+// rollback's release in its history and no mark. One reconcile gives it the
+// mark, which then outlives that release.
+func TestRollbackHoldIsGivenToAProjectHeldBeforeIt(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	p.deploy(holdImgB, "")
+	got := p.rollback(1)
+	for i := 1; i <= 3; i++ {
+		got = p.config(fmt.Sprintf("c%d", i))
+	}
+	// The state the previous controller leaves: the release with rollbackTo
+	// and the config releases after it, no mark.
+	old := &shpyrdv1.App{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: "app-hold", Name: "hold"}, old); err != nil {
+		t.Fatal(err)
+	}
+	old.Status.RollbackHold = nil
+	old.Status.RollbackHoldSettled = false // the previous controller knew no such field
+	if err := p.c.Status().Update(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(old.Status.Releases); n != 6 || old.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("releases = %+v", old.Status.Releases)
+	}
+	got = p.reconcile()
+	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+	for i := 4; i <= 28; i++ {
+		got = p.config(fmt.Sprintf("c%d", i))
+	}
+	if got.Status.Releases[0].Number == 1 {
+		t.Fatalf("the rollback's release is still in the history")
+	}
+	wantHold(t, got, &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+}
+
+// A rollback, a deploy from source that releases the pin before its build
+// releases anything, then the rolled-back image deployed by hand, with a
+// reconcile after each step: the history still ends with the rollback's
+// release, and it must not give the mark back.
+func TestRollbackHoldIsNotGivenBackAfterASourceDeploy(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	p.deploy(holdImgB, "")
+	wantHold(t, p.rollback(1), &shpyrdv1.RollbackHold{Image: holdImgA, Release: 1})
+	got := p.edit(func(a *shpyrdv1.App) { a.Spec.Image = "" })
+	wantHold(t, got, nil)
+	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].RollbackTo != 1 {
+		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	got = p.deploy(holdImgA, "")
+	wantHold(t, got, nil)
+	got = p.reconcile()
+	wantHold(t, got, nil)
+}
+
+// A project the controller reconciled from the start is never eligible for
+// the backfill, and the fact it was evaluated is on its status.
+func TestRollbackHoldBackfillRunsOncePerProject(t *testing.T) {
+	p := newHoldProject(t, holdImgA)
+	if !p.reconcile().Status.RollbackHoldSettled {
+		t.Fatal("the first reconcile must record the evaluation")
+	}
+}

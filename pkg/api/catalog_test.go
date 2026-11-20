@@ -559,10 +559,12 @@ func ranRelease(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVer
 	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver})
 }
 
-// ranRollback is the release the controller records for a rollback to
-// release to: its note is the one both rollback paths write.
+// ranRollback is what the controller leaves for a rollback to release to:
+// the release it records, with the note both rollback paths write, and the
+// mark of the hold on the status, which it writes in the same status write.
 func ranRollback(app *shpyrdv1.App, n int, image string, ver *shpyrdv1.CatalogVersion, to int) {
 	app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{Number: n, Image: image, Source: "x", Catalog: ver, Description: fmt.Sprintf("Rollback to v%d", to), RollbackTo: to})
+	app.Status.RollbackHold = &shpyrdv1.RollbackHold{Image: image, Release: to}
 }
 
 func TestAProjectSaysWhatItRunsAndWhenTheCatalogOffersAnotherVersion(t *testing.T) {

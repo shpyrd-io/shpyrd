@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strconv"
 	"time"
 
 	"crypto/sha256"
@@ -227,6 +228,52 @@ func short(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+// rollbackReturnedTo is the number of the release a pending rollback request
+// returned to, when the image being reconciled is that release's image; else
+// 0. An image deployed while the request was pending is no rollback.
+func rollbackReturnedTo(app *shpyrdv1.App, image string) int {
+	n, err := strconv.Atoi(app.Annotations[shpyrdv1.AnnotationRollbackTo])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	if target := app.ReleaseByNumber(n); target != nil && target.Image == image {
+		return n
+	}
+	return 0
+}
+
+// settleRollbackHold keeps the mark of a rollback true to the App, at the
+// start of each reconcile. The mark ends as soon as the App is no longer
+// pinned to its image, whatever released the pin (a deploy of an image, a
+// deploy from source). An App with no mark and no request pending, whose
+// history still holds the release a rollback recorded under the old rule
+// (Release.RollbackTo on the first release of the run that runs the pinned
+// image), is given the mark once: this is the only place that rule survives,
+// for projects held before the mark existed, and it runs once per project:
+// Status.RollbackHoldSettled records that the project was evaluated, and from
+// then on the release list never gives the mark again, whatever it holds.
+func settleRollbackHold(app *shpyrdv1.App) {
+	settled := app.Status.RollbackHoldSettled
+	app.Status.RollbackHoldSettled = true
+	if h := app.Status.RollbackHold; h != nil {
+		if h.Image != app.Spec.Image {
+			app.Status.RollbackHold = nil
+		}
+		return
+	}
+	if settled || app.Spec.Image == "" || app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		return
+	}
+	rels := app.Status.Releases
+	i := len(rels)
+	for i > 0 && rels[i-1].Image == app.Spec.Image {
+		i--
+	}
+	if i < len(rels) && rels[i].RollbackTo > 0 {
+		app.Status.RollbackHold = &shpyrdv1.RollbackHold{Image: app.Spec.Image, Release: rels[i].RollbackTo}
+	}
 }
 
 // recordRelease appends a release when image, config or sizes changed. It
