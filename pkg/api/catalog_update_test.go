@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -13,9 +14,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -859,52 +864,308 @@ func TestADeployWithTheNoteOfARollbackIsNoRollback(t *testing.T) {
 	v.wantEmpty()
 }
 
-// The limit of the offer after a rollback: the release the controller
-// recorded for it must be in the history of 20 releases.
-func TestTheOfferAfterARollbackLastsWhileItsReleaseIsInTheHistory(t *testing.T) {
-	for name, further := range map[string]int{"19 further releases keep the rollback release": 19, "20 push it out": 20} {
-		v := newVersionedCatalog(t)
-		app := v.installedAndRunning()
-		v.publishNext(commitNew, fluxyrNext())
-		digestNew := v.currentDigest()
-		if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
-			t.Fatalf("%s: %d %s", name, r.code, r.body)
+// reconciler is the controller itself, on the same cluster the API reads:
+// what the tests below leave on the App after a rollback is what it writes.
+func (v *versionedCatalog) reconciler() func(*shpyrdv1.App) *shpyrdv1.App {
+	v.t.Helper()
+	r := &controller.AppReconciler{
+		Client: v.cr, APIReader: v.cr, Scheme: v.cr.Scheme(), Recorder: record.NewFakeRecorder(1000), Kube: kubefake.NewSimpleClientset(),
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Config:       controller.Config{Domain: "example.test", RegistryHost: "10.96.0.50:5000"}.Defaults(),
+	}
+	return func(app *shpyrdv1.App) *shpyrdv1.App {
+		v.t.Helper()
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
+			v.t.Fatalf("reconcile: %v", err)
 		}
+		return v.fresh(app)
+	}
+}
+
+// configChange changes a config var the way a person does, and has the
+// controller record the release of it.
+func (v *versionedCatalog) configChange(reconcile func(*shpyrdv1.App) *shpyrdv1.App, app *shpyrdv1.App, value string) *shpyrdv1.App {
+	v.t.Helper()
+	ctx := context.Background()
+	a := v.fresh(app)
+	env := &corev1.Secret{}
+	if err := v.cr.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: a.EnvSecretName()}, env); err != nil {
+		v.t.Fatal(err)
+	}
+	if value == "" {
+		delete(env.Data, "CHANGING")
+	} else {
+		env.Data["CHANGING"] = []byte(value)
+	}
+	if err := v.cr.Update(ctx, env); err != nil {
+		v.t.Fatal(err)
+	}
+	return reconcile(app)
+}
+
+// updatedThenRolledBack installs and updates fluxyr (version A, then B),
+// and rolls back to release 1 the way the path says, with the controller
+// consuming the request. It returns the App as the controller left it.
+func (v *versionedCatalog) updatedThenRolledBack(path string) (*shpyrdv1.App, func(*shpyrdv1.App) *shpyrdv1.App) {
+	v.t.Helper()
+	app := v.installedAndRunning()
+	v.settle(app, 1)
+	v.publishNext(commitNew, fluxyrNext())
+	digestNew := v.currentDigest()
+	if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		v.t.Fatalf("update: %d %s", r.code, r.body)
+	}
+	v.settle(app, 2)
+	v.setApp(app, func(a *shpyrdv1.App) {
+		ranRelease(a, 2, "r/b@sha256:2", &shpyrdv1.CatalogVersion{Entry: "fluxyr", Digest: digestNew, Commit: commitNew, Revision: "main"})
+	})
+	switch path {
+	case "api":
+		if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+			v.t.Fatalf("rollback: %d %s", r.code, r.body)
+		}
+	case "cli":
+		// internal/cli appcmds.go: the App written with a kubeconfig.
 		v.setApp(app, func(a *shpyrdv1.App) {
-			versionA := a.Status.Releases[0].Catalog
-			// The history as the controller keeps it: the last 20 releases.
-			a.Status.Releases = nil
-			a.Spec.Image = "r/a@sha256:1"
-			n := 3
-			if further < 20 {
-				ranRollback(a, n, "r/a@sha256:1", versionA, 1)
-				for i := 0; i < further; i++ {
-					n++
-					ranRelease(a, n, "r/a@sha256:1", versionA)
-				}
-			} else {
-				for i := 0; i < further; i++ {
-					ranRelease(a, n+i+1, "r/a@sha256:1", versionA)
+			a.Spec.Image = a.Status.Releases[0].Image
+			a.Spec.Bindings = append([]shpyrdv1.Binding(nil), a.Status.Releases[0].Bindings...)
+			a.Annotations[shpyrdv1.AnnotationReleaseNote] = "Rollback to v1"
+			a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+		})
+	}
+	reconcile := v.reconciler()
+	got := reconcile(app)
+	if got.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		v.t.Fatalf("the controller consumes the request: %v", got.Annotations)
+	}
+	return app, reconcile
+}
+
+// C1 and C2: the offer after a rollback does not end with the 20 releases
+// the history keeps. The App is what the controller leaves: it records the
+// rollback, and 25 releases of config vars after it push that release out.
+func TestTheOfferAfterARollbackOutlastsTheHistory(t *testing.T) {
+	for _, path := range []string{"api", "cli"} {
+		t.Run(path, func(t *testing.T) {
+			v := newVersionedCatalog(t)
+			app, reconcile := v.updatedThenRolledBack(path)
+			digestNew := v.currentDigest()
+			v.want(CatalogUpdateAvailable, commitOld, commitNew)
+			got := v.fresh(app)
+			for i := 1; i <= 25; i++ {
+				got = v.configChange(reconcile, app, fmt.Sprint(i))
+			}
+			if rels := got.Status.Releases; len(rels) != 20 || rels[0].Number <= 3 {
+				t.Fatalf("the rollback's release must have left the history: %+v", rels)
+			}
+			for _, rel := range got.Status.Releases {
+				if rel.RollbackTo != 0 {
+					t.Fatalf("the rollback's release is still there: %+v", rel)
 				}
 			}
-			if len(a.Status.Releases) > 20 {
-				t.Fatalf("the history holds 20: %d", len(a.Status.Releases))
+			if h := got.Status.RollbackHold; h == nil || h.Image != got.Spec.Image {
+				t.Fatalf("the controller's mark: %+v", h)
+			}
+			v.want(CatalogUpdateAvailable, commitOld, commitNew)
+			if r := v.apply(`{"digest":"` + digestNew + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+				t.Fatalf("apply: %d %s", r.code, r.body)
+			}
+			if got := v.fresh(app); got.Spec.Image != "" {
+				t.Fatalf("the pin is released: %q", got.Spec.Image)
 			}
 		})
-		if further < 20 {
-			v.want(CatalogUpdateAvailable, commitOld, commitNew)
-			if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusAccepted {
-				t.Fatalf("%s: apply %d %s", name, r.code, r.body)
-			}
-		} else {
-			s, d := v.stateNow()
-			if s == nil || d == nil || s.State != "" || commitOf(s.Running) != commitOld {
-				t.Fatalf("%s: the version shown, no offer: %+v %+v", name, s, d)
-			}
-			if r := v.apply(`{"digest":"` + digestNew + `"}`); r.code != http.StatusConflict || !strings.Contains(r.body, "the catalog offers this project no update") {
-				t.Fatalf("%s: apply %d %s", name, r.code, r.body)
-			}
+	}
+}
+
+// C3: the fact that a rollback holds the project is not read from the list
+// of releases.
+func TestTheOfferAfterARollbackDoesNotDependOnTheReleaseList(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app, reconcile := v.updatedThenRolledBack("api")
+	v.configChange(reconcile, app, "1")
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	v.setApp(app, func(a *shpyrdv1.App) {
+		a.Status.Releases = a.Status.Releases[len(a.Status.Releases)-1:]
+	})
+	if n := len(v.fresh(app).Status.Releases); n != 1 {
+		t.Fatalf("releases: %d", n)
+	}
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", r.code, r.body)
+	}
+}
+
+// C4: a rollback that records no release, because the release returned to
+// has the image and the config the project runs, leaves the offer.
+func TestARollbackThatRecordsNoReleaseLeavesTheOffer(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.settle(app, 1)
+	v.publishNext(commitNew, fluxyrNext())
+	reconcile := v.reconciler()
+	// v1 ran A with config X. The controller records v2 (A, Y) and v3 (A, X)
+	// as config vars change.
+	v.setApp(app, func(a *shpyrdv1.App) { a.Spec.Image = a.Status.Releases[0].Image })
+	v.configChange(reconcile, app, "y")
+	got := v.configChange(reconcile, app, "")
+	n := len(got.Status.Releases)
+	if got.Status.RollbackHold != nil || got.Status.Releases[n-1].Image != got.Status.Releases[0].Image {
+		t.Fatalf("before the rollback: %+v", got.Status)
+	}
+	if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", r.code, r.body)
+	}
+	got = reconcile(app)
+	if len(got.Status.Releases) != n || got.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		t.Fatalf("the rollback records no release, and its request is consumed: %d releases, %v", len(got.Status.Releases), got.Annotations)
+	}
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", r.code, r.body)
+	}
+}
+
+// deployImage deploys an image through the API and has the controller
+// reconcile it.
+func (v *versionedCatalog) deployImage(reconcile func(*shpyrdv1.App) *shpyrdv1.App, app *shpyrdv1.App, image, note string) *shpyrdv1.App {
+	v.t.Helper()
+	body := `{"image":"` + image + `"`
+	if note != "" {
+		body += `,"note":"` + note + `"`
+	}
+	if r := v.post("/api/projects/fluxyr/deploy", body+`}`); r.code != http.StatusAccepted {
+		v.t.Fatalf("deploy %s: %d %s", image, r.code, r.body)
+	}
+	return reconcile(app)
+}
+
+// wantNoOfferAndNoApply: the state is empty and the apply is refused with
+// nothing changed.
+func (v *versionedCatalog) wantNoOfferAndNoApply(app *shpyrdv1.App) {
+	v.t.Helper()
+	v.wantEmpty()
+	before := v.snapshot(app)
+	if r := v.apply(`{"digest":"` + v.currentDigest() + `","inputs":{"NEW_NEEDED":"y"}}`); r.code != http.StatusConflict || !strings.Contains(r.body, "the catalog offers this project no update") {
+		v.t.Fatalf("an update is not applied over an image: %d %s", r.code, r.body)
+	}
+	if v.snapshot(app) != before {
+		v.t.Fatal("changed")
+	}
+}
+
+// C5, with the controller reconciling each step: what is not a rollback
+// leaves no hold, and ends one.
+func TestWhatIsNotARollbackEndsTheOfferWhenTheControllerHasReconciledIt(t *testing.T) {
+	const imgA, imgB, imgC = "r/a@sha256:1", "registry.example.test/app:1", "registry.example.test/app:2"
+	start := func(t *testing.T) (*versionedCatalog, *shpyrdv1.App, func(*shpyrdv1.App) *shpyrdv1.App) {
+		v := newVersionedCatalog(t)
+		app := v.installedAndRunning()
+		v.settle(app, 1)
+		v.publishNext(commitNew, fluxyrNext())
+		return v, app, v.reconciler()
+	}
+	rollbackTo := func(v *versionedCatalog, n int) {
+		if r := v.post("/api/projects/fluxyr/rollback", fmt.Sprintf(`{"release":%d,"force":true}`, n)); r.code != http.StatusOK {
+			v.t.Fatalf("rollback: %d %s", r.code, r.body)
 		}
+	}
+	t.Run("an image deployed by hand, one it ran before, with the note of a rollback", func(t *testing.T) {
+		v, app, reconcile := start(t)
+		for _, image := range []string{imgB, imgC, imgB} {
+			v.deployImage(reconcile, app, image, "")
+			v.wantEmpty()
+		}
+		v.deployImage(reconcile, app, imgB, "Rollback to v1")
+		if got := v.fresh(app); got.Status.RollbackHold != nil {
+			t.Fatalf("a mark: %+v", got.Status.RollbackHold)
+		}
+		v.wantNoOfferAndNoApply(app)
+	})
+	t.Run("a rollback to a release that carries no version of the entry", func(t *testing.T) {
+		v, app, reconcile := start(t)
+		v.deployImage(reconcile, app, imgB, "")
+		v.deployImage(reconcile, app, imgC, "")
+		rollbackTo(v, 2)
+		got := reconcile(app)
+		if got.Spec.Image != imgB {
+			t.Fatalf("image %q", got.Spec.Image)
+		}
+		v.wantNoOfferAndNoApply(app)
+	})
+	t.Run("an image deployed while a rollback request was pending", func(t *testing.T) {
+		v, app, reconcile := start(t)
+		v.deployImage(reconcile, app, imgB, "")
+		rollbackTo(v, 1)
+		v.deployImage(reconcile, app, imgC, "")
+		if got := v.fresh(app); got.Status.RollbackHold != nil || got.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+			t.Fatalf("a mark or a request left: %+v %v", got.Status.RollbackHold, got.Annotations)
+		}
+		v.wantNoOfferAndNoApply(app)
+	})
+	t.Run("a rollback that held the project, an image by hand, the first image by hand again", func(t *testing.T) {
+		v, app, reconcile := start(t)
+		v.deployImage(reconcile, app, imgB, "")
+		rollbackTo(v, 1)
+		reconcile(app)
+		v.want(CatalogUpdateAvailable, commitOld, commitNew)
+		v.deployImage(reconcile, app, imgB, "")
+		v.wantNoOfferAndNoApply(app)
+		v.deployImage(reconcile, app, imgA, "")
+		if got := v.fresh(app); got.Status.RollbackHold != nil {
+			t.Fatalf("a mark: %+v", got.Status.RollbackHold)
+		}
+		v.wantNoOfferAndNoApply(app)
+	})
+}
+
+// C5 (e): the pin released by a deploy from source, whose build has not
+// released a release yet, and then the rolled-back image deployed by hand.
+func TestARollbackThenASourceDeployThenItsImageByHandIsNoOffer(t *testing.T) {
+	const imgA, imgB = "r/a@sha256:1", "registry.example.test/app:1"
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.settle(app, 1)
+	v.publishNext(commitNew, fluxyrNext())
+	reconcile := v.reconciler()
+	v.deployImage(reconcile, app, imgB, "")
+	if r := v.post("/api/projects/fluxyr/rollback", `{"release":1,"force":true}`); r.code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", r.code, r.body)
+	}
+	reconcile(app)
+	v.want(CatalogUpdateAvailable, commitOld, commitNew)
+	other := "3333333333333333333333333333333333333333"
+	if r := v.post("/api/projects/fluxyr/deploy", `{"git":{"url":"`+entryGitURL+`","revision":"`+other+`"}}`); r.code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", r.code, r.body)
+	}
+	reconcile(app)
+	if got := v.fresh(app); got.Spec.Image != "" || got.Status.RollbackHold != nil {
+		t.Fatalf("the pin and the mark are released: %q %+v", got.Spec.Image, got.Status.RollbackHold)
+	}
+	v.deployImage(reconcile, app, imgA, "")
+	v.wantNoOfferAndNoApply(app)
+}
+
+// C7: a project pinned to an image no rollback holds is told so, and what
+// brings the offer back.
+func TestTheRefusalNamesThePinnedImage(t *testing.T) {
+	v := newVersionedCatalog(t)
+	app := v.installedAndRunning()
+	v.publishNext(commitNew, fluxyrNext())
+	v.deployImage(v.reconciler(), app, "registry.example.test/app:1", "")
+	rec := do(t, v.s, "GET", "/api/projects/fluxyr/catalog/update", "", true)
+	var p CatalogUpdatePreview
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	r := v.apply(`{"digest":"` + v.currentDigest() + `"}`)
+	for name, reason := range map[string]string{"the preview": p.Reason, "the 409": r.body} {
+		if !strings.Contains(reason, "the catalog offers this project no update") || !strings.Contains(reason, "an image is pinned on the project") || !strings.Contains(reason, "deploying a commit of the entry's repository brings the offer back") {
+			t.Errorf("%s: %q", name, reason)
+		}
+	}
+	if !strings.HasPrefix(p.Reason, "the catalog offers this project no update") || r.code != http.StatusConflict {
+		t.Errorf("%q %d", p.Reason, r.code)
 	}
 }
 

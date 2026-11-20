@@ -644,26 +644,30 @@ func sourceIsVersion(a *shpyrdv1.App, e *catalog.IndexEntry) bool {
 //
 // Both ways of rolling back (the API, and the CLI writing the App with a
 // kubeconfig) leave the same marks: the rollback annotation, until the
-// controller has recorded the release, and then, on the release the
-// controller records for it, the number of the release it returned to
-// (Release.RollbackTo), which only the controller writes. A release note,
-// which a deploy may set freely, stands in for neither. The first release of
-// the run of releases that run the pinned image carries it; releases after
-// it by a change of config vars or sizes run the same image.
+// controller has consumed it, and then the mark the controller writes on the
+// status (status.rollbackHold), which no request can fill and which does not
+// depend on the release list: the history keeps 20 releases, a hold may last
+// longer. The mark counts while its image is the one pinned on the project.
+// The release the project runs must carry a version of the entry.
+//
+// A project held by a rollback of the previous controller has no mark until
+// the controller's first reconcile of it, which gives it one. Until then it
+// reads as pinned to an image, with no offer: the window is one reconcile,
+// and a read of the release list for it would bring back the limit.
 func heldByRollback(a *shpyrdv1.App, entry string) bool {
 	if n, err := strconv.Atoi(a.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
-		// Not yet recorded: the image on the App must be the one the
+		// Not yet consumed: the image on the App must be the one the
 		// rollback pinned, not one deployed since, and the release it
 		// returns to must have run this entry.
 		rel := a.ReleaseByNumber(n)
 		return rel != nil && rel.Image == a.Spec.Image && runsEntry(rel.Catalog, entry)
 	}
-	rels := a.Status.Releases
-	i := len(rels)
-	for i > 0 && rels[i-1].Image == a.Spec.Image {
-		i--
+	h := a.Status.RollbackHold
+	if h == nil || h.Image == "" || h.Image != a.Spec.Image {
+		return false
 	}
-	return i < len(rels) && rels[i].RollbackTo > 0 && runsEntry(rels[i].Catalog, entry)
+	cur := a.CurrentRelease()
+	return cur != nil && runsEntry(cur.Catalog, entry)
 }
 
 func runsEntry(v *shpyrdv1.CatalogVersion, entry string) bool {
