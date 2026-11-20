@@ -235,8 +235,8 @@ aggregationRule:
     - matchLabels:
         rbac.shpyrd.io/aggregate-to-admin: "true"
 ---
-# Platform roles: cluster-wide read of the project model and, for admins,
-# the membership objects.
+# Platform roles: cluster-wide read of the project model. Teams and grants
+# live in the control-plane database (RFC-0033), not in Kubernetes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -244,9 +244,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [namespaces, nodes]
-    verbs: [get, list, watch]
-  - apiGroups: [shpyrd.io]
-    resources: [teams, projectmembers]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -257,9 +254,6 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [create, delete]
-  - apiGroups: [shpyrd.io]
-    resources: [teams, projectmembers]
-    verbs: [create, update, patch, delete]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings, clusterrolebindings]
     verbs: [get, list, watch]
