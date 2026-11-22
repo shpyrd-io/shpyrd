@@ -64,6 +64,11 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		latest = &builds[len(builds)-1]
 	}
 	if latest == nil || latest.Annotations[shpyrdv1.AnnotationBuildKey] != key {
+		// No build starts while the registry is in maintenance: the push
+		// would be refused.
+		if r.registryInMaintenance(ctx) {
+			return heldBuild(app, lastImage(builds)), nil
+		}
 		n := 1
 		if latest != nil {
 			n = buildNumber(latest) + 1

@@ -471,11 +471,16 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 				setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, "Moving", app.Status.Message)
 				return requeue(5 * time.Second), nil
 			}
-			if err != nil {
+			if errors.Is(err, errBuildHeld) {
+				// The registry is in maintenance: no build starts, and what
+				// runs keeps running (registry_maintenance.go).
+				build, img = heldBuild(app, ""), nil
+			} else if err != nil {
 				return outcome{}, err
+			} else {
+				build = readBuildState(img)
 			}
-			build = readBuildState(img)
-			if build.Ready == "Unknown" {
+			if img != nil && build.Ready == "Unknown" {
 				// kpack names the Build it starts in latestBuildRef, but a
 				// status update lost at that moment (a conflict) is not made
 				// again while that Build runs: latestBuildRef stays empty, or
@@ -486,7 +491,7 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 					build.LatestBuild = b
 				}
 			}
-			if build.LatestBuild != "" {
+			if build.LatestBuild != "" && img != nil {
 				kpackBuild = r.getBuild(ctx, app.Namespace, build.LatestBuild)
 			}
 			// kpack's own sentence names a pod and kubectl: the customer
@@ -495,6 +500,15 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 				switch {
 				case kpackBuild != nil && buildFailed(kpackBuild):
 					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
+					// A build that failed for the registry's maintenance
+					// is not the app's outcome: it waits, then runs again.
+					held, ok, err := r.holdFailedBuild(ctx, app, kpackBuild, build)
+					if err != nil {
+						return outcome{}, err
+					}
+					if ok {
+						build = held
+					}
 				case composesBuild(app) && build.builderNotReady():
 					// A builder of the project's own is made on its first
 					// deploy, and kpack waits for it (#143).
@@ -521,7 +535,7 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, build.failedReason(), build.Message)
 		default:
 			reason := "Building"
-			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit {
+			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit || build.Reason == shpyrdv1.ReasonRegistryMaintenance {
 				reason = build.Reason
 			}
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
@@ -768,6 +782,9 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	err = r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	switch {
 	case apierrors.IsNotFound(err):
+		if r.registryInMaintenance(ctx) {
+			return nil, errBuildHeld
+		}
 		// A move in progress (above) also waits for the old cache claim.
 		if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name + "-cache"}, &corev1.PersistentVolumeClaim{}); err == nil {
 			return nil, errImageMoving
@@ -836,6 +853,12 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		desired = withServicesOf(desired, current)
 	}
 
+	// No build starts while the registry is in maintenance: a push would be
+	// refused. The Image is changed once it ends.
+	if (needsTrigger || !equalJSON(current.Object["spec"], desired.Object["spec"])) && r.registryInMaintenance(ctx) {
+		return nil, errBuildHeld
+	}
+
 	// The redeploy's build: the trigger, unless the update below changes
 	// what kpack builds (another source address, other build.env values,
 	// the Secret bound), which builds by itself; both would build twice,
@@ -887,6 +910,10 @@ func releaseProcess(app *shpyrdv1.App) shpyrdv1.Process {
 // errImageMoving says the kpack Image is between repositories: the old one
 // (and its cache claim) is going, the new one is created once they are gone.
 var errImageMoving = errors.New("kpack image moving to a new repository")
+
+// errBuildHeld says the build was not started: the registry is in
+// maintenance.
+var errBuildHeld = errors.New("build held for the registry's maintenance")
 
 // kpackBuildNeededAnnotation on an Image's latest Build makes kpack schedule
 // another build of the same source (build reason TRIGGER).

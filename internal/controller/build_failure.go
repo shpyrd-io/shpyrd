@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -283,6 +284,9 @@ func kpackStep(kpackMessage string) string {
 // disk, the source server away, the registry refusing), the fault itself.
 // For the API, which never reads logs.
 func KpackFailure(b *unstructured.Unstructured) string {
+	if rerunActive(b, time.Now()) {
+		return maintenanceRerunMessage
+	}
 	if msg := b.GetAnnotations()[shpyrdv1.AnnotationBuildFailure]; msg != "" {
 		return msg
 	}
@@ -323,6 +327,9 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	if b == nil {
 		return describeBuildFailure("", "")
 	}
+	if rerunActive(b, r.now()) {
+		return maintenanceRerunMessage
+	}
 	if msg := b.GetAnnotations()[shpyrdv1.AnnotationBuildFailure]; msg != "" {
 		return msg
 	}
@@ -333,6 +340,11 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	// kpack's message names the platform's faults when the step's output
 	// does not (the machine evicted the build; nothing was written).
 	msg := describeBuildFailure(step, out+"\n"+kpackMessage(b))
+	// A refused write while the registry is in maintenance is not a failure
+	// of the build: it is marked to run again, and says so.
+	if started && !stepNotStarted(kpackMessage(b)) && r.markForRerun(ctx, b, step, out+"\n"+kpackMessage(b)) {
+		return maintenanceRerunMessage
+	}
 	if !started || stepNotStarted(kpackMessage(b)) {
 		msg = notStartedMessage
 	}
