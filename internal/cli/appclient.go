@@ -17,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -496,6 +497,19 @@ var (
 	staleGrace = 90 * time.Second
 )
 
+// heldForMaintenance says the project waits for the platform's scheduled
+// maintenance of its image storage: it is Building and its Built condition
+// has the reason the controller gives that state. The state is read from the
+// reason, never from the message. The wait's limits do not run while it
+// holds: the build starts by itself when the maintenance ends.
+func heldForMaintenance(d *api.AppDetail) bool {
+	if d.Status.Phase != shpyrdv1.PhaseBuilding {
+		return false
+	}
+	c := meta.FindStatusCondition(d.Status.Conditions, shpyrdv1.ConditionBuilt)
+	return c != nil && c.Reason == shpyrdv1.ReasonRegistryMaintenance
+}
+
 // waitRunningAPI waits for the project to run the release the caller just
 // asked for. stale is the failure the project showed before (nil when it
 // was not failing, or when nothing new was asked for): seen again unchanged,
@@ -550,6 +564,9 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 				// Moving: a failure from now on is this release's own.
 				stale = nil
 			}
+		}
+		if heldForMaintenance(d) {
+			deadline = time.Now().Add(timeout)
 		}
 		if time.Now().After(deadline) {
 			return d, fmt.Errorf("timed out waiting for %s to be running (%s)", slug, d.Status.Phase)
@@ -626,6 +643,7 @@ func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, tim
 	// A project whose last build failed says so until the new build is
 	// registered: that message is old news, not this build's verdict.
 	stale := ""
+	announced := false
 	for i := 0; build == ""; i++ {
 		d, err := a.getDetail(ctx, slug)
 		if err != nil {
@@ -641,10 +659,19 @@ func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, tim
 		if d.Status.Phase == shpyrdv1.PhaseFailed && d.Status.Message != stale {
 			return errors.New(d.Status.Message)
 		}
+		if heldForMaintenance(d) {
+			// The build is held until the maintenance ends: say so once and
+			// keep waiting; the limit runs again from the build's start.
+			if !announced {
+				fmt.Fprintf(a.out, "    %s\n", firstNonEmpty(d.Status.Message, "The build waits for the platform's scheduled maintenance to end."))
+				announced = true
+			}
+			deadline = time.Now().Add(timeout)
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("no build started within %s", timeout)
 		}
-		if err := sleepCtx(ctx, 2*time.Second); err != nil {
+		if err := sleepCtx(ctx, waitPoll); err != nil {
 			return err
 		}
 	}
