@@ -596,18 +596,24 @@ func (g *RegistryGC) podFailure(ctx context.Context, job *batchv1.Job) string {
 	return other
 }
 
-// oneLine joins the lines of s with spaces and cuts it to limit characters,
-// keeping the end when tail is set (the end of a log says why it stopped).
+// oneLine joins the lines of s with spaces and cuts it to at most limit
+// characters, the ellipsis included, keeping the end when tail is set (the
+// end of a log says why it stopped).
 func oneLine(s string, limit int, tail bool) string {
+	const ellipsis = "..."
 	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
 	if len(r) <= limit {
 		return s
 	}
-	if tail {
-		return "..." + string(r[len(r)-limit:])
+	if limit < len(ellipsis) {
+		return string(r[:limit])
 	}
-	return string(r[:limit]) + "..."
+	keep := limit - len(ellipsis)
+	if tail {
+		return ellipsis + string(r[len(r)-keep:])
+	}
+	return string(r[:keep]) + ellipsis
 }
 
 func (g *RegistryGC) summaryMessage(ctx context.Context, job *batchv1.Job) (string, error) {

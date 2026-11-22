@@ -238,12 +238,14 @@ func TestRegistryGarbageCollectionRecordsAFailure(t *testing.T) {
 	for i := range lines {
 		lines[i] = "line " + strconv.Itoa(i) + " of the collector's output that goes on and on"
 	}
-	failingCollector(g, c, gcFailure{job: failedJob("DeadlineExceeded", "Job was active longer than specified deadline"), pod: terminated(strings.Join(lines, "\n"))})
+	// Long enough, with the pod's message, to exceed the limit once assembled.
+	longJobMessage := strings.Repeat("the Job was stopped\n", 40)
+	failingCollector(g, c, gcFailure{job: failedJob("DeadlineExceeded", longJobMessage), pod: terminated(strings.Join(lines, "\n"))})
 
+	before := time.Now().Truncate(time.Second)
 	if err := g.Trigger(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	started := g.Status(context.Background()).StartedAt
 	// The run is over when the record no longer holds the earlier result.
 	for deadline := time.Now().Add(15 * time.Second); g.Status(context.Background()).LastResult == "ok"; {
 		if time.Now().After(deadline) {
@@ -262,7 +264,7 @@ func TestRegistryGarbageCollectionRecordsAFailure(t *testing.T) {
 	if cm.Data["usedBytes"] != "123456" {
 		t.Errorf("usedBytes = %q, want the earlier size", cm.Data["usedBytes"])
 	}
-	if cm.Data["lastRun"] != started.UTC().Format(time.RFC3339) {
+	if lastRun, err := time.Parse(time.RFC3339, cm.Data["lastRun"]); err != nil || lastRun.Before(before) || lastRun.After(time.Now()) {
 		t.Errorf("lastRun = %q, want the failed run's start", cm.Data["lastRun"])
 	}
 	st := g.Status(context.Background())
@@ -275,6 +277,21 @@ func TestRegistryGarbageCollectionRecordsAFailure(t *testing.T) {
 	var jobs batchv1.JobList
 	if err := c.List(context.Background(), &jobs); err != nil || len(jobs.Items) != 0 {
 		t.Errorf("jobs left: %d, %v", len(jobs.Items), err)
+	}
+}
+
+// The cut keeps the ellipsis inside the limit, from either end.
+func TestOneLineNeverExceedsItsLimit(t *testing.T) {
+	long := strings.Repeat("word\n", 1000)
+	for _, tail := range []bool{false, true} {
+		for _, limit := range []int{2, 3, 4, 300, 500} {
+			if got := oneLine(long, limit, tail); len([]rune(got)) > limit || strings.Contains(got, "\n") {
+				t.Errorf("oneLine(limit %d, tail %v) = %d characters", limit, tail, len([]rune(got)))
+			}
+		}
+	}
+	if got := oneLine("a\nb", 500, false); got != "a b" {
+		t.Errorf("short input = %q", got)
 	}
 }
 
