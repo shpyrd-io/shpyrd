@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -499,12 +500,8 @@ func (g *RegistryGC) waitJob(ctx context.Context, job *batchv1.Job) (*gcSummary,
 		if cur.Status.Succeeded > 0 {
 			return g.summary(ctx, job)
 		}
-		if cur.Status.Failed > 0 {
-			msg := "collector failed"
-			if s, err := g.summaryMessage(ctx, job); err == nil && s != "" {
-				msg += ": " + s
-			}
-			return nil, errors.New(msg)
+		if cond := jobFailedCondition(cur); cond != nil || cur.Status.Failed > 0 {
+			return nil, errors.New(g.failureMessage(ctx, job, cond))
 		}
 		select {
 		case <-ctx.Done():
@@ -512,6 +509,111 @@ func (g *RegistryGC) waitJob(ctx context.Context, job *batchv1.Job) (*gcSummary,
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// jobFailedCondition is the Job's Failed condition when it is true. A Job
+// stopped by its deadline carries it with no failed pod to count.
+func jobFailedCondition(job *batchv1.Job) *batchv1.JobCondition {
+	for i := range job.Status.Conditions {
+		c := &job.Status.Conditions[i]
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return c
+		}
+	}
+	return nil
+}
+
+// Bounds on what a failed run leaves in the record: it is shown on one line
+// of the CLI and in the dashboard.
+const (
+	maxResultLength    = 500
+	maxPodDetailLength = 300
+)
+
+// failureMessage says why the collector failed: the Job's own reason first
+// (DeadlineExceeded, BackoffLimitExceeded), then what the pod shows, the end
+// of its output or why it never ran.
+func (g *RegistryGC) failureMessage(ctx context.Context, job *batchv1.Job, cond *batchv1.JobCondition) string {
+	msg := "collector failed"
+	if cond != nil {
+		if cond.Reason != "" {
+			msg += ": " + cond.Reason
+		}
+		if cond.Message != "" {
+			msg += ": " + oneLine(cond.Message, maxPodDetailLength, false)
+		}
+	}
+	if detail := g.podFailure(ctx, job); detail != "" {
+		msg += ": " + detail
+	}
+	return msg
+}
+
+// podFailure describes what the Job's pod shows: its termination message
+// (the end of its log, or the summary it wrote), else why it is still
+// pending or waiting.
+func (g *RegistryGC) podFailure(ctx context.Context, job *batchv1.Job) string {
+	var pods corev1.PodList
+	if err := g.reader().List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
+		return ""
+	}
+	var other string
+	for _, p := range pods.Items {
+		for _, cs := range p.Status.ContainerStatuses {
+			switch {
+			case cs.State.Terminated != nil:
+				t := cs.State.Terminated
+				if m := oneLine(t.Message, maxPodDetailLength, true); m != "" {
+					return m
+				}
+				if other == "" {
+					other = fmt.Sprintf("container exited with code %d", t.ExitCode)
+					if t.Reason != "" {
+						other += " (" + t.Reason + ")"
+					}
+				}
+			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
+				if other == "" {
+					other = cs.State.Waiting.Reason
+					if m := cs.State.Waiting.Message; m != "" {
+						other += ": " + oneLine(m, maxPodDetailLength, false)
+					}
+				}
+			}
+		}
+		if other == "" {
+			for _, c := range p.Status.Conditions {
+				if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+					other = c.Reason
+					if c.Message != "" {
+						other += ": " + oneLine(c.Message, maxPodDetailLength, false)
+					}
+					break
+				}
+			}
+		}
+	}
+	return other
+}
+
+// oneLine joins the lines of s with spaces and cuts it to at most limit
+// characters, the ellipsis included, keeping the end when tail is set (the
+// end of a log says why it stopped).
+func oneLine(s string, limit int, tail bool) string {
+	const ellipsis = "..."
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	if limit < len(ellipsis) {
+		return string(r[:limit])
+	}
+	keep := limit - len(ellipsis)
+	if tail {
+		return ellipsis + string(r[len(r)-keep:])
+	}
+	return string(r[:keep]) + ellipsis
 }
 
 func (g *RegistryGC) summaryMessage(ctx context.Context, job *batchv1.Job) (string, error) {
@@ -546,12 +648,18 @@ func (g *RegistryGC) record(ctx context.Context, started time.Time, result strin
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: registryGCRecordName, Namespace: g.Namespace}}
 	data := map[string]string{
 		"lastRun":        started.UTC().Format(time.RFC3339),
-		"lastResult":     result,
+		"lastResult":     oneLine(result, maxResultLength, false),
 		"lastDuration":   time.Since(started).Truncate(time.Second).String(),
 		"reclaimedBytes": strconv.FormatInt(reclaimed, 10),
 		"usedBytes":      strconv.FormatInt(used, 10),
 	}
 	err := g.reader().Get(ctx, client.ObjectKeyFromObject(cm), cm)
+	if err == nil && result != "ok" {
+		// A failed run measured nothing: keep the size the last run found.
+		if v, ok := cm.Data["usedBytes"]; ok {
+			data["usedBytes"] = v
+		}
+	}
 	switch {
 	case apierrors.IsNotFound(err):
 		cm.Labels = map[string]string{"app.kubernetes.io/part-of": "shpyrd"}

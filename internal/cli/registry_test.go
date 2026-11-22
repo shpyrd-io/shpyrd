@@ -12,6 +12,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
@@ -59,5 +61,33 @@ func TestServerRequestSendsAWriteOnce(t *testing.T) {
 	}
 	if n := gets.Load(); n < 2 {
 		t.Errorf("GET sent %d times, want it tried again", n)
+	}
+}
+
+// A collection that failed shows why, not a reclaimed size; one that
+// succeeded still shows what it reclaimed.
+func TestPrintRegistryShowsTheCollectionOutcome(t *testing.T) {
+	last := time.Now().Add(-time.Hour)
+	collection := func(gc controller.GCStatus) string {
+		var b strings.Builder
+		printRegistry(&b, &api.RegistryInfo{GC: &gc})
+		for _, l := range strings.Split(b.String(), "\n") {
+			if strings.HasPrefix(l, "Collection:") {
+				return l
+			}
+		}
+		t.Fatalf("no Collection line in %q", b.String())
+		return ""
+	}
+
+	reason := "collector failed: DeadlineExceeded: Job was active longer than specified deadline"
+	line := collection(controller.GCStatus{LastRun: &last, LastResult: reason, UsedBytes: 123456})
+	if !strings.Contains(line, reason) || strings.Contains(line, "reclaimed") {
+		t.Errorf("failed run: %q", line)
+	}
+
+	line = collection(controller.GCStatus{LastRun: &last, LastResult: "ok", ReclaimedBytes: 600, LastDuration: "2m0s"})
+	if !strings.Contains(line, "reclaimed") || !strings.Contains(line, "in 2m0s") {
+		t.Errorf("successful run: %q", line)
 	}
 }
