@@ -92,6 +92,21 @@ message once and neither limit counts. The limits apply again when the
 reason changes. The exit code keeps its meaning: zero only when the release
 runs.
 
+A build that ends failed in the build list is the deploy's failure only
+when the project says so. The list shows a build the maintenance refused as
+failed before the controller has marked it to run again, so after a failed
+build the CLI reads the project:
+
+- phase `Failed`: the command ends with that build's error;
+- the reason `RegistryMaintenance`: the CLI prints the message once and
+  waits, the limit not counting;
+- a newer build: the CLI follows it, and the same rules apply to it;
+- none of these: the CLI waits up to the limit, then ends with the build's
+  error.
+
+A build that failed for any other cause is therefore reported with the same
+error as before, once the project reports it.
+
 This holds for the waits that go through the workspace's API. The waits of
 a CLI that talks to the cluster with a kubeconfig are unchanged.
 
