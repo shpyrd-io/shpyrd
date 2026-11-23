@@ -17,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -496,6 +497,19 @@ var (
 	staleGrace = 90 * time.Second
 )
 
+// heldForMaintenance says the project waits for the platform's scheduled
+// maintenance of its image storage: it is Building and its Built condition
+// has the reason the controller gives that state. The state is read from the
+// reason, never from the message. The wait's limits do not run while it
+// holds: the build starts by itself when the maintenance ends.
+func heldForMaintenance(d *api.AppDetail) bool {
+	if d.Status.Phase != shpyrdv1.PhaseBuilding {
+		return false
+	}
+	c := meta.FindStatusCondition(d.Status.Conditions, shpyrdv1.ConditionBuilt)
+	return c != nil && c.Reason == shpyrdv1.ReasonRegistryMaintenance
+}
+
 // waitRunningAPI waits for the project to run the release the caller just
 // asked for. stale is the failure the project showed before (nil when it
 // was not failing, or when nothing new was asked for): seen again unchanged,
@@ -550,6 +564,9 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 				// Moving: a failure from now on is this release's own.
 				stale = nil
 			}
+		}
+		if heldForMaintenance(d) {
+			deadline = time.Now().Add(timeout)
 		}
 		if time.Now().After(deadline) {
 			return d, fmt.Errorf("timed out waiting for %s to be running (%s)", slug, d.Status.Phase)
@@ -619,60 +636,109 @@ func (a *appClient) followRelease(ctx context.Context, slug, target string) *rel
 
 // followBuildAPI streams the output of the build that follows a deploy: it
 // waits for a build newer than before, streams its steps, then checks how
-// it ended.
+// it ended. A build the list shows as failed is not final at once: the
+// project's own verdict decides (see buildVerdict), and a build the platform
+// holds for the registry's maintenance is followed by the one that runs
+// again, whose output is streamed in its turn.
 func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	build := ""
 	// A project whose last build failed says so until the new build is
 	// registered: that message is old news, not this build's verdict.
 	stale := ""
-	for i := 0; build == ""; i++ {
-		d, err := a.getDetail(ctx, slug)
+	announced := false
+	say := func(d *api.AppDetail) {
+		// The maintenance is announced once, however many builds it holds.
+		if !announced {
+			fmt.Fprintf(a.out, "    %s\n", firstNonEmpty(d.Status.Message, "The build waits for the platform's scheduled maintenance to end."))
+			announced = true
+		}
+	}
+	for round := 0; ; round++ {
+		build := ""
+		for i := 0; build == ""; i++ {
+			d, err := a.getDetail(ctx, slug)
+			if err != nil {
+				return err
+			}
+			if round == 0 && i == 0 && d.Status.Phase == shpyrdv1.PhaseFailed {
+				stale = d.Status.Message
+			}
+			if d.Status.LatestBuild != "" && d.Status.LatestBuild != before {
+				build = d.Status.LatestBuild
+				break
+			}
+			if d.Status.Phase == shpyrdv1.PhaseFailed && d.Status.Message != stale {
+				return errors.New(d.Status.Message)
+			}
+			if heldForMaintenance(d) {
+				// The build is held until the maintenance ends: say so once and
+				// keep waiting; the limit runs again from the build's start.
+				say(d)
+				deadline = time.Now().Add(timeout)
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("no build started within %s", timeout)
+			}
+			if err := sleepCtx(ctx, waitPoll); err != nil {
+				return err
+			}
+		}
+		stream, err := a.serverStream(ctx, "api/projects/"+slug+"/builds/"+url.PathEscape(build)+"/logs?follow=true")
 		if err != nil {
 			return err
 		}
-		if i == 0 && d.Status.Phase == shpyrdv1.PhaseFailed {
-			stale = d.Status.Message
+		_, copyErr := io.Copy(a.out, stream)
+		stream.Close()
+		if copyErr != nil && ctx.Err() == nil {
+			return fmt.Errorf("build output: %w", copyErr)
 		}
-		if d.Status.LatestBuild != "" && d.Status.LatestBuild != before {
-			build = d.Status.LatestBuild
-			break
-		}
-		if d.Status.Phase == shpyrdv1.PhaseFailed && d.Status.Message != stale {
-			return errors.New(d.Status.Message)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("no build started within %s", timeout)
-		}
-		if err := sleepCtx(ctx, 2*time.Second); err != nil {
+		// The stream ends with the build; its status says how.
+		raw, err := a.serverRequest(ctx, "GET", "api/projects/"+slug+"/builds", nil, "")
+		if err != nil {
 			return err
 		}
-	}
-	stream, err := a.serverStream(ctx, "api/projects/"+slug+"/builds/"+url.PathEscape(build)+"/logs?follow=true")
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(a.out, stream)
-	stream.Close()
-	if copyErr != nil && ctx.Err() == nil {
-		return fmt.Errorf("build output: %w", copyErr)
-	}
-	// The stream ends with the build; its status says how.
-	raw, err := a.serverRequest(ctx, "GET", "api/projects/"+slug+"/builds", nil, "")
-	if err != nil {
-		return err
-	}
-	var builds []api.BuildInfo
-	_ = json.Unmarshal(raw, &builds)
-	for _, b := range builds {
-		if b.Name == build {
-			if b.Status == "Failed" {
-				return fmt.Errorf("build %d: %s", b.Number, firstNonEmpty(b.Message, "The build failed. The build's log has the full output."))
+		var builds []api.BuildInfo
+		_ = json.Unmarshal(raw, &builds)
+		var failed *api.BuildInfo
+		for i, b := range builds {
+			if b.Name == build && b.Status == "Failed" {
+				failed = &builds[i]
 			}
+		}
+		if failed == nil {
 			return nil
 		}
+		failure := fmt.Errorf("build %d: %s", failed.Number, firstNonEmpty(failed.Message, "The build failed. The build's log has the full output."))
+		// The list says Failed before the controller has decided whether the
+		// failure is the project's or the maintenance's: wait for the project.
+		deadline = time.Now().Add(timeout)
+		again := false
+		for !again {
+			d, err := a.getDetail(ctx, slug)
+			if err != nil {
+				return err
+			}
+			switch {
+			case d.Status.LatestBuild != "" && d.Status.LatestBuild != build:
+				// A new build took its place: it is the one to follow.
+				again = true
+				continue
+			case d.Status.Phase == shpyrdv1.PhaseFailed || d.Status.Phase == shpyrdv1.PhaseRunning:
+				return failure
+			case heldForMaintenance(d):
+				say(d)
+				deadline = time.Now().Add(timeout)
+			}
+			if time.Now().After(deadline) {
+				return failure
+			}
+			if err := sleepCtx(ctx, waitPoll); err != nil {
+				return err
+			}
+		}
+		before = build
+		deadline = time.Now().Add(timeout)
 	}
-	return nil
 }
 
 // uploadSourceAPI sends an archive to POST /api/sources through the

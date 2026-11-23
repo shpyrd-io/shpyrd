@@ -201,6 +201,30 @@ const (
 	ConditionSourceReady = "SourceReady"
 )
 
+// Registry maintenance (shpyrd-spec-002): while the in-cluster registry is
+// read-only for a garbage collection, builds wait or run again instead of
+// failing.
+const (
+	// ReasonRegistryMaintenance is the reason of the Built condition while
+	// a build waits for the registry's maintenance to end. A reader that
+	// has to tell it from any other build in progress reads this, not the
+	// message.
+	ReasonRegistryMaintenance = "RegistryMaintenance"
+	// AnnotationRegistryReadOnlySince, on the registry's Deployment, is the
+	// time (RFC 3339, UTC) the garbage collector switched the registry to
+	// read-only. Only the collector writes it, in the update that swaps the
+	// configuration, and removes it in the update that swaps it back.
+	AnnotationRegistryReadOnlySince = "shpyrd.io/registry-readonly-since"
+	// AnnotationBuildRerun, on a failed kpack Build, says the controller
+	// holds it for a new build after the registry's maintenance: "waiting"
+	// while the registry is read-only, then the time (RFC 3339, UTC) the
+	// new build was asked for.
+	AnnotationBuildRerun = "shpyrd.io/build-rerun"
+	// BuildRerunWaiting is the value of AnnotationBuildRerun before the new
+	// build is asked for.
+	BuildRerunWaiting = "waiting"
+)
+
 // AppSpec is the desired state of an application.
 type AppSpec struct {
 	// ID is the project's stable identifier, a UUID (RFC-0076). Set once at

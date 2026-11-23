@@ -30,9 +30,10 @@ import (
 // runs, which needs the registry read-only. RegistryGC runs the sequence on
 // a schedule and on demand: switch the registry to read-only (a copy of its
 // configuration with maintenance.readonly enabled, swapped in with a
-// Recreate rollout: pulls keep working, pushes fail and builds retry), run
-// the collector in a Job on the registry's node against the same volume,
-// switch back, record the outcome.
+// Recreate rollout: pulls keep working, pushes fail), run the collector in a
+// Job on the registry's node against the same volume, switch back, record
+// the outcome. The switch marks the registry's Deployment, so that builds
+// wait, or run again, while the mark is there (registry_maintenance.go).
 
 const (
 	registryDeploymentName = "registry"
@@ -331,6 +332,11 @@ func (g *RegistryGC) setReadOnly(ctx context.Context, on bool) error {
 			v.ConfigMap.Name = want
 			changed = true
 		}
+	}
+	// The mark that says "read-only for a collection" changes with the
+	// configuration, in the same update, and nowhere else.
+	if markRegistryReadOnly(dep, on, time.Now()) {
+		changed = true
 	}
 	if changed {
 		if err := g.Client.Update(ctx, dep); err != nil {
