@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"path"
 	"regexp"
@@ -63,6 +64,13 @@ type AppReconciler struct {
 	mirror projectMirror
 	// Now returns the current time; nil means time.Now (tests override it).
 	Now func() time.Time
+	// RegistryHTTP is the HTTP client for the platform registry; nil uses
+	// the registry package's default. Tests inject one that trusts a fake.
+	RegistryHTTP *http.Client
+	// builderPrune remembers, per builder repository, when the pruning of
+	// its tags runs next (builder_prune.go). In memory on purpose: after a
+	// restart the repository is looked at once more.
+	builderPrune sync.Map
 	// sleepPaused remembers apps whose sleep objects were torn down because
 	// KEDA could not scale them (RFC-0075): App UID → sleepPause. A new
 	// policy (a new spec generation) retries. In memory on purpose: after a
@@ -297,6 +305,11 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if next, gcErr := r.gcRunPods(ctx, app); gcErr != nil {
 		logger.Error(gcErr, "clean up one-off instances")
 	} else if next > 0 && (out.result.RequeueAfter == 0 || next < out.result.RequeueAfter) {
+		out.result.RequeueAfter = next
+	}
+	// The builder repository's old tags go after the status is written; a
+	// failure of the pass never reaches the project.
+	if next := r.pruneBuilderTags(ctx, app); next > 0 && (out.result.RequeueAfter == 0 || next < out.result.RequeueAfter) {
 		out.result.RequeueAfter = next
 	}
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {

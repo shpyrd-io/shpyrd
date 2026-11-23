@@ -106,6 +106,16 @@ var detectionOrder = []string{"java", "nodejs", "go", "python", "ruby", "php", "
 // builderName is the project's Builder.
 func builderName(app *shpyrdv1.App) string { return app.Name + "-builder" }
 
+// builderTag is the repository the project's Builder writes its images to,
+// with the registry's host: the app's repository and "/builder".
+func (c Config) builderTag(app *shpyrdv1.App) (string, error) {
+	tag, err := c.imageTag(app)
+	if err != nil {
+		return "", err
+	}
+	return tag + "/builder", nil
+}
+
 // desiredBuilder renders the project's kpack Builder; with buildEnv the
 // build-env buildpack is first in every group, as in the platform's builder
 // (build_env.go).
@@ -114,7 +124,7 @@ func (c Config) desiredBuilder(app *shpyrdv1.App, buildEnv bool) (*unstructured.
 	if !ok {
 		return nil, fmt.Errorf("build.stack must be base or full, got %q", app.Spec.Build.Stack)
 	}
-	tag, err := c.imageTag(app)
+	tag, err := c.builderTag(app)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +177,7 @@ func (c Config) desiredBuilder(app *shpyrdv1.App, buildEnv bool) (*unstructured.
 	u.SetNamespace(app.Namespace)
 	u.SetLabels(commonLabels(app))
 	u.Object["spec"] = map[string]interface{}{
-		"tag":                tag + "/builder",
+		"tag":                tag,
 		"stack":              map[string]interface{}{"name": stack, "kind": "ClusterStack"},
 		"serviceAccountName": c.buildServiceAccountName(gitauth.Build{}),
 		"order":              group,
