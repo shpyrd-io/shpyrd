@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -159,6 +160,37 @@ func (c *Client) Tags(ctx context.Context, repo string) ([]string, error) {
 // not an error.
 func (c *Client) DeleteManifest(ctx context.Context, repo, digest string) error {
 	resp, err := c.do(ctx, http.MethodDelete, "/v2/"+repo+"/manifests/"+digest, "")
+	if err != nil {
+		if IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+var (
+	// tagPattern is the tag grammar of the distribution spec.
+	tagPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
+	// repoPattern is the repository name grammar of the distribution spec.
+	repoPattern = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+)
+
+// DeleteTag removes one tag from a repository with a single DELETE on the
+// tag's manifest path; the manifest itself and its other tags stay. A tag
+// that is already gone is not an error. The reference must be a valid tag
+// name, so a digest can never be passed here (a digest on that path would
+// delete the manifest), and the repository must be a valid name; both are
+// checked before any request is sent.
+func (c *Client) DeleteTag(ctx context.Context, repo, tag string) error {
+	if !repoPattern.MatchString(repo) {
+		return fmt.Errorf("registry: invalid repository name")
+	}
+	if !tagPattern.MatchString(tag) {
+		return fmt.Errorf("registry: invalid tag name")
+	}
+	resp, err := c.do(ctx, http.MethodDelete, "/v2/"+repo+"/manifests/"+tag, "")
 	if err != nil {
 		if IsNotFound(err) {
 			return nil

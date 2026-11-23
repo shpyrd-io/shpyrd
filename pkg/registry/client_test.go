@@ -110,3 +110,49 @@ func TestBuildMetadataRuntime(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteTag(t *testing.T) {
+	var requests []string
+	status := http.StatusAccepted
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	c := &Client{Host: strings.TrimPrefix(srv.URL, "https://"), HTTP: srv.Client()}
+	ctx := context.Background()
+
+	if err := c.DeleteTag(ctx, "shpyrd/builder", "b1"); err != nil {
+		t.Fatalf("delete tag: %v", err)
+	}
+	if len(requests) != 1 || requests[0] != "DELETE /v2/shpyrd/builder/manifests/b1" {
+		t.Errorf("requests = %v", requests)
+	}
+
+	status = http.StatusNotFound
+	if err := c.DeleteTag(ctx, "shpyrd/builder", "gone"); err != nil {
+		t.Errorf("absent tag must not be an error: %v", err)
+	}
+
+	for _, code := range []int{http.StatusMethodNotAllowed, http.StatusUnauthorized, http.StatusInternalServerError} {
+		status = code
+		if err := c.DeleteTag(ctx, "shpyrd/builder", "b1"); err == nil {
+			t.Errorf("status %d must be an error", code)
+		}
+	}
+
+	requests = nil
+	for _, tag := range []string{"", "sha256:" + strings.Repeat("a", 64), "a/b", "../x", ".hidden", "-x", "a b", "a?x=1", strings.Repeat("a", 129)} {
+		if err := c.DeleteTag(ctx, "shpyrd/builder", tag); err == nil {
+			t.Errorf("tag %q must be refused", tag)
+		}
+	}
+	for _, repo := range []string{"", "../x", "Shpyrd/builder", "a//b", "a/b/", "a b", "a?x=1"} {
+		if err := c.DeleteTag(ctx, repo, "b1"); err == nil {
+			t.Errorf("repository %q must be refused", repo)
+		}
+	}
+	if len(requests) != 0 {
+		t.Errorf("invalid input reached the registry: %v", requests)
+	}
+}
