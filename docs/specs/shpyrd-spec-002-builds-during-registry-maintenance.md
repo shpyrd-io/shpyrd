@@ -3,8 +3,8 @@ id: shpyrd-spec-002
 type: spec
 title: Builds during the registry's maintenance
 status: active
-date: 2026-11-22
-related: [shpyrd-les-001]
+date: 2026-11-23
+related: [shpyrd-les-001, shpyrd-spec-003]
 governs: [internal/controller/registry_maintenance.go, internal/controller/registrygc.go, internal/controller/build_failure.go, internal/controller/dockerfile.go, internal/cli/appclient.go]
 ---
 
@@ -122,3 +122,5 @@ a CLI that talks to the cluster with a kubeconfig are unchanged.
   fails as any build would.
 - The window itself is as long as the collector takes. This document does
   not shorten it: builds started in it are delayed until it ends.
+  What the collector has to walk in the builder repositories is reduced by
+  shpyrd-spec-003.
