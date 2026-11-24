@@ -3,12 +3,21 @@ id: shpyrd-glo-001
 type: glossary
 title: Glossary
 status: active
-date: 2026-11-18
-related: [shpyrd-dec-001, shpyrd-spec-001, shpyrd-spec-002]
+date: 2026-11-23
+related: [shpyrd-dec-001, shpyrd-spec-001, shpyrd-spec-002, shpyrd-spec-003]
 ---
 
 Terms specific to this repository, in alphabetical order. Terms shared by
 several repositories are defined in the workspace and only referenced here.
+
+**Builder (of a project).** The image a project that composes its build is
+built with, made by the build system from the buildpacks the project uses
+and saved in the project's own builder repository,
+`<app repository>/builder`. See shpyrd-spec-003.
+
+**Builder pruning.** The removal, by the controller, of the old time tags
+of a project's builder repository, so that the registry's garbage
+collection can remove the builders no longer in use. See shpyrd-spec-003.
 
 **Catalog.** The repository of entry folders, published as an index the
 server reads, from which projects are made. See shpyrd-spec-001.

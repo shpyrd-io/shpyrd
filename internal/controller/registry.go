@@ -60,7 +60,9 @@ func (r *AppReconciler) registryClient(ctx context.Context) (*registry.Client, e
 		}
 		data = sec.Data[corev1.DockerConfigJsonKey]
 	}
-	return registry.FromDockerConfig(host, data), nil
+	cl := registry.FromDockerConfig(host, data)
+	cl.HTTP = r.RegistryHTTP
+	return cl, nil
 }
 
 // pruneImages deletes the images of releases that left the history from the
