@@ -111,7 +111,7 @@ func (c Config) beginOwnership(app *shpyrdv1.App) func() {
 			continue
 		}
 		if _, ok := answers[h]; !ok {
-			answers[h] = c.HostAvailability(workspaceOf(app), h)
+			answers[h] = c.askHost(app, h)
 		}
 	}
 	key := snapshotKey(app)
@@ -133,6 +133,18 @@ func (c Config) hostAvailability(app *shpyrdv1.App, host string) tenancy.Availab
 			return a
 		}
 		return tenancy.HostUnknown
+	}
+	return c.askHost(app, host)
+}
+
+// askHost puts the question to the ownership rule. A name that is not a
+// valid host (a wildcard, a malformed name, a URL) is HostInvalid without
+// asking: it is refused for good, can never be free, and unlike an unknown
+// answer it does not hold the routing of the app's other hosts. Only an
+// answer that could not be obtained stays HostUnknown.
+func (c Config) askHost(app *shpyrdv1.App, host string) tenancy.Availability {
+	if !tenancy.ValidHost(host) {
+		return tenancy.HostInvalid
 	}
 	return c.HostAvailability(workspaceOf(app), host)
 }
@@ -168,6 +180,7 @@ type hostRefusal struct {
 const (
 	hostTakenMessage    = "this host belongs to another workspace and cannot be served by this project"
 	hostPlatformMessage = "this host is a name of the platform and cannot be served by this project"
+	hostInvalidMessage  = "this is not a valid hostname and cannot be served by this project"
 )
 
 // refusedHosts are the hosts of spec.domains the ownership rule refuses,
@@ -184,6 +197,8 @@ func (c Config) refusedHosts(app *shpyrdv1.App) ([]hostRefusal, bool) {
 			out = append(out, hostRefusal{h, hostTakenMessage})
 		case tenancy.HostPlatform:
 			out = append(out, hostRefusal{h, hostPlatformMessage})
+		case tenancy.HostInvalid:
+			out = append(out, hostRefusal{h, hostInvalidMessage})
 		default: // HostUnknown, and any value not known yet: never free
 			settled = false
 		}
@@ -443,10 +458,27 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 	// A refused host is neither looked up nor given a certificate: it only
 	// says why.
 	for _, f := range refused {
-		out = append(out, shpyrdv1.DomainStatus{Host: f.Host, Target: target, Address: address, DNS: DNSUnknown, Certificate: CertFailed, Message: f.Message})
+		out = append(out, shpyrdv1.DomainStatus{Host: statusHost(f.Host), Target: target, Address: address, DNS: DNSUnknown, Certificate: CertFailed, Message: f.Message})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out, pending
+}
+
+// statusHost is a refused host as the status shows it: the name as stored,
+// with every byte that is not printable ASCII replaced by "?" and cut at
+// 253 bytes, so a malformed entry cannot put control characters or an
+// unbounded string in the status.
+func statusHost(h string) string {
+	b := []byte(h)
+	if len(b) > 253 {
+		b = b[:253]
+	}
+	for i, c := range b {
+		if c < 0x21 || c > 0x7e {
+			b[i] = '?'
+		}
+	}
+	return string(b)
 }
 
 // RecordFor is the record that points host at a project: a CNAME to the

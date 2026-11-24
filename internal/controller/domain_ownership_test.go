@@ -719,3 +719,215 @@ func hasCertFor(certs map[string]bool, host string) bool {
 	}
 	return false
 }
+
+// invalidNames are entries of spec.domains that are not host names at all.
+var invalidNames = []string{"*.wild.example.org", "bad name.example.org", "a..example.org", "https://x.example.org/p"}
+
+// settleWithHosts is settleApp for an app whose spec lists names that get
+// no Certificate: only certHosts are issued.
+func settleWithHosts(t *testing.T, w *ownershipWorld, app *shpyrdv1.App, certHosts ...string) (*AppReconciler, ctrl.Result) {
+	t.Helper()
+	r, c := newTestReconciler(t, app)
+	w.wire(r)
+	r.Config.ClusterIssuer = "letsencrypt"
+	r.Config.ExternalLBAddress = "147.15.59.84"
+	cname := map[string]string{}
+	for _, d := range certHosts {
+		cname[d] = "shop.example.test"
+	}
+	r.Resolver = fakeResolver{cname: cname, a: map[string][]string{"shop.example.test": {"147.15.59.84"}}}
+	runReconcile(t, r, app)
+	runReconcile(t, r, app)
+	markDeploymentReady(t, c, app.Namespace, app.Name+"-web", 1)
+	issueCertificates(t, c, app, certHosts...)
+	return r, reconcileResult(t, r, app)
+}
+
+func issueCertificates(t *testing.T, c client.Client, app *shpyrdv1.App, hosts ...string) {
+	t.Helper()
+	for _, d := range hosts {
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(CertificateGVK)
+		key := client.ObjectKey{Namespace: app.Namespace, Name: certificateSecretName(app, d)}
+		if err := c.Get(context.Background(), key, cert); err != nil {
+			t.Fatalf("certificate of %s: %v; have %v", d, err, certificateNames(t, c, app.Namespace))
+		}
+		cert.Object["status"] = map[string]interface{}{"conditions": []interface{}{
+			map[string]interface{}{"type": "Ready", "status": "True"},
+		}}
+		if err := c.Update(context.Background(), cert); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A name that is not a host is refused, not unknown: the app's other hosts
+// are served with their Certificates, the name has no rule, no TLS entry
+// and no Certificate, its status entry says it is not a valid hostname, and
+// a settled app waits for the ordinary recheck instead of the short retry.
+func TestDomainOwnershipInvalidNameIsRefusedAndDoesNotFreeze(t *testing.T) {
+	for _, bad := range invalidNames {
+		t.Run(bad, func(t *testing.T) {
+			w := newOwnershipWorld(t)
+			app := betaApp(freeHost, bad)
+			r, res := settleWithHosts(t, w, app, freeHost)
+
+			if res.RequeueAfter <= 30*time.Second || res.RequeueAfter > 10*time.Minute {
+				t.Errorf("a settled app with an invalid name should wait for the ordinary recheck: %+v", res)
+			}
+			hosts := ingressHosts(t, r.Client, app.Namespace)
+			if len(mentions(hosts, freeHost)) == 0 {
+				t.Errorf("the free host is not served: %v", hosts)
+			}
+			for ing, hs := range hosts {
+				for _, h := range hs {
+					if strings.Contains(h, "wild") || strings.Contains(h, " ") || strings.Contains(h, "://") || h == "a..example.org" {
+						t.Errorf("%s routes the invalid name %q", ing, h)
+					}
+				}
+			}
+			certs := certificateNames(t, r.Client, app.Namespace)
+			if !certs[certificateSecretName(app, freeHost)] {
+				t.Errorf("the free host has no certificate: %v", certs)
+			}
+			if certs[certificateSecretName(app, normalizeHost(bad))] {
+				t.Errorf("the invalid name has a certificate: %v", certs)
+			}
+			got := &shpyrdv1.App{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(app), got); err != nil {
+				t.Fatal(err)
+			}
+			st := statusOf(got, statusHost(normalizeHost(bad)))
+			if st == nil {
+				t.Fatalf("no status for the invalid name: %+v", got.Status.Domains)
+			}
+			if st.Certificate != CertFailed || st.DNS != DNSUnknown || !strings.Contains(st.Message, "not a valid hostname") {
+				t.Errorf("status = %+v", st)
+			}
+		})
+	}
+}
+
+// An app that already serves a host and gains an invalid entry keeps its
+// routing up to date: a host added in the same spec is served, one dropped
+// is removed.
+func TestDomainOwnershipInvalidNameDoesNotFreezeRouting(t *testing.T) {
+	w := newOwnershipWorld(t)
+	const second = "www.second.example.org"
+	app := betaApp(freeHost)
+	r, _ := settleWithHosts(t, w, app, freeHost)
+	if len(mentions(ingressHosts(t, r.Client, app.Namespace), freeHost)) == 0 {
+		t.Fatal("setup: the host should be served")
+	}
+
+	got := &shpyrdv1.App{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(app), got); err != nil {
+		t.Fatal(err)
+	}
+	got.Spec.Domains = []string{"*.wild.example.org", second}
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	res := reconcileResult(t, r, got)
+
+	hosts := ingressHosts(t, r.Client, app.Namespace)
+	if len(mentions(hosts, second)) == 0 {
+		t.Errorf("the change was not applied: %v", hosts)
+	}
+	if len(mentions(hosts, freeHost)) != 0 {
+		t.Errorf("the dropped host is still served: %v", hosts)
+	}
+	if len(mentions(hosts, "*.wild.example.org")) != 0 {
+		t.Errorf("the wildcard is routed: %v", hosts)
+	}
+	certs := certificateNames(t, r.Client, app.Namespace)
+	if !certs[certificateSecretName(app, second)] || certs[certificateSecretName(app, freeHost)] {
+		t.Errorf("certificates not updated: %v", certs)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 30*time.Second {
+		// the new host's certificate is still pending, so the 30 s poll is expected
+		t.Errorf("pending certificate should be polled: %+v", res)
+	}
+}
+
+// An invalid name is not a redirect target, and it is not free either.
+func TestDomainOwnershipInvalidNameIsNeverTheRedirectTarget(t *testing.T) {
+	w := newOwnershipWorld(t)
+	for _, bad := range invalidNames {
+		app := betaApp(freeHost, bad)
+		app.Spec.RedirectTo = bad
+		r, c := newTestReconciler(t, app)
+		w.wire(r)
+
+		got := runReconcile(t, r, app)
+		if target := r.Config.requestedRedirect(got); target != "" {
+			t.Errorf("%q: requestedRedirect = %q", bad, target)
+		}
+		probe := got.DeepCopy()
+		probe.Status.Domains = []shpyrdv1.DomainStatus{{Host: normalizeHost(bad), DNS: DNSOK, Certificate: CertReady}}
+		if target := r.Config.redirectTarget(probe); target != "" {
+			t.Errorf("%q: redirectTarget = %q", bad, target)
+		}
+		for ing := range ingressHosts(t, c, app.Namespace) {
+			if strings.HasSuffix(ing, "-domain-redirect") {
+				t.Errorf("%q: redirect ingress %s exists", bad, ing)
+			}
+		}
+		if len(mentions(ingressHosts(t, c, app.Namespace), freeHost)) == 0 {
+			t.Errorf("%q: the free host is not served", bad)
+		}
+	}
+}
+
+// An invalid name does not turn a failed lookup into a settled answer: the
+// other host's ownership is unknown, so the routing stays as it was and the
+// reconcile is retried soon.
+func TestDomainOwnershipInvalidNameStillFreezesOnLookupFailure(t *testing.T) {
+	w := newOwnershipWorld(t)
+	app := betaApp(freeHost, "*.wild.example.org")
+	r, res := settleWithHosts(t, w, app, freeHost)
+	if res.RequeueAfter <= 30*time.Second {
+		t.Fatalf("setup: a settled app should wait for the recheck, got %+v", res)
+	}
+	hostsBefore := ingressHosts(t, r.Client, app.Namespace)
+	certsBefore := certificateNames(t, r.Client, app.Namespace)
+
+	w.st.down.Store(true)
+	time.Sleep(time.Millisecond)
+	got := &shpyrdv1.App{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(app), got); err != nil {
+		t.Fatal(err)
+	}
+	got.Spec.Domains = []string{"www.other.example.org", "*.wild.example.org"}
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	res = reconcileResult(t, r, got)
+
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 30*time.Second {
+		t.Errorf("a failed lookup is not retried soon: %+v", res)
+	}
+	hostsAfter := ingressHosts(t, r.Client, app.Namespace)
+	for name, before := range hostsBefore {
+		if strings.Join(before, ",") != strings.Join(hostsAfter[name], ",") {
+			t.Errorf("ingress %s changed: %v -> %v", name, before, hostsAfter[name])
+		}
+	}
+	certsAfter := certificateNames(t, r.Client, app.Namespace)
+	if len(certsAfter) != len(certsBefore) {
+		t.Errorf("certificates changed: %v -> %v", certsBefore, certsAfter)
+	}
+}
+
+// What the status shows of a refused name is bounded and printable.
+func TestDomainOwnershipStatusHostIsPrintable(t *testing.T) {
+	if got := statusHost("*.wild.example.org"); got != "*.wild.example.org" {
+		t.Errorf("a plain name changed: %q", got)
+	}
+	if got := statusHost("a\x00b\né.example.org"); got != "a?b???.example.org" {
+		t.Errorf("unfit bytes kept: %q", got)
+	}
+	if got := statusHost(strings.Repeat("a", 1000)); len(got) != 253 {
+		t.Errorf("length = %d", len(got))
+	}
+}

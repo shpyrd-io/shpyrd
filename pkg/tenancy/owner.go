@@ -38,13 +38,10 @@ var ErrInvalidHost = errors.New("not a valid host name")
 // workspace: a failed lookup is never "nobody's". An empty or malformed
 // host returns ErrInvalidHost.
 func HostOwner(ctx context.Context, st store.Store, layout Layout, host string) (*store.Workspace, error) {
-	if strings.ContainsAny(host, "/\\@?#% \t") { // a URL or a path is not a host
+	if !ValidHost(host) {
 		return nil, ErrInvalidHost
 	}
 	host = Host(host)
-	if !validHostName(host) {
-		return nil, ErrInvalidHost
-	}
 	for _, name := range hostAndParents(host) {
 		ws, err := ownerOfName(ctx, st, layout, name)
 		if err != nil {
@@ -55,6 +52,16 @@ func HostOwner(ctx context.Context, st store.Store, layout Layout, host string) 
 		}
 	}
 	return nil, nil
+}
+
+// ValidHost says the ownership rule can judge host: a plain DNS-style name
+// (a port is ignored), not empty, not a URL or a path, with no wildcard
+// label. It is the check HostOwner makes before it looks anything up.
+func ValidHost(host string) bool {
+	if strings.ContainsAny(host, "/\\@?#% \t") {
+		return false
+	}
+	return validHostName(Host(host))
 }
 
 // ownerOfName looks one name up exactly; nil, nil when nothing owns it.
@@ -148,6 +155,11 @@ const (
 	// reserved hosts, an internal host, or a name at or under the layout's
 	// domains that no workspace owns); no project may serve it.
 	HostPlatform
+	// HostInvalid: the host is not a valid name (a wildcard, a malformed
+	// name); it can never be served, and asking again changes nothing.
+	// Owners.Check does not return it: it answers HostUnknown for such a
+	// name, and a caller tells the two apart with ValidHost.
+	HostInvalid
 )
 
 // Owners is the cached form of HostOwner, for callers that ask on every
@@ -216,10 +228,13 @@ func (o *Owners) Owner(host string) (*store.Workspace, error) {
 // A name another workspace owns is HostTaken even under a layout domain;
 // the platform's own names win over everything.
 func (o *Owners) Check(workspaceID, host string) Availability {
-	host = Host(host)
 	if o.Platform(host) {
 		return HostPlatform
 	}
+	if !ValidHost(host) { // before Host: it would cut a URL down to its scheme
+		return HostUnknown
+	}
+	host = Host(host)
 	ws, err := o.Owner(host)
 	if err != nil {
 		return HostUnknown

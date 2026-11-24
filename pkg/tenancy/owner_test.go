@@ -249,3 +249,29 @@ func TestResolveStaysOneLabelUnderCustomHost(t *testing.T) {
 		}
 	}
 }
+
+func TestValidHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"www.example.org":       true,
+		"WWW.Example.org:8443":  true,
+		"*.wild.example.org":    false,
+		"a..example.org":        false,
+		"bad name.example.org":  false,
+		"https://x.example.org": false,
+		"x.example.org/p":       false,
+		"":                      false,
+	} {
+		if got := ValidHost(host); got != want {
+			t.Errorf("ValidHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// A URL is not cut down to its scheme and judged free.
+func TestCheckURLIsNotFree(t *testing.T) {
+	st, layout := ownershipFixture(t)
+	o := &Owners{Store: st, Layout: layout, ConsoleHost: "console.example.org", Domain: "example.org"}
+	if got := o.Check("any", "https://x.example.edu/p"); got != HostUnknown {
+		t.Errorf("Check(URL) = %d, want HostUnknown", got)
+	}
+}

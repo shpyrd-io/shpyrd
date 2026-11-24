@@ -66,6 +66,8 @@ type Config struct {
 	// rule of pkg/tenancy): HostFree, HostTaken (another workspace's),
 	// HostPlatform (a name of the platform) or HostUnknown (the lookup
 	// failed; nothing is changed for that project until it can be asked).
+	// A name that is not a valid host never reaches it: the controller
+	// refuses it (HostInvalid) without asking.
 	// Nil: no check, as in tests; the server always sets it.
 	HostAvailability func(workspace, host string) tenancy.Availability
 	// WorkspaceSleepDefault answers a workspace's default HTTP sleep policy
