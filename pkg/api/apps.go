@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -566,8 +567,9 @@ func (s *Server) createProject(c *gin.Context, req CreateAppRequest, decorate fu
 	}}
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns.Name, Labels: labels},
-		Spec:       shpyrdv1.AppSpec{Exposure: req.Exposure, ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
+		Spec:       shpyrdv1.AppSpec{Exposure: req.Exposure, ID: id, Slug: slug, Processes: req.Processes, Access: access},
 	}
+	setSpecDomains(app, req.Domains)
 	project.SetDisplayName(app, req.Name)
 	markGitHubLinkedBy(app, linkedBy)
 	if req.Git != nil && req.Git.URL != "" {
@@ -578,6 +580,15 @@ func (s *Server) createProject(c *gin.Context, req CreateAppRequest, decorate fu
 			abort(c, http.StatusBadRequest, err)
 			return nil, false
 		}
+	}
+	// The hosts it asks to serve, judged before anything is created.
+	if len(app.Spec.Domains) > 0 {
+		list, refusal := s.vetDomains(ctx, ws, nil, slug, nil, app.Spec.Domains)
+		if refusal != nil {
+			abort(c, refusal.status, refusal.err)
+			return nil, false
+		}
+		setSpecDomains(app, list)
 	}
 	// One more project, with the instances its processes ask for, judged
 	// against the workspace's ceilings and made under its lock.
@@ -951,7 +962,7 @@ func (s *Server) deployApp(c *gin.Context) {
 			a.Spec.Env = req.Env
 		}
 		if req.Domains != nil {
-			a.Spec.Domains = req.Domains
+			setSpecDomains(a, req.Domains)
 		}
 		if req.Globals != nil {
 			a.Spec.Globals = req.Globals
@@ -1389,12 +1400,16 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 			return nil, err
 		}
 		beforeExposure := app.Spec.Exposure
+		beforeDomains := slices.Clone(app.Spec.Domains)
 		if err := mutate(app); err != nil {
 			status := http.StatusBadRequest
 			if strings.Contains(err.Error(), "rolling out") || errors.Is(err, errRepositoryChanged) {
 				status = http.StatusConflict
 			}
 			abort(c, status, err)
+			return nil, err
+		}
+		if err := s.vetAppDomains(c, app, beforeDomains); err != nil {
 			return nil, err
 		}
 		if err := s.checkExposure(c.Request.Context(), s.workspace(c), beforeExposure, app.Spec.Exposure); err != nil {

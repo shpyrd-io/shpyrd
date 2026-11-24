@@ -61,6 +61,15 @@ type Config struct {
 	// hosts one label under its AppsDomain are covered by the apps'
 	// wildcard certificate and the wildcard record of the shared front door.
 	Layout tenancy.Layout
+	// HostAvailability answers whether the workspace with the given slug
+	// may serve a host its projects list in spec.domains (the ownership
+	// rule of pkg/tenancy): HostFree, HostTaken (another workspace's),
+	// HostPlatform (a name of the platform) or HostUnknown (the lookup
+	// failed; nothing is changed for that project until it can be asked).
+	// A name that is not a valid host never reaches it: the controller
+	// refuses it (HostInvalid) without asking.
+	// Nil: no check, as in tests; the server always sets it.
+	HostAvailability func(workspace, host string) tenancy.Availability
 	// WorkspaceSleepDefault answers a workspace's default HTTP sleep policy
 	// from its settings (RFC-0075): after and resuming, "" when none. Projects
 	// without a policy of their own inherit it; an explicit "off" opts out.

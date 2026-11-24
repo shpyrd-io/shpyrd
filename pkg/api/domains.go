@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -76,43 +75,15 @@ func (s *Server) addDomain(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	slug := c.Param("slug")
-	domain := s.opts.Public.Domain
-	if host == domain || host == "shpyrd."+domain || host == "auth."+domain || host == "grafana."+domain {
-		abort(c, http.StatusBadRequest, fmt.Errorf("%s belongs to the platform", host))
-		return
-	}
-	ws, _ := s.tenant(c)
-	if ws != nil && ws.Address != "" && (host == ws.Address || host == hostOnly(s.dashboardHostOf(ws))) {
-		abort(c, http.StatusBadRequest, fmt.Errorf("%s is the workspace's own address", host))
-		return
-	}
-	for _, h := range s.appHostsIn(c.Request.Context(), ws, slug) {
-		if host == h {
-			abort(c, http.StatusBadRequest, fmt.Errorf("%s is already the project's hostname", host))
-			return
-		}
-	}
-	if d := s.platformDomainOf(host); d != "" {
-		abort(c, http.StatusBadRequest, fmt.Errorf("names under %s are the platform's: the project already has its address there", d))
-		return
-	}
-	// A host under another workspace's address is theirs to give.
-	if owner, err := s.tenancy.Resolve(c.Request.Context(), host); err == nil && ws != nil && owner.Workspace != nil && owner.Workspace.ID != ws.ID {
-		abort(c, http.StatusConflict, fmt.Errorf("%s belongs to another workspace", host))
-		return
-	}
-	if owner := s.hostOwner(c.Request.Context(), host); owner != "" && owner != slug {
-		abort(c, http.StatusConflict, fmt.Errorf("%s is already used by project %s", host, owner))
-		return
-	}
+	// The funnel (vetDomains, in mutateApp) judges the host: what is only
+	// this handler's is that the project does not hold it already.
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		for _, d := range a.Spec.Domains {
-			if strings.EqualFold(strings.TrimSuffix(d, "."), host) {
+			if canonicalHost(d) == host {
 				return fmt.Errorf("%s is already a domain of this project", host)
 			}
 		}
-		a.Spec.Domains = append(a.Spec.Domains, host)
+		appendSpecDomain(a, host)
 		return nil
 	})
 	if err != nil {
@@ -129,19 +100,9 @@ func (s *Server) removeDomain(c *gin.Context) {
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
-		kept := a.Spec.Domains[:0:0]
-		found := false
-		for _, d := range a.Spec.Domains {
-			if strings.EqualFold(strings.TrimSuffix(d, "."), host) {
-				found = true
-				continue
-			}
-			kept = append(kept, d)
-		}
-		if !found {
+		if !dropSpecDomain(a, host) {
 			return fmt.Errorf("%s is not a domain of this project", host)
 		}
-		a.Spec.Domains = kept
 		if a.Spec.RedirectTo == host {
 			a.Spec.RedirectTo = ""
 		}
@@ -266,26 +227,6 @@ func (s *Server) frontDoor(ctx context.Context, internal bool) string {
 		}
 		if in.Hostname != "" {
 			return in.Hostname
-		}
-	}
-	return ""
-}
-
-// hostOwner returns the project already serving host, or "". ingress-nginx
-// refuses a host claimed twice; saying who has it is more useful.
-func (s *Server) hostOwner(ctx context.Context, host string) string {
-	var list networkingv1.IngressList
-	if err := s.apps.List(ctx, &list); err != nil {
-		return ""
-	}
-	for _, ing := range list.Items {
-		for _, rule := range ing.Spec.Rules {
-			if strings.EqualFold(rule.Host, host) {
-				if p := ing.Labels[shpyrdv1.LabelApp]; p != "" {
-					return p
-				}
-				return ing.Namespace + "/" + ing.Name
-			}
 		}
 	}
 	return ""

@@ -315,6 +315,9 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {
 		out.result.RequeueAfter = 30 * time.Second
 	}
+	// A host the project lists may become another workspace's (it verifies
+	// the domain) with no change to this App: ask again, bounded.
+	out.result.RequeueAfter = r.Config.withOwnershipRecheck(app, out.result.RequeueAfter)
 	// A build cloning through the GitHub App gets a new token before the
 	// one in <app>-git is 50 minutes old (RFC-0054); only a reconcile that
 	// wrote <app>-git knows when.
@@ -322,6 +325,21 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		out.result.RequeueAfter = d
 	}
 	return out.result, nil
+}
+
+// domainOwnershipRecheck is how often an App that lists domains is looked
+// at again, so a host that another workspace has since verified stops
+// being served well within ten minutes.
+const domainOwnershipRecheck = 5 * time.Minute
+
+// withOwnershipRecheck is the wait before the next reconcile, shortened to
+// domainOwnershipRecheck when the app lists domains and the ownership rule
+// is in use.
+func (c Config) withOwnershipRecheck(app *shpyrdv1.App, wait time.Duration) time.Duration {
+	if c.HostAvailability != nil && len(app.Spec.Domains) > 0 && (wait == 0 || wait > domainOwnershipRecheck) {
+		return domainOwnershipRecheck
+	}
+	return wait
 }
 
 // outcome carries what Reconcile must do after the status has been written.
@@ -341,8 +359,19 @@ func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{Reque
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
 	var gitRefresh time.Duration
+	// When the ownership of a host of the spec cannot be determined, this
+	// reconcile leaves the routing alone and tries again soon.
+	defer r.Config.beginOwnership(app)()
+	frozen := false
+	if _, settled := r.Config.refusedHosts(app); !settled {
+		ctx, frozen = context.WithValue(ctx, routingFrozenKey{}, true), true
+		log.FromContext(ctx).Info("host ownership not determined; routing left as it is", "app", app.Name)
+	}
 	out, err := r.reconcileApp(ctx, app, &gitRefresh)
 	out.gitRefresh = gitRefresh
+	if frozen {
+		out.domainsPending = true
+	}
 	return out, err
 }
 
@@ -652,7 +681,9 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 
 	// Refresh domain readiness before choosing whether to redirect traffic.
 	var domainsPending bool
-	app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
+	if !routingFrozen(ctx) {
+		app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
+	}
 
 	// 4. Workloads.
 	procStatus, scalingRetry, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
@@ -661,7 +692,9 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 	}
 	app.Status.Image = image
 	app.Status.Processes = procStatus
-	if hasWeb(app) {
+	if routingFrozen(ctx) {
+		// The URL follows the redirect, which follows the hosts.
+	} else if hasWeb(app) {
 		app.Status.URL = r.Config.url(app)
 	} else {
 		app.Status.URL = ""
@@ -1240,13 +1273,16 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// door's default backend answers for the host with the suspension page.
 	serving := hasWeb(app) && !r.Config.suspended(app)
 	// Remove the redirect before restoring the same host/path on the app ingress.
-	if !serving || r.Config.redirectTarget(app) == "" {
+	frozen := routingFrozen(ctx)
+	if !frozen && (!serving || r.Config.redirectTarget(app) == "") {
 		if err := r.reconcileDomainRedirect(ctx, app, false); err != nil {
 			return nil, 0, err
 		}
 	}
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app), Namespace: app.Namespace}}
-	if serving {
+	if serving && frozen {
+		// Ownership is not known: the web Ingress stays as it is.
+	} else if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 			r.Config.mutateIngress(app, ing, scaling.interceptor, scaling.sleep)
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
@@ -1262,7 +1298,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	} else if err := r.deleteIfExists(ctx, ing); err != nil {
 		return nil, 0, err
 	}
-	if serving && r.Config.redirectTarget(app) != "" {
+	if serving && !frozen && r.Config.redirectTarget(app) != "" {
 		if err := r.reconcileDomainRedirect(ctx, app, true); err != nil {
 			return nil, 0, err
 		}
@@ -1270,7 +1306,9 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenanceHTTP(app)) {
+	if serving && frozen {
+		// The edge companion carries the same hosts: left as it is too.
+	} else if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenanceHTTP(app)) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)
