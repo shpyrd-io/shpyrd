@@ -203,6 +203,11 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 		}
 	}
 	index := map[string]*shpyrdv1.App{}
+	// Custom domains an app lists in its spec. They are claims: they never
+	// replace a host that belongs to a workspace, and a host another
+	// workspace owns (HostOwner) is not served for this app.
+	custom := map[string]*shpyrdv1.App{}
+	complete := true
 	for i := range list.Items {
 		app := &list.Items[i]
 		ws, ok := workspaces[workspaceOf(app)]
@@ -222,12 +227,33 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 			}
 		}
 		for _, d := range app.Spec.Domains {
-			index[hostOnly(d)] = app
+			h := hostOnly(d)
+			if _, claimed := custom[h]; claimed {
+				continue
+			}
+			if ws != nil {
+				owner, err := tenancy.HostOwner(c.Request.Context(), s.store, s.opts.Layout, h)
+				if err != nil {
+					complete = false // not known: left out, and not remembered
+					continue
+				}
+				if owner != nil && owner.ID != ws.ID {
+					continue
+				}
+			}
+			custom[h] = app
 		}
 	}
-	s.hostCache.mu.Lock()
-	s.hostCache.apps, s.hostCache.at = index, time.Now()
-	s.hostCache.mu.Unlock()
+	for h, app := range custom {
+		if _, own := index[h]; !own {
+			index[h] = app
+		}
+	}
+	if complete {
+		s.hostCache.mu.Lock()
+		s.hostCache.apps, s.hostCache.at = index, time.Now()
+		s.hostCache.mu.Unlock()
+	}
 	if app := index[host]; app != nil {
 		return app, nil
 	}
