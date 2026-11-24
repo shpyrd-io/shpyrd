@@ -40,6 +40,15 @@ import (
 type flakyStore struct {
 	store.Store
 	down atomic.Bool
+	// listDown fails the listing of workspaces alone.
+	listDown atomic.Bool
+}
+
+func (f *flakyStore) ListWorkspaces(ctx context.Context) ([]store.Workspace, error) {
+	if f.listDown.Load() {
+		return nil, errStoreDown
+	}
+	return f.Store.ListWorkspaces(ctx)
 }
 
 var errStoreDown = errors.New("store down")
@@ -472,6 +481,62 @@ func TestDomainOwnershipEdgeIndex(t *testing.T) {
 	f.s.hostCache.mu.Unlock()
 	if cached {
 		t.Error("an index built while the store failed was remembered")
+	}
+}
+
+// While the workspaces cannot be listed, an app's workspace is not known:
+// the host another workspace owns is not indexed for it, a host nobody owns
+// is, and the index is not remembered.
+func TestDomainOwnershipEdgeIndexWorkspacesUnknown(t *testing.T) {
+	f := newOwnershipFixture(t)
+	ctx := context.Background()
+	legacy := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "app-legacy", Labels: project.NamespaceLabels(store.DefaultWorkspace, "legacy")},
+		Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated, Image: "registry.example.com/legacy:1",
+			Domains: []string{"site.example.com", "other.example.com", "free.example.org"}},
+	}
+	if err := f.cr.Create(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(host string) *shpyrdv1.App {
+		f.s.hostCache.at = time.Time{}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest("GET", "https://"+host+"/", nil).WithContext(ctx)
+		app, err := f.s.appByHost(c, host)
+		if err != nil {
+			return nil
+		}
+		return app
+	}
+	f.st.listDown.Store(true)
+	for _, host := range []string{"site.example.com", "other.example.com"} {
+		if app := lookup(host); app != nil {
+			t.Errorf("%s, owned by alpha, with the workspaces unknown = %v, want no app", host, app)
+		}
+	}
+	if app := lookup("free.example.org"); app == nil || app.Name != "legacy" {
+		t.Errorf("free.example.org with the workspaces unknown = %v, want the default workspace's legacy", app)
+	}
+	f.s.hostCache.mu.Lock()
+	cached := !f.s.hostCache.at.IsZero()
+	f.s.hostCache.mu.Unlock()
+	if cached {
+		t.Error("an index built while the workspaces were unknown was remembered")
+	}
+	// Known again: alpha's hosts are alpha's, and the index is remembered.
+	f.st.listDown.Store(false)
+	if app := lookup("site.example.com"); app == nil || workspaceOf(app) != "alpha" {
+		t.Errorf("site.example.com = %v, want alpha's site", app)
+	}
+	if app := lookup("other.example.com"); app != nil {
+		t.Errorf("other.example.com = %v, want no app", app)
+	}
+	f.s.hostCache.mu.Lock()
+	cached = !f.s.hostCache.at.IsZero()
+	f.s.hostCache.mu.Unlock()
+	if !cached {
+		t.Error("a complete index was not remembered")
 	}
 }
 

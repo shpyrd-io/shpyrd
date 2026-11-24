@@ -197,17 +197,19 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 	// name, or one label under the primary domain, the address and verified
 	// custom domains) and at its own custom domains.
 	workspaces := map[string]*store.Workspace{store.DefaultWorkspace: nil}
+	complete := true
 	if all, err := s.store.ListWorkspaces(c.Request.Context()); err == nil {
 		for i := range all {
 			workspaces[all[i].Slug] = &all[i]
 		}
+	} else {
+		complete = false // the workspaces are not known: not remembered
 	}
 	index := map[string]*shpyrdv1.App{}
 	// Custom domains an app lists in its spec. They are claims: they never
 	// replace a host that belongs to a workspace, and a host another
 	// workspace owns (HostOwner) is not served for this app.
 	custom := map[string]*shpyrdv1.App{}
-	complete := true
 	for i := range list.Items {
 		app := &list.Items[i]
 		ws, ok := workspaces[workspaceOf(app)]
@@ -231,15 +233,19 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 			if _, claimed := custom[h]; claimed {
 				continue
 			}
-			if ws != nil {
-				owner, err := tenancy.HostOwner(c.Request.Context(), s.store, s.opts.Layout, h)
-				if err != nil {
-					complete = false // not known: left out, and not remembered
-					continue
-				}
-				if owner != nil && owner.ID != ws.ID {
-					continue
-				}
+			owner, err := tenancy.HostOwner(c.Request.Context(), s.store, s.opts.Layout, h)
+			if errors.Is(err, tenancy.ErrInvalidHost) {
+				continue // not a name that can be served
+			}
+			if err != nil {
+				complete = false // not known: left out, and not remembered
+				continue
+			}
+			// An app whose workspace has no record is the default
+			// workspace's: it serves a host nobody owns, or one the default
+			// workspace owns. Whoever else owns the host, it is not served.
+			if owner != nil && (ws == nil && owner.Slug != store.DefaultWorkspace || ws != nil && owner.ID != ws.ID) {
+				continue
 			}
 			custom[h] = app
 		}

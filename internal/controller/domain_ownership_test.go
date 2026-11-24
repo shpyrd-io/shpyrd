@@ -507,3 +507,55 @@ func TestDomainOwnershipRecheckBound(t *testing.T) {
 		}
 	}
 }
+
+// settleApp brings an app to rest: its deployment is ready, the DNS of each
+// host is right and each host's certificate is issued, so that nothing but
+// the ownership recheck asks for another reconcile.
+func settleApp(t *testing.T, w *ownershipWorld, app *shpyrdv1.App) (*AppReconciler, ctrl.Result) {
+	t.Helper()
+	r, c := newTestReconciler(t, app)
+	w.wire(r)
+	r.Config.ClusterIssuer = "letsencrypt"
+	r.Config.ExternalLBAddress = "147.15.59.84"
+	cname := map[string]string{}
+	for _, d := range app.Spec.Domains {
+		cname[d] = "shop.example.test"
+	}
+	r.Resolver = fakeResolver{cname: cname, a: map[string][]string{"shop.example.test": {"147.15.59.84"}}}
+	runReconcile(t, r, app)
+	runReconcile(t, r, app)
+	markDeploymentReady(t, c, app.Namespace, app.Name+"-web", 1)
+	for _, d := range app.Spec.Domains {
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(CertificateGVK)
+		key := client.ObjectKey{Namespace: app.Namespace, Name: certificateSecretName(app, d)}
+		if err := c.Get(context.Background(), key, cert); err != nil {
+			t.Fatalf("certificate of %s: %v; have %v", d, err, certificateNames(t, c, app.Namespace))
+		}
+		cert.Object["status"] = map[string]interface{}{"conditions": []interface{}{
+			map[string]interface{}{"type": "Ready", "status": "True"},
+		}}
+		if err := c.Update(context.Background(), cert); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return r, reconcileResult(t, r, app)
+}
+
+// C19 at Reconcile, on an app that is settled, so that no other wait hides
+// the recheck: with domains it is asked for again within ten minutes, and
+// without domains it is not asked for at all.
+func TestDomainOwnershipSettledAppIsCheckedAgain(t *testing.T) {
+	w := newOwnershipWorld(t)
+	withDomains := betaApp(freeHost)
+	_, res := settleApp(t, w, withDomains)
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 10*time.Minute {
+		t.Errorf("a settled project with domains must be looked at again within ten minutes: %+v", res)
+	}
+
+	plain := betaApp()
+	_, res = settleApp(t, w, plain)
+	if res.RequeueAfter != 0 {
+		t.Errorf("a settled project without domains is requeued: %+v", res)
+	}
+}
