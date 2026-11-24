@@ -28,8 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -553,58 +555,12 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// The GitHub App (RFC-0054): its Secret through the manager's cache,
 	// and the workspaces' installations.
 	githubApp.Source = &github.Source{Reader: mgr.GetClient(), Namespace: k.Namespace, Options: github.Options{APIURL: os.Getenv(github.EnvAPIURL)}}
-	rec := &controller.AppReconciler{
-		BindableTypes: bindable,
-		Kube:          k.Kube,
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("shpyrd"),
-		Config: controller.Config{
-			Domain:                  os.Getenv("SHPYRD_DOMAIN"),
-			WorkspaceDomain:         workspaceCache.Domain,
-			WorkspaceAddress:        workspaceCache.Address,
-			WorkspaceExtraDomains:   workspaceCache.ExtraDomains,
-			WorkspaceAppHosts:       workspaceCache.AppHosts,
-			WorkspaceRedirectDomain: workspaceCache.AppRedirectDomain,
-			Layout:                  workspaceCache.Layout,
-			WorkspaceLimits:         workspaceCache.Limits,
-			ProjectStorageCap:       workspaceCache.ProjectStorageCap,
-			WorkspaceSleepDefault:   workspaceCache.SleepDefault,
-			SleepAllowed:            apiDeps.SleepAllowed,
-			WorkspaceSuspended:      workspaceCache.Suspended,
-			WorkspaceID:             workspaceCache.ID,
-			Projects:                memberships.Store,
-			GitHub:                  githubApp,
-			DashboardURL:            envOr("SHPYRD_DASHBOARD_URL", ""),
-			HTTPSPort:               os.Getenv("SHPYRD_HTTPS_PORT"),
-			RegistryHost:            os.Getenv("SHPYRD_REGISTRY_HOST"),
-			ClusterIssuer:           os.Getenv("SHPYRD_CLUSTER_ISSUER"),
-			WorkspaceCertIssuer:     os.Getenv("SHPYRD_WORKSPACE_CERT_ISSUER"),
-			IngressClass:            os.Getenv("SHPYRD_INGRESS_CLASS"),
-			SystemNamespace:         k.Namespace,
-			BuildKitImage:           os.Getenv("SHPYRD_BUILDKIT_IMAGE"),
-			PodCIDR:                 os.Getenv("SHPYRD_POD_CIDR"),
-			RegistrySecret:          os.Getenv("SHPYRD_REGISTRY_SECRET"),
-			RegistryInsecure:        registryInsecure(os.Getenv("SHPYRD_REGISTRY_INSECURE"), os.Getenv("SHPYRD_REGISTRY_HOST")),
-			CABundle:                envOr("SHPYRD_CA_BUNDLE", "shpyrd-ca-bundle"),
-			RegistryDeletes:         os.Getenv("SHPYRD_REGISTRY_IP") != "",
-			BuildCacheRegistry:      os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
-			AppsPool:                os.Getenv("SHPYRD_APPS_POOL"),
-			PlatformPool:            os.Getenv("SHPYRD_PLATFORM_POOL"),
-			WildcardTLS:             os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
-			PublicAPIEnabled:        os.Getenv("SHPYRD_PUBLIC_API_ENABLED") == "true",
-			PublicAPIHost:           os.Getenv("SHPYRD_PUBLIC_API_HOST"),
-			PublicAPIIssuer:         os.Getenv("SHPYRD_PUBLIC_API_ISSUER"),
-			IngressClassExternal:    envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),
-			IngressClassInternal:    envOr("SHPYRD_INGRESS_CLASS_INTERNAL", "nginx-internal"),
-			InternalLBAddress:       internalLBAddress(k),
-			ExternalLBAddress:       externalLBAddress(k),
-			PublicChecks:            publishesNames(os.Getenv(install.VarDNSProvider), os.Getenv(install.VarWildcardTLS)),
-		},
-		// The external address may not exist yet at start (first install):
-		// look it up when a custom domain needs it.
-		LookupLB: func(context.Context) string { return externalLBAddress(k) },
-	}
+	owners := newHostOwners(memberships.Store)
+	rec := newAppReconciler(appReconcilerParts{
+		kube: k, client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("shpyrd"),
+		bindable: bindable, workspaces: workspaceCache, owners: owners, sleepAllowed: apiDeps.SleepAllowed,
+		store: memberships.Store, github: githubApp,
+	})
 	if err := rec.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("app controller: %w", err)
 	}
@@ -661,7 +617,10 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// Front doors of explicit workspaces (RFC-0033 phase 6); nothing to do
 	// while there is one workspace.
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
-	workspaces.Forget = workspaceCache.Forget
+	workspaces.Forget = func() {
+		workspaceCache.Forget()
+		owners.Forget() // a workspace, an address or a host record changed
+	}
 	workspaces.NamesChanged = rec.RequeueWorkspace
 	workspaces.Kube, workspaces.Registry = k.Kube, rec.Registry // the lifecycle's audit and image cleanup (#274)
 	githubApp.SetRequeue(rec.RequeueGitHub)
@@ -690,6 +649,117 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		}
 	}
 	return mgr, nil
+}
+
+// appReconcilerParts is what the App controller is built from.
+type appReconcilerParts struct {
+	kube         *kube.Client
+	client       client.Client
+	scheme       *runtime.Scheme
+	recorder     record.EventRecorder
+	bindable     []schema.GroupVersionKind
+	workspaces   *tenancy.Addresses
+	owners       *tenancy.Owners
+	sleepAllowed func() bool
+	store        store.Store
+	github       *controller.GitHubApp
+}
+
+// newAppReconciler is the App controller as the server runs it. It always
+// carries the ownership lookup: a project's spec.domains is judged by the
+// rule of pkg/tenancy whatever wrote it.
+func newAppReconciler(p appReconcilerParts) *controller.AppReconciler {
+	return &controller.AppReconciler{
+		BindableTypes: p.bindable,
+		Kube:          p.kube.Kube,
+		Client:        p.client,
+		Scheme:        p.scheme,
+		Recorder:      p.recorder,
+		Config: controller.Config{
+			Domain:                  os.Getenv("SHPYRD_DOMAIN"),
+			WorkspaceDomain:         p.workspaces.Domain,
+			WorkspaceAddress:        p.workspaces.Address,
+			WorkspaceExtraDomains:   p.workspaces.ExtraDomains,
+			WorkspaceAppHosts:       p.workspaces.AppHosts,
+			WorkspaceRedirectDomain: p.workspaces.AppRedirectDomain,
+			Layout:                  p.workspaces.Layout,
+			HostAvailability:        hostAvailability(p.owners, p.workspaces.ID),
+			WorkspaceLimits:         p.workspaces.Limits,
+			ProjectStorageCap:       p.workspaces.ProjectStorageCap,
+			WorkspaceSleepDefault:   p.workspaces.SleepDefault,
+			SleepAllowed:            p.sleepAllowed,
+			WorkspaceSuspended:      p.workspaces.Suspended,
+			WorkspaceID:             p.workspaces.ID,
+			Projects:                p.store,
+			GitHub:                  p.github,
+			DashboardURL:            envOr("SHPYRD_DASHBOARD_URL", ""),
+			HTTPSPort:               os.Getenv("SHPYRD_HTTPS_PORT"),
+			RegistryHost:            os.Getenv("SHPYRD_REGISTRY_HOST"),
+			ClusterIssuer:           os.Getenv("SHPYRD_CLUSTER_ISSUER"),
+			WorkspaceCertIssuer:     os.Getenv("SHPYRD_WORKSPACE_CERT_ISSUER"),
+			IngressClass:            os.Getenv("SHPYRD_INGRESS_CLASS"),
+			SystemNamespace:         p.kube.Namespace,
+			BuildKitImage:           os.Getenv("SHPYRD_BUILDKIT_IMAGE"),
+			PodCIDR:                 os.Getenv("SHPYRD_POD_CIDR"),
+			RegistrySecret:          os.Getenv("SHPYRD_REGISTRY_SECRET"),
+			RegistryInsecure:        registryInsecure(os.Getenv("SHPYRD_REGISTRY_INSECURE"), os.Getenv("SHPYRD_REGISTRY_HOST")),
+			CABundle:                envOr("SHPYRD_CA_BUNDLE", "shpyrd-ca-bundle"),
+			RegistryDeletes:         os.Getenv("SHPYRD_REGISTRY_IP") != "",
+			BuildCacheRegistry:      os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
+			AppsPool:                os.Getenv("SHPYRD_APPS_POOL"),
+			PlatformPool:            os.Getenv("SHPYRD_PLATFORM_POOL"),
+			WildcardTLS:             os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
+			PublicAPIEnabled:        os.Getenv("SHPYRD_PUBLIC_API_ENABLED") == "true",
+			PublicAPIHost:           os.Getenv("SHPYRD_PUBLIC_API_HOST"),
+			PublicAPIIssuer:         os.Getenv("SHPYRD_PUBLIC_API_ISSUER"),
+			IngressClassExternal:    envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),
+			IngressClassInternal:    envOr("SHPYRD_INGRESS_CLASS_INTERNAL", "nginx-internal"),
+			InternalLBAddress:       internalLBAddress(p.kube),
+			ExternalLBAddress:       externalLBAddress(p.kube),
+			PublicChecks:            publishesNames(os.Getenv(install.VarDNSProvider), os.Getenv(install.VarWildcardTLS)),
+		},
+		// The external address may not exist yet at start (first install):
+		// look it up when a custom domain needs it.
+		LookupLB: func(context.Context) string { return externalLBAddress(p.kube) },
+	}
+}
+
+// newHostOwners is the ownership rule over the store, with the platform's
+// own names protected as ByAddress protects them.
+func newHostOwners(st store.Store) *tenancy.Owners {
+	domain := os.Getenv("SHPYRD_DOMAIN")
+	return &tenancy.Owners{
+		Store:       st,
+		Layout:      layoutFromEnv(),
+		ConsoleHost: hostOf(envOr("SHPYRD_DASHBOARD_URL", "")),
+		Domain:      domain,
+		Reserved:    reservedHosts(domain),
+	}
+}
+
+// hostAvailability answers the controller whether a workspace (by slug)
+// may serve a host. A workspace whose id is not known yet is not answered:
+// the controller waits and asks again.
+func hostAvailability(owners *tenancy.Owners, workspaceID func(slug string) string) func(workspace, host string) tenancy.Availability {
+	return func(workspace, host string) tenancy.Availability {
+		id := workspaceID(workspace)
+		if id == "" {
+			return tenancy.HostUnknown
+		}
+		return owners.Check(id, host)
+	}
+}
+
+// reservedHosts are the platform's names under its domain that no
+// workspace owns. grafana.<domain> stays reserved although shpyrd no longer
+// installs Grafana: clusters served it there, and people may still have it
+// saved.
+func reservedHosts(domain string) []string {
+	reserved := []string{"auth." + domain, "grafana." + domain, "registry." + domain}
+	if u, err := url.Parse(envOr("SHPYRD_AUTH_URL", "")); err == nil && u.Host != "" {
+		reserved = append(reserved, u.Host)
+	}
+	return reserved
 }
 
 // externalLBAddress reads the public front door's address, what a custom
@@ -765,11 +835,7 @@ func registryInsecure(flag, host string) bool {
 // grafana.<domain> stays reserved although shpyrd no longer installs
 // Grafana: clusters served it there, and people may still have it saved.
 func ByAddress(st store.Store, domain, dashboardURL string) tenancy.Resolver {
-	reserved := []string{"auth." + domain, "grafana." + domain, "registry." + domain}
-	if u, err := url.Parse(envOr("SHPYRD_AUTH_URL", "")); err == nil && u.Host != "" {
-		reserved = append(reserved, u.Host)
-	}
-	return &tenancy.ByAddress{Store: st, Domain: domain, ConsoleHost: hostOf(dashboardURL), Reserved: reserved, DefaultSlug: defaultSlugOf(st), Layout: layoutFromEnv()}
+	return &tenancy.ByAddress{Store: st, Domain: domain, ConsoleHost: hostOf(dashboardURL), Reserved: reservedHosts(domain), DefaultSlug: defaultSlugOf(st), Layout: layoutFromEnv()}
 }
 
 // layoutFromEnv is where workspaces and their apps answer (RFC-0033 names):

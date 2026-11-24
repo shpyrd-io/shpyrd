@@ -108,6 +108,9 @@ func (r *AppReconciler) reconcileWorkspaceTLS(ctx context.Context, app *shpyrdv1
 // the project namespace when one of the project's hosts is under that
 // domain, and removes the copy when none is.
 func (r *AppReconciler) reconcileAppsTLS(ctx context.Context, app *shpyrdv1.App) error {
+	if routingFrozen(ctx) {
+		return nil
+	}
 	copyRef := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: AppsTLSSecretName, Namespace: app.Namespace}}
 	needed := false
 	for _, h := range r.Config.domains(app) {

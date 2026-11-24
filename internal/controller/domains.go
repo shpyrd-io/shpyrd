@@ -25,6 +25,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // Custom domains (RFC-0034). A project is always served at
@@ -76,29 +77,123 @@ func (c Config) defaultHost(app *shpyrdv1.App) string {
 	return c.workspaceHosts(app)[0]
 }
 
-// customDomains are the hosts the project added, normalised and without the
-// default host (which is always served anyway), plus the app's other hosts
-// in its workspace (RFC-0033 names: the shared name when a custom domain
-// is primary, other verified custom domains).
-func (c Config) customDomains(app *shpyrdv1.App) []string {
-	hosts := c.workspaceHosts(app)
-	seen := map[string]bool{hosts[0]: true}
+// normalizeHost is how a host of the spec is compared and served: lowercase,
+// without spaces or a trailing dot.
+func normalizeHost(h string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+}
+
+// hostAvailability is what the ownership rule says about a host the app
+// lists in spec.domains. Without a lookup there is nothing to ask and the
+// host is free (tests); the server always sets one.
+func (c Config) hostAvailability(app *shpyrdv1.App, host string) tenancy.Availability {
+	if c.HostAvailability == nil {
+		return tenancy.HostFree
+	}
+	return c.HostAvailability(workspaceOf(app), host)
+}
+
+// specHosts are the hosts of spec.domains that the project asks for beyond
+// the ones its workspace gives it: normalised, without duplicates and
+// without the workspace's own hosts, in the order of the spec.
+func (c Config) specHosts(app *shpyrdv1.App) []string {
+	seen := map[string]bool{}
+	for _, h := range c.workspaceHosts(app) {
+		seen[h] = true
+	}
 	var out []string
-	add := func(h string) {
-		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	for _, d := range app.Spec.Domains {
+		h := normalizeHost(d)
 		if h == "" || seen[h] {
-			return
+			continue
 		}
 		seen[h] = true
 		out = append(out, h)
 	}
-	for _, h := range hosts[1:] {
-		add(h)
+	return out
+}
+
+// hostRefusal is a host of spec.domains that the project may not serve.
+type hostRefusal struct {
+	Host    string
+	Message string
+}
+
+// Messages of the status entry of a refused host. They say what rule
+// applies and never whose host it is.
+const (
+	hostTakenMessage    = "this host belongs to another workspace and cannot be served by this project"
+	hostPlatformMessage = "this host is a name of the platform and cannot be served by this project"
+)
+
+// refusedHosts are the hosts of spec.domains the ownership rule refuses,
+// with the message of each. The second result is false when the rule could
+// not be asked for some host (the store is unreachable): the answer is then
+// not to be acted on.
+func (c Config) refusedHosts(app *shpyrdv1.App) ([]hostRefusal, bool) {
+	var out []hostRefusal
+	settled := true
+	for _, h := range c.specHosts(app) {
+		switch c.hostAvailability(app, h) {
+		case tenancy.HostFree:
+		case tenancy.HostTaken:
+			out = append(out, hostRefusal{h, hostTakenMessage})
+		case tenancy.HostPlatform:
+			out = append(out, hostRefusal{h, hostPlatformMessage})
+		default: // HostUnknown, and any value not known yet: never free
+			settled = false
+		}
 	}
-	for _, d := range app.Spec.Domains {
-		add(d)
+	return out, settled
+}
+
+// customDomains are the hosts the project added, normalised and without the
+// default host (which is always served anyway), plus the app's other hosts
+// in its workspace (RFC-0033 names: the shared name when a custom domain
+// is primary, other verified custom domains). A host of spec.domains that
+// another workspace owns, or that is a name of the platform, is not one of
+// them, whatever path put it in the spec; one whose ownership could not be
+// determined is left out too, and reconcile does not act on that answer
+// (routingFrozen).
+func (c Config) customDomains(app *shpyrdv1.App) []string {
+	hosts := c.workspaceHosts(app)
+	var out []string
+	out = append(out, hosts[1:]...)
+	for _, h := range c.specHosts(app) {
+		if c.hostAvailability(app, h) == tenancy.HostFree {
+			out = append(out, h)
+		}
+	}
+	return dedupe(out, hosts[0])
+}
+
+// dedupe drops repeated hosts and the ones given as already seen.
+func dedupe(hosts []string, seen ...string) []string {
+	skip := map[string]bool{}
+	for _, h := range seen {
+		skip[h] = true
+	}
+	var out []string
+	for _, h := range hosts {
+		h = normalizeHost(h)
+		if h == "" || skip[h] {
+			continue
+		}
+		skip[h] = true
+		out = append(out, h)
 	}
 	return out
+}
+
+type routingFrozenKey struct{}
+
+// routingFrozen says this reconcile must not change what the app's hosts
+// route to: the ownership of a host in its spec could not be determined.
+// Nothing served is removed and nothing new is added until a later
+// reconcile can ask.
+func routingFrozen(ctx context.Context) bool {
+	frozen, _ := ctx.Value(routingFrozenKey{}).(bool)
+	return frozen
 }
 
 // sharedWildcard says the host is one label under the shared apps domain:
@@ -168,6 +263,9 @@ func (c Config) ingressTLS(app *shpyrdv1.App) []networkingv1.IngressTLS {
 // reconcileCertificates keeps one cert-manager Certificate per host that
 // needs its own, and removes the ones for hosts that left.
 func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1.App) error {
+	if routingFrozen(ctx) {
+		return nil
+	}
 	wanted := map[string]bool{}
 	if hasWeb(app) {
 		for _, h := range r.Config.domains(app) {
@@ -190,6 +288,20 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 		name := certificateSecretName(app, internal)
 		wanted[name] = true
 		if err := r.ensureCertificate(ctx, app, name, internal, install.CAClusterIssuer); err != nil {
+			return err
+		}
+	}
+	// A host the project may not serve keeps nothing: its TLS Secret goes
+	// with its Certificate (which the sweep below removes), unless another
+	// host's name shortens to the same Secret.
+	refused, _ := r.Config.refusedHosts(app)
+	for _, f := range refused {
+		name := certificateSecretName(app, f.Host)
+		if wanted[name] {
+			continue
+		}
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: app.Namespace}}
+		if err := r.deleteIfExists(ctx, secret); err != nil {
 			return err
 		}
 	}
@@ -252,7 +364,8 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 			hosts = append(hosts, target)
 		}
 	}
-	if len(hosts) == 0 || !hasWeb(app) {
+	refused, _ := r.Config.refusedHosts(app)
+	if (len(hosts) == 0 && len(refused) == 0) || !hasWeb(app) {
 		return nil, false
 	}
 	address := r.frontDoorAddress(ctx, app)
@@ -282,6 +395,11 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 			pending = true
 		}
 		out = append(out, st)
+	}
+	// A refused host is neither looked up nor given a certificate: it only
+	// says why.
+	for _, f := range refused {
+		out = append(out, shpyrdv1.DomainStatus{Host: f.Host, Target: target, Address: address, DNS: DNSUnknown, Certificate: CertFailed, Message: f.Message})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out, pending
@@ -595,7 +713,7 @@ func (c Config) platformHost(app *shpyrdv1.App) string {
 func (c Config) requestedRedirect(app *shpyrdv1.App) string {
 	if app.Spec.RedirectTo != "" {
 		for _, h := range app.Spec.Domains {
-			if h == app.Spec.RedirectTo {
+			if h == app.Spec.RedirectTo && c.hostAvailability(app, normalizeHost(h)) == tenancy.HostFree {
 				return h
 			}
 		}

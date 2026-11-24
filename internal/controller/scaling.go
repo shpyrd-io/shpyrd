@@ -216,7 +216,15 @@ func (r *AppReconciler) reconcileWebScaling(ctx context.Context, app *shpyrdv1.A
 
 	// 2. InterceptorRoute.
 	ir := makeUnstructured(InterceptorRouteGVK, app.Name, app.Namespace)
+	// With the ownership of a host unknown, a route that exists keeps its hosts.
+	holdRoute := false
+	if routingFrozen(ctx) {
+		holdRoute = r.Get(ctx, client.ObjectKeyFromObject(ir), makeUnstructured(InterceptorRouteGVK, app.Name, app.Namespace)) == nil
+	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ir, func() error {
+		if holdRoute {
+			return nil
+		}
 		ir.SetLabels(mergeMaps(ir.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd"}))
 		// The internal name too (#311): a call from another project wakes
 		// the app like a visit does.

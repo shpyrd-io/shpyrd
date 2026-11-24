@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -81,6 +82,22 @@ func (r *AppReconciler) reconcileMaintenance(ctx context.Context, app *shpyrdv1.
 			name = edgeName(app)
 		}
 		ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: app.Namespace}}
+		if routingFrozen(ctx) {
+			// Ownership of a host is not known: the Ingress keeps its hosts,
+			// and answers the maintenance page for them.
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ing), ing); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return outcome{}, err
+			}
+			before := ing.DeepCopy()
+			maintenanceIngress(app, ing)
+			if err := r.Patch(ctx, ing, client.MergeFrom(before)); err != nil {
+				return outcome{}, err
+			}
+			continue
+		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 			if edge {
 				r.Config.mutateEdgeIngress(app, ing)
