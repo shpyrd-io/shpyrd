@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -756,6 +757,15 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		fmt.Fprintf(out, "Extensions: %s\n", strings.Join(extNames, ", "))
 	}
 
+	for _, n := range eng.Notices() {
+		fmt.Fprintf(out, "Note: %s\n", n)
+	}
+	if eng.Profile().Name == "oci" && applies(flags, install.ExternalIngressComponent, skip) {
+		if switching, err := proxyProtocolSwitching(ctx, k, eng.ProxyProtocolOn()); err != nil || switching {
+			fmt.Fprintf(out, "Note: this run changes how the public load balancer talks to the external ingress controller (%s=%s). The load balancer is updated and the public front door is interrupted for a short while: sign-in and every public hostname fail until it is back. Internal names are not affected.\n", install.VarProxyProtocol, eng.Vars()[install.VarProxyProtocol])
+		}
+	}
+
 	fmt.Fprintf(out, "Installing shpyrd base stack (profile %s) on context %s\n", eng.Profile().Name, contextName)
 	fmt.Fprintf(out, "Domain: %s\n", eng.Vars()[install.VarDomain])
 	cloud := eng.Vars()[install.VarFrontDoor] == install.FrontDoorLB
@@ -951,6 +961,30 @@ func effectiveVar(vars map[string]string, prof *install.Profile, key string) str
 		return v
 	}
 	return prof.Vars[key]
+}
+
+// applies says whether this run installs the component: not skipped, and
+// either no --only or the component among them.
+func applies(flags *initFlags, component string, skip []string) bool {
+	return !contains(skip, component) && (len(flags.only) == 0 || contains(flags.only, component))
+}
+
+// proxyProtocolSwitching says whether the public load balancer is about to
+// change because of the PROXY protocol setting: the external controller's
+// Service exists and its load balancer annotation differs from what the
+// install will set. A cluster without the Service has no front door to
+// interrupt. An error other than "not found" is returned so the caller
+// warns anyway.
+func proxyProtocolSwitching(ctx context.Context, k *kube.Client, want bool) (bool, error) {
+	svc, err := k.Kube.CoreV1().Services("ingress-nginx").Get(ctx, "ingress-nginx-controller", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	_, has := svc.Annotations[install.ProxyProtocolAnnotation]
+	return has != want, nil
 }
 
 // loadBalancerAddress is the public address of ingress-nginx's Service.
