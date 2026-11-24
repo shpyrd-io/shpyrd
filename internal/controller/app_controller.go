@@ -361,6 +361,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	var gitRefresh time.Duration
 	// When the ownership of a host of the spec cannot be determined, this
 	// reconcile leaves the routing alone and tries again soon.
+	defer r.Config.beginOwnership(app)()
 	frozen := false
 	if _, settled := r.Config.refusedHosts(app); !settled {
 		ctx, frozen = context.WithValue(ctx, routingFrozenKey{}, true), true

@@ -10,6 +10,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -83,12 +84,55 @@ func normalizeHost(h string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 }
 
+// ownershipSnapshots holds, for each App being reconciled, the answers of
+// the ownership rule taken once at the start of that reconcile, keyed by
+// "namespace/name". An App is never reconciled twice at the same time, and
+// the entry is removed when the reconcile ends.
+var ownershipSnapshots sync.Map
+
+type hostAnswers map[string]tenancy.Availability
+
+func snapshotKey(app *shpyrdv1.App) string { return app.Namespace + "/" + app.Name }
+
+// beginOwnership asks the ownership rule once for every host the app lists
+// in spec.domains and keeps the answers for the rest of the reconcile: the
+// freeze decision, the hosts served, the redirect, the Certificates and
+// Secrets, the status entries and the routes all use this one set, so a
+// lookup that starts failing, or a cache that empties, midway cannot change
+// what one reconcile does. The result ends the snapshot.
+func (c Config) beginOwnership(app *shpyrdv1.App) func() {
+	if c.HostAvailability == nil {
+		return func() {}
+	}
+	answers := hostAnswers{}
+	for _, d := range app.Spec.Domains {
+		h := normalizeHost(d)
+		if h == "" {
+			continue
+		}
+		if _, ok := answers[h]; !ok {
+			answers[h] = c.HostAvailability(workspaceOf(app), h)
+		}
+	}
+	key := snapshotKey(app)
+	ownershipSnapshots.Store(key, answers)
+	return func() { ownershipSnapshots.Delete(key) }
+}
+
 // hostAvailability is what the ownership rule says about a host the app
 // lists in spec.domains. Without a lookup there is nothing to ask and the
-// host is free (tests); the server always sets one.
+// host is free (tests); the server always sets one. During a reconcile the
+// answer is the one taken at its start; a host missing from that set is
+// unknown, never free.
 func (c Config) hostAvailability(app *shpyrdv1.App, host string) tenancy.Availability {
 	if c.HostAvailability == nil {
 		return tenancy.HostFree
+	}
+	if v, ok := ownershipSnapshots.Load(snapshotKey(app)); ok {
+		if a, ok := v.(hostAnswers)[host]; ok {
+			return a
+		}
+		return tenancy.HostUnknown
 	}
 	return c.HostAvailability(workspaceOf(app), host)
 }

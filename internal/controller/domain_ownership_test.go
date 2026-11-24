@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -640,4 +641,81 @@ func TestDomainOwnershipSettledUnknownWorkspaceIsRetried(t *testing.T) {
 			t.Errorf("certificate %s removed", name)
 		}
 	}
+}
+
+// failAfter wraps the ownership lookup of r so that it answers like the real
+// one for the first good calls and then breaks (fail runs before the call
+// that would be the next one).
+func failAfter(r *AppReconciler, good int, fail func()) {
+	inner := r.Config.HostAvailability
+	calls := 0
+	r.Config.HostAvailability = func(workspace, host string) tenancy.Availability {
+		calls++
+		if calls == good+1 {
+			fail()
+		}
+		return inner(workspace, host)
+	}
+}
+
+func assertRoutingUnchanged(t *testing.T, r *AppReconciler, app *shpyrdv1.App, hostsBefore map[string][]string, certsBefore map[string]bool) {
+	t.Helper()
+	hostsAfter := ingressHosts(t, r.Client, app.Namespace)
+	if len(hostsAfter) != len(hostsBefore) {
+		t.Errorf("ingresses changed: %v -> %v", hostsBefore, hostsAfter)
+	}
+	for name, before := range hostsBefore {
+		if strings.Join(before, ",") != strings.Join(hostsAfter[name], ",") {
+			t.Errorf("ingress %s changed: %v -> %v", name, before, hostsAfter[name])
+		}
+	}
+	certsAfter := certificateNames(t, r.Client, app.Namespace)
+	if len(certsAfter) != len(certsBefore) {
+		t.Errorf("certificates changed: %v -> %v", certsBefore, certsAfter)
+	}
+	for name := range certsBefore {
+		if !certsAfter[name] {
+			t.Errorf("certificate %s removed", name)
+		}
+	}
+}
+
+// One reconcile uses one set of answers: a lookup that breaks after it has
+// answered (once, twice, three or five times) cannot take a served host's
+// rule, TLS entry or Certificate away.
+func TestDomainOwnershipOneAnswerPerReconcile(t *testing.T) {
+	for _, good := range []int{1, 2, 3, 5} {
+		for _, kind := range []string{"store down", "unknown workspace"} {
+			t.Run(fmt.Sprintf("%s after %d", kind, good), func(t *testing.T) {
+				w := newOwnershipWorld(t)
+				app := betaApp(freeHost)
+				r, _ := settleApp(t, w, app)
+				hostsBefore := ingressHosts(t, r.Client, app.Namespace)
+				certsBefore := certificateNames(t, r.Client, app.Namespace)
+				if len(mentions(hostsBefore, freeHost)) == 0 || !hasCertFor(certsBefore, freeHost) {
+					t.Fatalf("setup: the free host is not served: %v %v", hostsBefore, certsBefore)
+				}
+
+				fail := func() { w.st.down.Store(true) }
+				if kind == "unknown workspace" {
+					fail = func() { delete(w.ids, "beta") }
+				}
+				failAfter(r, good, fail)
+				time.Sleep(time.Millisecond) // past the lookup's memory
+				reconcileResult(t, r, app)
+
+				assertRoutingUnchanged(t, r, app, hostsBefore, certsBefore)
+			})
+		}
+	}
+}
+
+func hasCertFor(certs map[string]bool, host string) bool {
+	want := strings.ReplaceAll(host, ".", "-")
+	for name := range certs {
+		if strings.Contains(name, want) {
+			return true
+		}
+	}
+	return false
 }
