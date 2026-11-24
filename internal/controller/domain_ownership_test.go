@@ -559,3 +559,85 @@ func TestDomainOwnershipSettledAppIsCheckedAgain(t *testing.T) {
 		t.Errorf("a settled project without domains is requeued: %+v", res)
 	}
 }
+
+// C15 (D2) on an app that is settled, so that no other wait can stand in for
+// the retry: with the lookup failing the routing stays as it was and the
+// reconcile is asked for again within 30 s, which the ownership recheck
+// alone would not do.
+func TestDomainOwnershipSettledLookupFailureIsRetried(t *testing.T) {
+	w := newOwnershipWorld(t)
+	app := betaApp(freeHost)
+	r, res := settleApp(t, w, app)
+	if res.RequeueAfter <= 30*time.Second {
+		t.Fatalf("setup: a settled app should wait for the recheck, got %+v", res)
+	}
+	hostsBefore := ingressHosts(t, r.Client, app.Namespace)
+	certsBefore := certificateNames(t, r.Client, app.Namespace)
+
+	w.st.down.Store(true)
+	time.Sleep(time.Millisecond) // past the lookup's memory
+	res = reconcileResult(t, r, app)
+
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 30*time.Second {
+		t.Errorf("a failed lookup on a settled app is not retried soon: %+v", res)
+	}
+	hostsAfter := ingressHosts(t, r.Client, app.Namespace)
+	for name, before := range hostsBefore {
+		if strings.Join(before, ",") != strings.Join(hostsAfter[name], ",") {
+			t.Errorf("ingress %s changed: %v -> %v", name, before, hostsAfter[name])
+		}
+	}
+	if len(hostsAfter) != len(hostsBefore) {
+		t.Errorf("ingresses changed: %v -> %v", hostsBefore, hostsAfter)
+	}
+	certsAfter := certificateNames(t, r.Client, app.Namespace)
+	if len(certsAfter) != len(certsBefore) {
+		t.Errorf("certificates changed: %v -> %v", certsBefore, certsAfter)
+	}
+	for name := range certsBefore {
+		if !certsAfter[name] {
+			t.Errorf("certificate %s removed", name)
+		}
+	}
+
+	// Once the store answers, the app is back to the ordinary recheck.
+	w.st.down.Store(false)
+	time.Sleep(time.Millisecond)
+	if res = reconcileResult(t, r, app); res.RequeueAfter <= 30*time.Second {
+		t.Errorf("after the lookup works the app should wait for the recheck: %+v", res)
+	}
+}
+
+// The same retry when the store does not know the app's workspace.
+func TestDomainOwnershipSettledUnknownWorkspaceIsRetried(t *testing.T) {
+	w := newOwnershipWorld(t)
+	app := betaApp(freeHost)
+	r, _ := settleApp(t, w, app)
+	hostsBefore := ingressHosts(t, r.Client, app.Namespace)
+	certsBefore := certificateNames(t, r.Client, app.Namespace)
+
+	delete(w.ids, "beta") // the store no longer answers for the workspace
+	res := reconcileResult(t, r, app)
+
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 30*time.Second {
+		t.Errorf("an unknown workspace on a settled app is not retried soon: %+v", res)
+	}
+	hostsAfter := ingressHosts(t, r.Client, app.Namespace)
+	for name, before := range hostsBefore {
+		if strings.Join(before, ",") != strings.Join(hostsAfter[name], ",") {
+			t.Errorf("ingress %s changed: %v -> %v", name, before, hostsAfter[name])
+		}
+	}
+	if len(hostsAfter) != len(hostsBefore) {
+		t.Errorf("ingresses changed: %v -> %v", hostsBefore, hostsAfter)
+	}
+	certsAfter := certificateNames(t, r.Client, app.Namespace)
+	if len(certsAfter) != len(certsBefore) {
+		t.Errorf("certificates changed: %v -> %v", certsBefore, certsAfter)
+	}
+	for name := range certsBefore {
+		if !certsAfter[name] {
+			t.Errorf("certificate %s removed", name)
+		}
+	}
+}

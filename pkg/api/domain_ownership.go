@@ -21,7 +21,7 @@ import (
 // an App's spec.domains passes through vetDomains: createProject before
 // anything is created, mutateApp after the mutation and before the update.
 // Handlers do not judge hosts themselves, and only this file assigns
-// Spec.Domains (TestSpecDomainsAreAssignedOnlyInTheFunnel).
+// Spec.Domains (TestDomainOwnershipSpecDomainsAssignedOnlyInTheFunnel).
 //
 // Only the hosts a write adds are judged. A host the App already holds
 // stays, whatever the rules say now, until it is removed.
