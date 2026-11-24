@@ -103,6 +103,12 @@ type Options struct {
 	// IngressService.
 	IngressServiceExternal string
 	IngressServiceInternal string
+	// ProxyProtocol makes the server's own dials to the external front door
+	// begin with a PROXY protocol preface that claims no address, for a
+	// front door that requires one. Dials to the internal front door never
+	// carry it, and a bare internal name is never forwarded to the external
+	// front door. Off by default.
+	ProxyProtocol bool
 	// RegistryGC is the in-cluster registry's garbage collector (RFC-0059);
 	// nil when this replica does not run the controller.
 	RegistryGC RegistryGC
@@ -527,6 +533,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		s.callers = s.podIndex
 	}
 	s.rp = newRelyingParty(sessions, opts.Public.DashboardURL, opts.Public.Domain, opts.IngressService, opts.Logger)
+	s.rp.announce = s.announcesToFrontDoor
 	s.rp.SetClusterCA(s.clusterCA(context.Background()))
 
 	s.internalAPI = s.integrationRouter("internal")

@@ -361,6 +361,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		IngressService:         envOr("SHPYRD_INGRESS_SERVICE", "ingress-nginx-controller.ingress-nginx.svc:443"),
 		IngressServiceExternal: envOr("SHPYRD_INGRESS_SERVICE_EXTERNAL", "ingress-nginx-controller.ingress-nginx.svc:443"),
 		IngressServiceInternal: envOr("SHPYRD_INGRESS_SERVICE_INTERNAL", "ingress-nginx-internal-controller.ingress-nginx-internal.svc:443"),
+		ProxyProtocol:          os.Getenv("SHPYRD_PROXY_PROTOCOL") == "true",
 		Public: api.PublicConfig{
 			Version:      version.Version,
 			Domain:       domain,

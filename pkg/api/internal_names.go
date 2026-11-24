@@ -224,6 +224,10 @@ func (s *Server) forwardInternalName(c *gin.Context, slug string) {
 		return
 	}
 	door := s.internalDoor(c.Request.Context())
+	if door == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "the internal front door is missing: this cluster has no internal ingress controller, and the external one does not serve internal names"})
+		return
+	}
 	qualified := internalHostOf(caller.Workspace, slug)
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
@@ -281,17 +285,24 @@ func (s *Server) internalNameError(c *gin.Context, code, slug, wsSlug string) {
 // internalDoor is where the server forwards a bare internal name: the
 // internal ingress controller's Service when the cluster has one, else the
 // external's (a local cluster has one front door), on its plain HTTP port.
-// Looked up once a minute: the controllers are installed once.
+// With ProxyProtocol on there is no fallback: empty means the internal front
+// door is missing. Looked up once a minute: the controllers are installed once.
 func (s *Server) internalDoor(ctx context.Context) string {
 	if s.internalDoorFn != nil {
 		return s.internalDoorFn()
 	}
 	s.doorCache.mu.Lock()
 	defer s.doorCache.mu.Unlock()
-	if s.doorCache.addr != "" && time.Since(s.doorCache.at) < time.Minute {
+	if !s.doorCache.at.IsZero() && time.Since(s.doorCache.at) < time.Minute {
 		return s.doorCache.addr
 	}
 	addr := doorHost(s.opts.IngressServiceExternal, "ingress-nginx-controller.ingress-nginx.svc.cluster.local")
+	if s.opts.ProxyProtocol {
+		// The external front door requires the PROXY preface and records
+		// the address the connection came from; the internal one is the
+		// door for internal names, so there is no other to fall back to.
+		addr = ""
+	}
 	if s.kube != nil {
 		if _, err := s.kube.Kube.CoreV1().Services("ingress-nginx-internal").Get(ctx, "ingress-nginx-internal-controller", metav1.GetOptions{}); err == nil {
 			addr = doorHost(s.opts.IngressServiceInternal, "ingress-nginx-internal-controller.ingress-nginx-internal.svc.cluster.local")
