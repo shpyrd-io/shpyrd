@@ -3,8 +3,8 @@ id: shpyrd-glo-001
 type: glossary
 title: Glossary
 status: active
-date: 2026-11-24
-related: [shpyrd-dec-001, shpyrd-spec-001, shpyrd-spec-002, shpyrd-spec-003, shpyrd-spec-004]
+date: 2026-11-25
+related: [shpyrd-dec-001, shpyrd-dec-002, shpyrd-spec-001, shpyrd-spec-002, shpyrd-spec-003, shpyrd-spec-004]
 ---
 
 Terms specific to this repository, in alphabetical order. Terms shared by
@@ -24,6 +24,11 @@ server reads, from which projects are made. See shpyrd-spec-001.
 
 **Entry.** One application of the catalog: a folder with a `shpyrd.yaml`
 that says what it is, where its code is, how it runs and what it asks.
+
+**Front door.** An ingress controller through which requests enter the
+cluster. The external front door serves the public hostnames; the internal
+front door serves internal names and, when the platform is exposed
+internally, the platform's own hostnames. See shpyrd-dec-002.
 
 **Moved address.** An address a workspace had before it changed its
 address. Requests to it are redirected for a time, and until that redirect
