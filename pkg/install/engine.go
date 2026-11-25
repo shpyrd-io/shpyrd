@@ -72,6 +72,12 @@ type Options struct {
 	// profile's runlevels (RFC-0002). Their names are recorded as
 	// SHPYRD_EXTENSIONS for the server.
 	Extensions []ExtensionComponent
+	// ProxyProtocolKeep is set by a run that applies only some of the
+	// components: it is the PROXY protocol state the external ingress
+	// controller has in the cluster (true when on), and the run keeps it,
+	// whatever SHPYRD_PROXY_PROTOCOL says. nil is a run that switches the
+	// feature as asked (a full run).
+	ProxyProtocolKeep *bool
 	// Reporter receives progress; defaults to a slog based reporter.
 	Reporter Reporter
 	Logger   *slog.Logger
@@ -178,9 +184,9 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 	if err := validateIntegrationVars(vars); err != nil {
 		return nil, err
 	}
-	internalName := InternalIngressComponent
-	internalInInstall := profile.HasComponent(internalName) && !contains(opts.Skip, internalName) && (len(opts.Only) == 0 || contains(opts.Only, internalName))
-	proxyOn, proxyCIDR, proxyNotice, err := resolveProxyProtocol(profile.Name, vars, internalInInstall)
+	internalInInstall := profile.HasComponent(InternalIngressComponent) && !contains(opts.Skip, InternalIngressComponent)
+	externalApplied := !contains(opts.Skip, ExternalIngressComponent) && (len(opts.Only) == 0 || contains(opts.Only, ExternalIngressComponent))
+	proxyOn, proxyCIDR, proxyNotice, err := resolveProxyProtocol(profile.Name, vars, internalInInstall, opts.ProxyProtocolKeep, externalApplied)
 	if err != nil {
 		return nil, err
 	}

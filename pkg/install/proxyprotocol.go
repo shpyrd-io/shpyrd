@@ -29,21 +29,47 @@ const (
 // protocol on this install. It returns the effective value ("true" or
 // "false"), the CIDR to believe when on, and a notice when the request was
 // not honoured. The feature is on only for the oci profile with the
-// internal controller in the install: without it the external controller is
-// the door of internal names, which must stay plain. An error is returned
-// for a value that is neither "true" nor "false", or when the feature would
-// be on and the subnet range is missing or is not a range: nothing is then
-// rendered that believes every sender.
-func resolveProxyProtocol(profile string, vars map[string]string, internalInInstall bool) (on bool, cidr string, notice string, err error) {
+// internal controller in the install, that is, in the profile and not
+// skipped: without it the external controller is the door of internal
+// names, which must stay plain. A run limited to some components passes
+// keep, the state the cluster has, and never changes it; --only does not
+// make a component "left out", so it does not change what a render holds.
+// An error is returned for a value that is neither "true" nor "false", or
+// when the feature would be on, the run applies the external controller and
+// the subnet range is missing or is not a range: nothing is then rendered
+// that believes every sender.
+func resolveProxyProtocol(profile string, vars map[string]string, internalInInstall bool, keep *bool, externalApplied bool) (on bool, cidr string, notice string, err error) {
+	asked := false
 	switch vars[VarProxyProtocol] {
 	case "", "false":
-		return false, "", "", nil
 	case "true":
+		asked = true
 	default:
 		return false, "", "", fmt.Errorf("%s must be \"true\" or \"false\", got %q", VarProxyProtocol, vars[VarProxyProtocol])
 	}
 	if profile != "oci" {
-		return false, "", fmt.Sprintf("%s=true is ignored: only the oci profile has a load balancer that sends the PROXY header; the front door is unchanged", VarProxyProtocol), nil
+		if asked {
+			return false, "", fmt.Sprintf("%s=true is ignored: only the oci profile has a load balancer that sends the PROXY header; the front door is unchanged", VarProxyProtocol), nil
+		}
+		return false, "", "", nil
+	}
+	if keep != nil {
+		state := map[bool]string{true: "on", false: "off"}[*keep]
+		if *keep {
+			prefix, perr := netip.ParsePrefix(strings.TrimSpace(vars[VarLBSubnetCIDR]))
+			if perr == nil && prefix.Bits() != 0 {
+				cidr = prefix.Masked().String()
+			} else if externalApplied {
+				return false, "", "", fmt.Errorf("the external ingress controller has PROXY protocol on and this run applies it, so %s must be the public load balancer subnet's range (for example 10.0.10.0/24), got %q: the PROXY header is believed only from that range", VarLBSubnetCIDR, vars[VarLBSubnetCIDR])
+			}
+		}
+		if asked != *keep {
+			notice = fmt.Sprintf("%s=%t is not applied: this run applies only some of the components, so the front door stays %s as the external ingress controller has it. A cluster init without --only that applies both %s and shpyrd makes the change", VarProxyProtocol, asked, state, ExternalIngressComponent)
+		}
+		return *keep, cidr, notice, nil
+	}
+	if !asked {
+		return false, "", "", nil
 	}
 	if !internalInInstall {
 		return false, "", fmt.Sprintf("%s stays off: the internal ingress controller (%s) is not part of this install, so the external controller also answers internal names, which must stay plain", VarProxyProtocol, InternalIngressComponent), nil

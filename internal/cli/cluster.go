@@ -718,7 +718,18 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		// earlier run) replaces the in-cluster one and its node trust.
 		skip = append(append([]string{}, skip...), "registry", "registry-nodes")
 	}
+	var proxyKeep *bool
 	if prof, err := install.LoadProfile(deploy.FS, flags.profile); err == nil {
+		if prof.Name == "oci" && partialRun(flags) {
+			// A run that applies only some components never changes the
+			// PROXY protocol state: it keeps what the external controller
+			// has, so the controller and the server cannot disagree.
+			on, err := externalProxyProtocolOn(ctx, k)
+			if err != nil {
+				return err
+			}
+			proxyKeep = &on
+		}
 		if prof.Name == "aws" {
 			discoverAWS(ctx, out, k, vars, prof)
 		}
@@ -737,6 +748,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		Vars:                vars,
 		Skip:                skip,
 		Only:                flags.only,
+		ProxyProtocolKeep:   proxyKeep,
 		Version:             Version,
 		Extensions:          extComps,
 		Reporter:            &consoleReporter{out: out},
@@ -760,7 +772,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 	for _, n := range eng.Notices() {
 		fmt.Fprintf(out, "Note: %s\n", n)
 	}
-	if eng.Profile().Name == "oci" && applies(flags, install.ExternalIngressComponent, skip) {
+	if eng.Profile().Name == "oci" && proxyKeep == nil && applies(flags, install.ExternalIngressComponent, skip) {
 		if switching, err := proxyProtocolSwitching(ctx, k, eng.ProxyProtocolOn()); err != nil || switching {
 			fmt.Fprintf(out, "Note: this run changes how the public load balancer talks to the external ingress controller (%s=%s). The load balancer is updated and the public front door is interrupted for a short while: sign-in and every public hostname fail until it is back. Internal names are not affected.\n", install.VarProxyProtocol, eng.Vars()[install.VarProxyProtocol])
 		}
@@ -967,6 +979,31 @@ func effectiveVar(vars map[string]string, prof *install.Profile, key string) str
 // either no --only or the component among them.
 func applies(flags *initFlags, component string, skip []string) bool {
 	return !contains(skip, component) && (len(flags.only) == 0 || contains(flags.only, component))
+}
+
+// partialRun says whether this run applies only some of the components that
+// matter to the PROXY protocol state: it is limited with --only, or leaves
+// out the external ingress controller or the server with --skip. The first
+// phase of a cloud install holds the server back itself; that is not a
+// partial run and is not decided here.
+func partialRun(flags *initFlags) bool {
+	return len(flags.only) > 0 || contains(flags.skip, install.ExternalIngressComponent) || contains(flags.skip, "shpyrd")
+}
+
+// externalProxyProtocolOn reads the cluster's PROXY protocol state: on when
+// the external controller's Service carries the load balancer annotation,
+// off when it does not or the Service does not exist. Any other error is
+// returned: a state that could not be read is never taken to be on or off.
+func externalProxyProtocolOn(ctx context.Context, k *kube.Client) (bool, error) {
+	svc, err := k.Kube.CoreV1().Services("ingress-nginx").Get(ctx, "ingress-nginx-controller", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the PROXY protocol state of the external ingress controller (Service ingress-nginx/ingress-nginx-controller): %w", err)
+	}
+	_, has := svc.Annotations[install.ProxyProtocolAnnotation]
+	return has, nil
 }
 
 // proxyProtocolSwitching says whether the public load balancer is about to

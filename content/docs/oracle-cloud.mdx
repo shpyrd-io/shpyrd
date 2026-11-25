@@ -163,7 +163,7 @@ By default the public load balancer hands each connection to the ingress control
 | `SHPYRD_PROXY_PROTOCOL` | `true` makes the load balancer send the visitor's address to the external ingress controller in a PROXY protocol (version 2) header | `false` |
 | `SHPYRD_LB_SUBNET_CIDR` | the range of the public load balancer's subnet: the only source the controller believes a PROXY header from | `10.0.10.0/24`, the Terraform default; the vars file carries the real value |
 
-With it on, apps read the visitor's address in `X-Real-IP` ([The visitor's address](/docs/app-access#the-visitors-address)). Switch it on with the vars file in hand:
+With it on, apps read the visitor's address in `X-Real-IP` ([The visitor's address](/docs/app-access#the-visitor-s-address)). Switch it on with the vars file in hand:
 
 ```shell
 shpyrd cluster init --context oke-shpyrd-prod --profile oci --vars-file contrib/oci/terraform/shpyrd-prod.vars \
@@ -176,7 +176,9 @@ The installer sets four things on the external controller: the load balancer ann
 The load balancer and the controller change at different moments, and public requests fail until both have changed: sign-in and every public hostname are unreachable for a while. Internal names are not affected. The change cannot be ordered to avoid this, and its length has not been measured, so do it when a pause is acceptable. `cluster init` prints a note before it applies a change of this kind.
 </Callout>
 
-The feature needs the internal controller in the install (a subnet in `SHPYRD_INTERNAL_LB_SUBNET`). Without it the external controller also answers internal names, which must stay plain, so the setting stays off and the installer says why. Elsewhere than the `oci` profile the setting is ignored.
+The feature needs the internal controller in the install. If you leave it out with `--skip ingress-nginx-internal`, the external controller also answers internal names, which must stay plain, so the setting stays off and the installer says why. Elsewhere than the `oci` profile the setting is ignored.
+
+The switch, on or off, happens only in a `cluster init` without `--only` that installs both the external ingress controller and the server. A run limited to some components (with `--only`, or with `--skip` of `ingress-nginx` or `shpyrd`) keeps the front door as it is: it applies the server with what the external controller has in the cluster, and a note says when that differs from `SHPYRD_PROXY_PROTOCOL`. Make the change with a full run.
 
 ### Going back
 
