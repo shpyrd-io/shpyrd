@@ -29,11 +29,11 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { api, ApiError } from "@/api/api";
-import type { Exposure, ProjectSummary } from "@/api/types";
+import type { Exposure, ProjectCard } from "@/api/types";
 import { LINK_REQUIRED } from "@/lib/github-link";
 import { useInternalExposure } from "@/lib/networking";
 import { useBrandColor } from "@/lib/branding";
-import { usePerms, useUserOnly } from "@/lib/perms";
+import { mayView, usePerms } from "@/lib/perms";
 import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
 import { lookOf } from "@/lib/tile";
 import { PersonMenu, ThemeButton } from "@/shell/person";
@@ -45,7 +45,6 @@ import { GitHubLinkStep, GitHubPicker, type Picked, slugFromRepo } from "./githu
 export function Launcher() {
   const navigate = useNavigate();
   const perms = usePerms();
-  const userOnly = useUserOnly(perms);
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects, refetchInterval: 15_000 });
   const workspace = config.data?.workspace;
@@ -85,7 +84,7 @@ export function Launcher() {
         ) : projects.data && projects.data.length > 0 ? (
           <div className="flex flex-wrap justify-center gap-4">
             {projects.data.map((p) => (
-              <Card key={p.slug} project={p} operator={!userOnly} />
+              <Card key={p.slug} project={p} operator={mayView(perms, p)} />
             ))}
           </div>
         ) : perms.create ? (
@@ -118,8 +117,9 @@ export function Launcher() {
 }
 
 // One project: its symbol, where it answers (its own domain first), and
-// who may open it.
-function Card({ project, operator }: { project: ProjectSummary; operator: boolean }) {
+// who may open it. The gear is for who may view the project: someone who
+// only opens it has the card alone.
+function Card({ project, operator }: { project: ProjectCard; operator: boolean }) {
   const navigate = useNavigate();
   const address = addressOf(project);
   return (

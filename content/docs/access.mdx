@@ -55,8 +55,8 @@ An invitation is a link, shown once, that works for seven days — and, when the
 
 | Role | Sees | Does |
 | --- | --- | --- |
-| `reader` | the app itself (through the edge), read-only; the launcher | opens the app; the edge refuses every request that changes things (anything but GET, HEAD, OPTIONS) and the app receives `X-Shpyrd-Roles: reader`, so apps have viewers without permission code of their own |
-| `user` | the app itself (through the edge), the launcher | opens the app; nothing in the builder dashboard — see [Sign-in for your app](/docs/app-access) |
+| `reader` | the app itself (through the edge), read-only; its card on the launcher | opens the app; the edge refuses every request that changes things (anything but GET, HEAD, OPTIONS) and the app receives `X-Shpyrd-Roles: reader`, so apps have viewers without permission code of their own |
+| `user` | the app itself (through the edge); its card on the launcher | opens the app; nothing in the builder dashboard — see [Sign-in for your app](/docs/app-access) |
 | `viewer` | overview, releases, builds, logs, metrics, config var **names**; opens the app | nothing |
 | `developer` | everything a viewer sees | deploy, roll back, scale, resize, set and unset config vars, shell and one-off commands |
 | `admin` | + members, resources | attach and detach resources, create volumes, manage members, destroy the project |

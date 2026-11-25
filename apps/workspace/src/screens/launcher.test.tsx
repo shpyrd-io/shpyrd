@@ -3,8 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError } from "@shpyrd/shared/api/error";
-import type { GitHubRepository } from "@/api/types";
-import { NewProject } from "./launcher";
+import type { GitHubRepository, ProjectCard } from "@/api/types";
+import { Launcher, NewProject } from "./launcher";
 
 const fake = vi.hoisted(() => ({
   config: vi.fn(),
@@ -15,10 +15,15 @@ const fake = vi.hoisted(() => ({
   githubMe: vi.fn(),
   linkGitHub: vi.fn(),
   createProject: vi.fn(),
+  projects: vi.fn(),
 }));
+// What usePerms answers: the tests of the launcher set it per person.
+const person = vi.hoisted(() => ({ perms: {} as Record<string, unknown> }));
+const operator = { admin: false, create: true };
 vi.mock("@/api/api", async (actual) => ({ ...(await actual<typeof import("@/api/api")>()), api: fake }));
 vi.mock("@/lib/networking", () => ({ useInternalExposure: () => false }));
-vi.mock("@/lib/perms", async (actual) => ({ ...(await actual<typeof import("@/lib/perms")>()), usePerms: () => ({ admin: false, create: true }) }));
+vi.mock("@/lib/perms", async (actual) => ({ ...(await actual<typeof import("@/lib/perms")>()), usePerms: () => person.perms }));
+vi.mock("@/shell/person", () => ({ PersonMenu: () => null, ThemeButton: () => null }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const repos: GitHubRepository[] = [
@@ -45,6 +50,7 @@ const create = () => screen.getByRole("button", { name: "Create" }) as HTMLButto
 const tab = (name: string) => fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 });
 
 beforeEach(() => {
+  person.perms = operator;
   fake.config.mockResolvedValue({ domain: "example.test" });
   fake.githubAccounts.mockResolvedValue(accounts);
   fake.githubRepositories.mockResolvedValue(repos);
@@ -125,4 +131,86 @@ it("offers no GitHub where the workspace has no GitHub account", async () => {
   fireEvent.click(screen.getByRole("button", { name: "New project" }));
   expect(await screen.findByPlaceholderText("https://github.com/acme/hello-world")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "From GitHub" })).toBeNull();
+});
+
+// The launcher: the card of every project the person may open, and the gear
+// of those they may view.
+const card = (slug: string, more: Partial<ProjectCard> = {}): ProjectCard => ({
+  slug,
+  displayName: slug.toUpperCase(),
+  description: `The ${slug} app`,
+  phase: "Running",
+  access: "authenticated",
+  url: `https://${slug}.example.test`,
+  ...more,
+});
+const gear = (name: string) => screen.queryByRole("button", { name: `Settings of ${name}` });
+
+function showLauncher(projects: ProjectCard[]) {
+  fake.config.mockResolvedValue({ domain: "example.test", workspace: { name: "Acme" } });
+  fake.projects.mockResolvedValue(projects);
+  queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queries}>
+      <MemoryRouter>
+        <Launcher />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+it("shows the card of an app the person only opens, with its link and without a gear", async () => {
+  person.perms = { enforced: true, admin: false, create: false, me: { roles: { workspace: "", projects: {} } } };
+  showLauncher([
+    card("shop", { role: "user", description: "Orders and returns", domain: "shop.acme.test", url: "https://shop.example.test", icon: "briefcase", iconColor: "teal", exposure: "internal" }),
+    card("blog", { role: "reader", iconUrl: "/api/projects/blog/icon?v=1", iconType: "image/png" }),
+  ]);
+  const link = await screen.findByRole("link", { name: "shop.acme.test" });
+  expect(link.getAttribute("href")).toBe("https://shop.acme.test/.shpyrd/signin?rd=%2F");
+  expect(screen.getByText("SHOP")).toBeTruthy();
+  expect(screen.getByText("Orders and returns")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "blog.example.test" }).getAttribute("href")).toBe("https://blog.example.test/.shpyrd/signin?rd=%2F");
+  expect(gear("SHOP")).toBeNull();
+  expect(gear("BLOG")).toBeNull();
+  expect(screen.queryByRole("button", { name: "New project" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Settings of the workspace" })).toBeNull();
+});
+
+it("gives the gear of a project only where the person may view it", async () => {
+  // A member of the workspace: user on A, developer on B (whose card says no role).
+  person.perms = { enforced: true, admin: false, create: true, me: { roles: { workspace: "member", projects: {} } } };
+  showLauncher([card("a", { role: "user" }), card("b")]);
+  await screen.findByRole("link", { name: "a.example.test" });
+  expect(gear("A")).toBeNull();
+  expect(gear("B")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "New project" })).toBeTruthy();
+});
+
+it("gives every card its gear to an administrator, and while roles are not enforced", async () => {
+  person.perms = { enforced: true, admin: true, create: true };
+  showLauncher([card("a", { role: "user" }), card("b")]);
+  await screen.findByRole("link", { name: "a.example.test" });
+  expect(gear("A")).toBeTruthy();
+  expect(gear("B")).toBeTruthy();
+  cleanup();
+  person.perms = { enforced: false, admin: false, create: true };
+  showLauncher([card("a", { role: "user" }), card("b")]);
+  await screen.findByRole("link", { name: "a.example.test" });
+  expect(gear("A")).toBeTruthy();
+});
+
+it("lights a card as a viewer's is: asleep and in maintenance", async () => {
+  person.perms = { enforced: true, admin: false, create: false, me: { roles: { projects: {} } } };
+  showLauncher([
+    card("asleep", { role: "user", asleep: true }),
+    card("down", { role: "user", maintenance: { enabled: true } }),
+    card("broken", { role: "reader", phase: "Failed" }),
+    card("up", { role: "reader" }),
+  ]);
+  await screen.findByRole("link", { name: "up.example.test" });
+  const phaseOf = (host: string) => screen.getByRole("link", { name: host }).closest("[data-slot=launcher-card]")?.getAttribute("data-phase");
+  expect(phaseOf("asleep.example.test")).toBe("sleeping");
+  expect(phaseOf("down.example.test")).toBe("maintenance");
+  expect(phaseOf("broken.example.test")).toBe("failed");
+  expect(phaseOf("up.example.test")).toBe("running");
 });
