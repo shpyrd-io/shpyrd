@@ -46,39 +46,66 @@ func (m callerMap) Lookup(ip string) (serviceCaller, bool) {
 }
 
 // podIndex is the live index: informers over pods and project namespaces.
+//
+// Only a live pod is a caller: a pod that has ended (Succeeded or Failed)
+// no longer holds its address, which the cluster may give to another pod.
+// An address reported by live pods of different callers identifies none.
 type podIndex struct {
 	kube     kubernetes.Interface
 	systemNS string
 
 	mu         sync.RWMutex
-	pods       map[string]podEntry      // by address
-	addresses  map[string][]string      // namespace/name → its addresses, to forget them when the pod goes
-	namespaces map[string]serviceCaller // project namespace → its project
+	pods       map[string]podEntry            // namespace/name → the pod
+	byAddress  map[string]map[string]struct{} // address → keys of the live pods reporting it
+	namespaces map[string]serviceCaller       // project namespace → its project
 }
 
-// podEntry is what the index keeps of a pod: where it is, and whether it
-// is the platform's server.
+// podEntry is what the index keeps of a pod: where it is, whether it is the
+// platform's server, whether it is live, and its addresses.
 type podEntry struct {
 	namespace string
 	server    bool
+	live      bool
+	addresses []string
+}
+
+// identity names the caller a pod stands for: the platform's server, or the
+// namespace it is in.
+func (e podEntry) identity() string {
+	if e.server {
+		return "platform"
+	}
+	return "ns/" + e.namespace
 }
 
 func newPodIndex(kube kubernetes.Interface, systemNS string) *podIndex {
-	return &podIndex{kube: kube, systemNS: systemNS, pods: map[string]podEntry{}, addresses: map[string][]string{}, namespaces: map[string]serviceCaller{}}
+	return &podIndex{kube: kube, systemNS: systemNS, pods: map[string]podEntry{}, byAddress: map[string]map[string]struct{}{}, namespaces: map[string]serviceCaller{}}
 }
 
 // Lookup maps a pod address to its project, or to the platform's server.
+// The answer does not depend on the order the pods were seen in: it is the
+// caller of the live pods reporting the address, when they are all the same.
 func (x *podIndex) Lookup(ip string) (serviceCaller, bool) {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
-	e, ok := x.pods[ip]
-	if !ok {
+	var first podEntry
+	n := 0
+	for key := range x.byAddress[ip] {
+		e := x.pods[key]
+		if n == 0 {
+			first = e
+		} else if e.identity() != first.identity() {
+			return serviceCaller{}, false
+		}
+		n++
+	}
+	if n == 0 {
 		return serviceCaller{}, false
 	}
-	if e.server {
+	if first.server {
 		return serviceCaller{Platform: true}, true
 	}
-	c, ok := x.namespaces[e.namespace]
+	c, ok := x.namespaces[first.namespace]
 	return c, ok
 }
 
@@ -87,13 +114,14 @@ func (x *podIndex) Lookup(ip string) (serviceCaller, bool) {
 func (x *podIndex) Run(ctx context.Context) {
 	pods := informers.NewSharedInformerFactory(x.kube, 0)
 	podInformer := pods.Core().V1().Pods().Informer()
-	// Only the address and the namespace are kept of each pod.
+	// Only the address, the namespace and the phase are kept of each pod.
 	_ = podInformer.SetTransform(func(obj any) (any, error) {
 		p, ok := obj.(*corev1.Pod)
 		if !ok {
 			return obj, nil
 		}
 		slim := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: map[string]string{"app.kubernetes.io/name": p.Labels["app.kubernetes.io/name"]}}}
+		slim.Status.Phase = p.Status.Phase
 		slim.Status.PodIPs = p.Status.PodIPs
 		if len(slim.Status.PodIPs) == 0 && p.Status.PodIP != "" {
 			slim.Status.PodIPs = []corev1.PodIP{{IP: p.Status.PodIP}}
@@ -125,25 +153,32 @@ func (x *podIndex) putPod(obj any) {
 		return
 	}
 	key := p.Namespace + "/" + p.Name
-	entry := podEntry{namespace: p.Namespace, server: p.Namespace == x.systemNS && p.Labels["app.kubernetes.io/name"] == "shpyrd-server"}
+	entry := podEntry{
+		namespace: p.Namespace,
+		server:    p.Namespace == x.systemNS && p.Labels["app.kubernetes.io/name"] == "shpyrd-server",
+		live:      p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed,
+	}
+	for _, ip := range p.Status.PodIPs {
+		if ip.IP != "" {
+			entry.addresses = append(entry.addresses, ip.IP)
+		}
+	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	for _, ip := range x.addresses[key] {
-		delete(x.pods, ip)
-	}
-	var ips []string
-	for _, ip := range p.Status.PodIPs {
-		if ip.IP == "" {
-			continue
-		}
-		x.pods[ip.IP] = entry
-		ips = append(ips, ip.IP)
-	}
-	if len(ips) == 0 {
-		delete(x.addresses, key)
+	x.forget(key)
+	if len(entry.addresses) == 0 {
 		return
 	}
-	x.addresses[key] = ips
+	x.pods[key] = entry
+	if !entry.live {
+		return
+	}
+	for _, ip := range entry.addresses {
+		if x.byAddress[ip] == nil {
+			x.byAddress[ip] = map[string]struct{}{}
+		}
+		x.byAddress[ip][key] = struct{}{}
+	}
 }
 
 func (x *podIndex) dropPod(obj any) {
@@ -154,15 +189,24 @@ func (x *podIndex) dropPod(obj any) {
 	if !ok {
 		return
 	}
-	key := p.Namespace + "/" + p.Name
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	for _, ip := range x.addresses[key] {
-		if x.pods[ip].namespace == p.Namespace {
-			delete(x.pods, ip)
+	x.forget(p.Namespace + "/" + p.Name)
+}
+
+// forget removes a pod and its addresses; the caller holds the lock.
+func (x *podIndex) forget(key string) {
+	old, ok := x.pods[key]
+	if !ok {
+		return
+	}
+	for _, ip := range old.addresses {
+		delete(x.byAddress[ip], key)
+		if len(x.byAddress[ip]) == 0 {
+			delete(x.byAddress, ip)
 		}
 	}
-	delete(x.addresses, key)
+	delete(x.pods, key)
 }
 
 // putNamespace reads a project namespace's identity off its labels: the
