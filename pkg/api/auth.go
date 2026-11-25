@@ -221,6 +221,9 @@ type relyingParty struct {
 	caPEM     []byte
 	log       loggerish
 	now       func() time.Time
+	// announce says whether a dial to an address begins with the PROXY
+	// preface; nil never does.
+	announce func(address string) bool
 }
 
 type loggerish interface {
@@ -311,7 +314,7 @@ func (rp *relyingParty) httpClient() *http.Client {
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, _, err := net.SplitHostPort(addr)
 			if err == nil && rp.ingress != "" && rp.domain != "" && strings.HasSuffix(host, "."+rp.domain) {
-				return dialer.DialContext(ctx, network, rp.ingress)
+				return dialFrontDoor(ctx, dialer, network, rp.ingress, rp.announce != nil && rp.announce(rp.ingress))
 			}
 			return dialer.DialContext(ctx, network, addr)
 		},

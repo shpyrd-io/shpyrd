@@ -135,6 +135,19 @@ The keys live at **`<iss>/.well-known/jwks.json`** — the issuer is the dashboa
 
 The [`examples/hello`](https://github.com/shpyrd-io/shpyrd/tree/main/examples/hello) app verifies the token with nothing but the Go standard library (`cmd/web/jwt.go`: fetch the JWKS, cache it, check the Ed25519 signature by `kid`, then `iss`, `aud` and `exp`), and its page says whether the visitor was verified or merely read from the headers.
 
+### The visitor's address
+
+An app that needs the visitor's network address — to rate-limit, to log, to look up a country — reads **`X-Real-IP`**. The edge sets it from the connection and replaces whatever the client sent, so a client cannot choose it. On the OCI profile with `SHPYRD_PROXY_PROTOCOL=true` ([Oracle Cloud](/docs/oracle-cloud#keep-the-visitors-address)) it is the visitor's own address; that is the setup this page describes.
+
+```
+X-Real-IP:       203.0.113.7
+X-Forwarded-For: 203.0.113.7, 10.0.4.21
+```
+
+`X-Forwarded-For` reaches the app as two entries, `<visitor>, <ingress pod>`: the platform's scaling proxy, which sits between the edge and the app, adds the second. A framework that takes the client from the end of the list and is told how many proxies it has should be told **two**; one that trusts a fixed number of hops from the right will otherwise read the ingress pod. Reading `X-Real-IP` avoids the counting.
+
+On an [internal-name call](#calling-by-name) there is no visitor: `X-Real-IP` holds the address of the calling pod. To know who is calling, read `X-Shpyrd-Service` ([Who is calling](#who-is-calling)), not the address.
+
 ## Open as: seeing the app the way a team does
 
 Builders have no test users. On the project's **Access** page, **Open as** opens the app in a new tab with a preview identity: your account, but the teams you chose (or none, or **Open as nobody** for an anonymous visitor); **Open as myself** ends the preview. It takes the developer role or above. The app sees a member of Finance; the token carries `"preview": true` and an `act` claim naming you, so an app can tell if it wants to. Previews are recorded in the project's audit trail.

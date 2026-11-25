@@ -154,6 +154,43 @@ The installer waits for the load balancer address, for `shpyrd.<domain>` to reso
 
 Everything you passed is recorded in the cluster: later runs (`brew upgrade shpyrd && shpyrd cluster init --context oke-shpyrd-prod --profile oci`) need no flags, and the key never leaves the Secrets the installer wrote.
 
+## Keep the visitors' address
+
+By default the public load balancer hands each connection to the ingress controller as its own, so the platform and your apps see the load balancer's address rather than the visitor's. Two values change that, and they are off until you ask:
+
+| Value | Meaning | Default |
+| --- | --- | --- |
+| `SHPYRD_PROXY_PROTOCOL` | `true` makes the load balancer send the visitor's address to the external ingress controller in a PROXY protocol (version 2) header | `false` |
+| `SHPYRD_LB_SUBNET_CIDR` | the range of the public load balancer's subnet: the only source the controller believes a PROXY header from | `10.0.10.0/24`, the Terraform default; the vars file carries the real value |
+
+With it on, apps read the visitor's address in `X-Real-IP` ([The visitor's address](/docs/app-access#the-visitor-s-address)). Switch it on with the vars file in hand:
+
+```shell
+shpyrd cluster init --context oke-shpyrd-prod --profile oci --vars-file contrib/oci/terraform/shpyrd-prod.vars \
+  --set SHPYRD_PROXY_PROTOCOL=true
+```
+
+The installer sets four things on the external controller: the load balancer annotation asking for PROXY protocol version 2, `use-proxy-protocol`, `proxy-real-ip-cidr` equal to `SHPYRD_LB_SUBNET_CIDR`, and `externalTrafficPolicy: Local`. The internal controller is left as it is. An empty value, a bare address or a range of everything in `SHPYRD_LB_SUBNET_CIDR` is refused. Once recorded, `true` is kept by later `cluster init` runs.
+
+<Callout title="A short interruption at the switch" type="warning">
+The load balancer and the controller change at different moments, and public requests fail until both have changed: sign-in and every public hostname are unreachable for a while. Internal names are not affected. The change cannot be ordered to avoid this, and its length has not been measured, so do it when a pause is acceptable. `cluster init` prints a note before it applies a change of this kind.
+</Callout>
+
+The feature needs the internal controller in the install. If you leave it out with `--skip ingress-nginx-internal`, the external controller also answers internal names, which must stay plain, so the setting stays off and the installer says why. Elsewhere than the `oci` profile the setting is ignored.
+
+The switch, on or off, happens only in a `cluster init` without `--only` that installs both the external ingress controller and the server. A run limited to some components (with `--only`, or with `--skip` of `ingress-nginx` or `shpyrd`) keeps the front door as it is: it applies the server with what the external controller has in the cluster, and a note says when that differs from `SHPYRD_PROXY_PROTOCOL`. Make the change with a full run.
+
+### Going back
+
+It is the same switch in reverse, with the same interruption:
+
+```shell
+shpyrd cluster init --context oke-shpyrd-prod --profile oci --vars-file contrib/oci/terraform/shpyrd-prod.vars \
+  --set SHPYRD_PROXY_PROTOCOL=false
+```
+
+Only an explicit `false` turns it off; a run that says nothing keeps what is recorded. If the front door is down and you cannot wait for a run, two manual edits undo it: remove the `service.beta.kubernetes.io/oci-load-balancer-connection-proxy-protocol-version` annotation from the `ingress-nginx-controller` Service in `ingress-nginx`, and set `use-proxy-protocol` to `"false"` in the `ingress-nginx-controller` ConfigMap of the same namespace. Run `cluster init` with `SHPYRD_PROXY_PROTOCOL=false` afterwards so the recorded setting agrees.
+
 ## 5. First sign-in
 
 A fresh cluster has one credential: the **admin token**, a Secret the installer generated. The CLI already uses it through your kubeconfig; for the dashboard, open it signed in through a one-time ticket, or copy the token into the sign-in page:

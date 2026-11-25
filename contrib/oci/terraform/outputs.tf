@@ -134,6 +134,7 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_DOMAIN=${var.dns_zone != "" ? var.dns_zone : "apps.example.com"}
     SHPYRD_LB_IP=${var.reserved_public_ip ? oci_core_public_ip.lb[0].ip_address : ""}
     SHPYRD_INTERNAL_LB_SUBNET=${oci_core_subnet.this["lb_private"].id}
+    SHPYRD_LB_SUBNET_CIDR=${oci_core_subnet.this["lb_public"].cidr_block}
     SHPYRD_FSS_MOUNT_TARGET=${var.shared_storage ? oci_file_storage_mount_target.shared[0].id : ""}
     SHPYRD_FSS_AD=${var.shared_storage ? local.ad : ""}
     SHPYRD_DNS_PROVIDER=${var.dns_zone != "" ? "oci" : "none"}

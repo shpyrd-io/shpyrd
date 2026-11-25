@@ -55,6 +55,17 @@ vars:
   # On production set this explicitly to auth.shpyrd.io (a manual A record
   # outside the delegated zone) so SSO connector callbacks are stable.
   SHPYRD_AUTH_URL: ""
+  # PROXY protocol on the public load balancer (opt in): with "true" the
+  # external controller learns each visitor's address from the load balancer
+  # instead of seeing the load balancer. It believes the header only from
+  # SHPYRD_LB_SUBNET_CIDR, the public load balancer subnet (it mirrors
+  # contrib/oci/terraform's lb_public default; the vars file it writes
+  # carries the real value). Switching it on makes the load balancer change,
+  # which interrupts the public front door for a moment; it needs the
+  # internal controller in the install and is ignored without it. The
+  # internal controller never gets it.
+  SHPYRD_PROXY_PROTOCOL: "false"
+  SHPYRD_LB_SUBNET_CIDR: 10.0.10.0/24
   SHPYRD_PLATFORM_EXPOSURE: external
   SHPYRD_INTERNAL_LB: "auto"
   SHPYRD_INTERNAL_LB_SUBNET: ""

@@ -50,6 +50,9 @@ vars:
   SHPYRD_PLATFORM_EXPOSURE: external
   SHPYRD_INTERNAL_LB: "auto"
   SHPYRD_INTERNAL_LB_SUBNET: ""
+  # PROXY protocol on the front door is for the oci profile only.
+  SHPYRD_PROXY_PROTOCOL: "false"
+  SHPYRD_LB_SUBNET_CIDR: ""
   SHPYRD_INGRESS_CLASS_EXTERNAL: nginx
   SHPYRD_INGRESS_CLASS_INTERNAL: nginx-internal
   # Volumes (RFC-0060): EBS gp3 (encrypted, expansion allowed, 1 GiB

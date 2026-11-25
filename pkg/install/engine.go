@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,12 @@ type Options struct {
 	// profile's runlevels (RFC-0002). Their names are recorded as
 	// SHPYRD_EXTENSIONS for the server.
 	Extensions []ExtensionComponent
+	// ProxyProtocolKeep is set by a run that applies only some of the
+	// components: it is the PROXY protocol state the external ingress
+	// controller has in the cluster (true when on), and the run keeps it,
+	// whatever SHPYRD_PROXY_PROTOCOL says. nil is a run that switches the
+	// feature as asked (a full run).
+	ProxyProtocolKeep *bool
 	// Reporter receives progress; defaults to a slog based reporter.
 	Reporter Reporter
 	Logger   *slog.Logger
@@ -108,6 +115,10 @@ type Engine struct {
 	components map[string]*Component
 	vars       map[string]string
 	chartMu    sync.Mutex
+	// proxyCIDR is the range PROXY headers are believed from, set only when
+	// the external controller is installed to expect them.
+	proxyCIDR string
+	notices   []string
 }
 
 // New loads the profile and prepares clients. k may be nil for Export.
@@ -173,6 +184,17 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 	if err := validateIntegrationVars(vars); err != nil {
 		return nil, err
 	}
+	internalInInstall := profile.HasComponent(InternalIngressComponent) && !contains(opts.Skip, InternalIngressComponent)
+	externalApplied := !contains(opts.Skip, ExternalIngressComponent) && (len(opts.Only) == 0 || contains(opts.Only, ExternalIngressComponent))
+	proxyOn, proxyCIDR, proxyNotice, err := resolveProxyProtocol(profile.Name, vars, internalInInstall, opts.ProxyProtocolKeep, externalApplied)
+	if err != nil {
+		return nil, err
+	}
+	vars[VarProxyProtocol] = strconv.FormatBool(proxyOn)
+	var notices []string
+	if proxyNotice != "" {
+		notices = append(notices, proxyNotice)
+	}
 	for _, pair := range [][2]string{{VarGatewayBucket, VarGatewayRegion}, {VarRegistryBucket, VarRegistryRegion}, {VarSourcesBucket, VarSourcesRegion}} {
 		if vars[pair[0]] != "" && vars[pair[1]] == "" {
 			return nil, fmt.Errorf("%s requires %s", pair[0], pair[1])
@@ -201,6 +223,8 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 		profile:    profile,
 		components: byName,
 		vars:       vars,
+		proxyCIDR:  proxyCIDR,
+		notices:    notices,
 	}
 	if k != nil {
 		e.applier = &applier{kube: k, log: opts.Logger}
@@ -457,6 +481,9 @@ func (e *Engine) componentValues(c *Component) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("%s: %w", c.Name, err)
 		}
 		thanosSidecar(vals, e.vars[VarGatewayBucket] != "", e.vars[VarDomain])
+	}
+	if c.Name == ExternalIngressComponent && e.proxyCIDR != "" {
+		proxyProtocolValues(vals, e.proxyCIDR)
 	}
 	return vals, nil
 }

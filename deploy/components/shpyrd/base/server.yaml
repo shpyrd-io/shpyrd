@@ -112,6 +112,10 @@ spec:
               value: "${SHPYRD_EXTENSIONS}"
             - name: SHPYRD_POD_CIDR
               value: "${SHPYRD_POD_CIDR}"
+            # "true" only when the external controller expects a PROXY
+            # header (the effective value, not the request).
+            - name: SHPYRD_PROXY_PROTOCOL
+              value: "${SHPYRD_PROXY_PROTOCOL}"
             - name: SHPYRD_CLUSTER_ISSUER
               value: "${SHPYRD_CLUSTER_ISSUER}"
             # Private registries (RFC-0035): builds push and instances pull

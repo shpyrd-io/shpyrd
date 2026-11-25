@@ -194,7 +194,7 @@ func (s *Server) confirmProjectMaintenance(ctx context.Context, app *shpyrdv1.Ap
 	if address != "" {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		transport.DialContext = func(c context.Context, network, _ string) (net.Conn, error) {
-			return dialer.DialContext(c, network, address)
+			return dialFrontDoor(c, dialer, network, address, s.announcesToFrontDoor(address))
 		}
 	}
 	httpc := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

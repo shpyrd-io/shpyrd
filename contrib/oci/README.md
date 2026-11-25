@@ -41,8 +41,8 @@ Without the VPN (`vpn = false`), `./tunnel.sh &` opens the Bastion tunnel instea
 
 `terraform output next_steps` prints the `shpyrd cluster init` command. Terraform writes
 `<name>.vars` with every value the platform needs from the infrastructure (domain,
-reserved address, private LB subnet, File Storage, DNS zone and user); `cluster init
---vars-file` reads it and only the DNS key travels as its own file (`--dns-key-file`).
+reserved address, private LB subnet, public LB subnet range as `SHPYRD_LB_SUBNET_CIDR`,
+File Storage, DNS zone and user); `cluster init --vars-file` reads it and only the DNS key travels as its own file (`--dns-key-file`).
 With `dns_zone` set, delegate the zone once from its parent (NS records
 from `terraform output dns_zone_nameservers`); the wildcard record already points at the
 reserved address, so the platform's hostnames resolve as soon as the delegation does.
