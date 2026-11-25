@@ -40,8 +40,14 @@ governs: [deploy/components/ingress-nginx, deploy/components/ingress-nginx-inter
   external front door with a preface that names no address, and a call to
   an internal name is refused when the cluster has no internal front door,
   instead of being sent to the external one.
-- Without the internal controller in the install, the feature stays off
-  and the installer says why.
+- When the internal controller is left out of the install (with
+  `--skip ingress-nginx-internal`, or on a profile without it), the feature
+  stays off and the installer says why.
+- The feature changes state only in a `cluster init` that applies both the
+  external controller and the server. A run limited to some components
+  (`--only`, or `--skip` of either of the two) keeps the state the external
+  controller has in the cluster, read from its Service, gives the server
+  that same state, and says so when it differs from what was asked.
 - The variable defaults to `false`. Other profiles ignore it.
 
 ## Alternatives considered
@@ -70,6 +76,9 @@ governs: [deploy/components/ingress-nginx, deploy/components/ingress-nginx-inter
 - Turning the feature on or off changes how the load balancer talks to the
   controller: the external front door is interrupted during that run of
   `cluster init`.
+- The controller and the server must agree: a controller that requires the
+  header refuses a server that does not announce itself. That is why a
+  partial run follows the cluster instead of the variable.
 - With the feature on, every connection to the external controller must
   begin with a PROXY header. Anything in the cluster that connects to it
   directly must send one, as the server does; a new in-cluster caller of
