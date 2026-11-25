@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/api";
-import type { Identity } from "@/api/types";
+import type { Identity, ProjectCard } from "@/api/types";
 
 // What the person may do, from the roles the server gives. Until roles are
 // enforced (no team yet), every signed-in person may do everything.
@@ -55,4 +55,15 @@ export function usePerms(slug?: string): Perms {
 export function useUserOnly(perms: Perms): boolean {
   const projects = Object.values(perms.me?.roles?.projects ?? {});
   return perms.loaded && perms.enforced && !perms.admin && !perms.create && projects.every((r) => r === "user" || r === "reader");
+}
+
+// Whether the person may view a project of the launcher, and so has its
+// gear: anyone, while roles are not enforced and for the workspace's owners
+// and admins; else only who holds more than the right to open it. The server
+// marks a card of someone who only opens it with their role (user or
+// reader); the roles of the person, by slug, say the same where they know it.
+export function mayView(perms: Perms, p: Pick<ProjectCard, "slug" | "role">): boolean {
+  if (!perms.enforced || perms.admin) return true;
+  const role = p.role ?? perms.me?.roles?.projects?.[p.slug];
+  return role !== "user" && role !== "reader";
 }

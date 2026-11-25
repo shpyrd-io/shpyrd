@@ -46,7 +46,7 @@ shpyrd members add reports --team everyone --role reader
 
 The built-in **everyone** team is every person who has signed in: `shpyrd members add expenses --team everyone --role user` opens the app to the whole company at once.
 
-Someone signed in without a role sees a page saying "Expenses is available to the finance team" (the teams that hold the `user` role, never people) — with a link to sign in as someone else — instead of the app. Someone who is not signed in is taken to the platform's sign-in page and back to the app afterwards; an API client (nothing in its `Accept` asks for HTML) gets a JSON `401` with `WWW-Authenticate` instead. People whose only roles are `user` see a **launcher** in the dashboard: tiles for the apps they can open, nothing else.
+Someone signed in without a role sees a page saying "Expenses is available to the finance team" (the teams that hold the `user` role, never people) — with a link to sign in as someone else — instead of the app. Someone who is not signed in is taken to the platform's sign-in page and back to the app afterwards; an API client (nothing in its `Accept` asks for HTML) gets a JSON `401` with `WWW-Authenticate` instead. People whose only roles are `user` or `reader` see a **launcher** in the dashboard: a card for each app they hold a role on, which opens the app, and nothing else (no settings buttons, no list of the teams that have access).
 
 ### Scripts, CI and agents
 

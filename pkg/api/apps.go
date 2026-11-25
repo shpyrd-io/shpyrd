@@ -348,26 +348,101 @@ func (s *Server) listApps(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	out := make([]AppSummary, 0, len(list.Items))
+	// A caller whose roles cannot be read sees nothing, as with no role.
+	roles, _ := s.rolesOf(c)
+	type listed struct {
+		name, slug string
+		card       any
+	}
+	rows := make([]listed, 0, len(list.Items))
 	ws := s.workspace(c)
 	teams := s.teamsByProject(c.Request.Context(), ws)
 	cat := s.catalogLookup(c.Request.Context())
 	for i := range list.Items {
-		if workspaceOf(&list.Items[i]) != ws || !s.canViewApp(c, &list.Items[i]) {
+		a := &list.Items[i]
+		if workspaceOf(a) != ws {
 			continue
 		}
-		sum := summarize(&list.Items[i])
-		sum.Teams = teams[projectGrantKey(&list.Items[i])]
-		sum.Catalog = cat.of(&list.Items[i])
-		out = append(out, sum)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].DisplayName != out[j].DisplayName {
-			return strings.ToLower(out[i].DisplayName) < strings.ToLower(out[j].DisplayName)
+		key := projectGrantKey(a)
+		switch {
+		case roles.Can(authz.ProjectView, key):
+			sum := summarize(a)
+			sum.Teams = teams[key]
+			sum.Catalog = cat.of(a)
+			rows = append(rows, listed{sum.DisplayName, sum.Slug, sum})
+		case roles.Can(authz.ProjectOpen, key):
+			// Who may only open the app is shown its card and nothing else.
+			card := openCard(a, roles.ProjectRole(key))
+			rows = append(rows, listed{card.DisplayName, card.Slug, card})
 		}
-		return out[i].Slug < out[j].Slug
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].name != rows[j].name {
+			return strings.ToLower(rows[i].name) < strings.ToLower(rows[j].name)
+		}
+		return rows[i].slug < rows[j].slug
 	})
+	out := make([]any, len(rows))
+	for i := range rows {
+		out[i] = rows[i].card
+	}
 	c.JSON(http.StatusOK, out)
+}
+
+// OpenCard is a project as the launcher shows it to someone whose role only
+// opens it (project.open): what the card says and where it opens, and
+// nothing of how the project is built or run. It is a type of its own, so a
+// field added to AppSummary does not reach it by accident.
+type OpenCard struct {
+	ID          string                `json:"id,omitempty"`
+	Slug        string                `json:"slug"`
+	DisplayName string                `json:"displayName"`
+	Description string                `json:"description,omitempty"`
+	Featured    bool                  `json:"featured,omitempty"`
+	URL         string                `json:"url,omitempty"`
+	Domain      string                `json:"domain,omitempty"`
+	Exposure    string                `json:"exposure,omitempty"`
+	Access      string                `json:"access"`
+	Phase       string                `json:"phase"`
+	Maintenance *shpyrdv1.Maintenance `json:"maintenance,omitempty"`
+	// Asleep is whether a process sleeps: the card's light says so.
+	Asleep    bool   `json:"asleep,omitempty"`
+	Icon      string `json:"icon,omitempty"`
+	IconColor string `json:"iconColor,omitempty"`
+	IconURL   string `json:"iconUrl,omitempty"`
+	IconType  string `json:"iconType,omitempty"`
+	// Role is the person's own role on the project.
+	Role string `json:"role"`
+}
+
+// openCard is the card of an app for a person whose role is role. Of the
+// maintenance mode it keeps only that it is on, not its message or author.
+func openCard(a *shpyrdv1.App, role string) OpenCard {
+	card := OpenCard{
+		ID:          a.Spec.ID,
+		Slug:        project.SlugOf(a),
+		DisplayName: project.DisplayName(a),
+		Description: project.Description(a),
+		Featured:    project.Featured(a),
+		URL:         a.Status.URL,
+		Domain:      domainOf(a),
+		Exposure:    a.Spec.Exposure,
+		Access:      a.EffectiveAccess(),
+		Phase:       firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending),
+		Icon:        project.Icon(a),
+		IconColor:   project.IconColor(a),
+		Role:        role,
+	}
+	card.IconURL, card.IconType = iconURL(a)
+	if m := a.Spec.Maintenance; m != nil && m.Enabled {
+		card.Maintenance = &shpyrdv1.Maintenance{Enabled: true}
+	}
+	for _, p := range a.Status.Processes {
+		if p.Sleep != nil && p.Sleep.State == "sleeping" {
+			card.Asleep = true
+		}
+	}
+	return card
 }
 
 // findApp resolves a project slug within a workspace to its App (RFC-0076:

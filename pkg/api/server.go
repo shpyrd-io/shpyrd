@@ -910,7 +910,7 @@ func (s *Server) routes() error {
 	api.POST("/project-archives/:slug/restore", s.require(authz.ProjectDestroy), s.restoreProjectArchive)
 	api.POST("/project-archives/:slug/recover", s.require(authz.ProjectDestroy), s.recoverProjectArchive)
 	api.PATCH("/projects/:slug", s.require(authz.ProjectConfig), s.updateApp)
-	api.GET("/projects/:slug/icon", s.require(authz.ProjectView), s.projectIcon)
+	api.GET("/projects/:slug/icon", s.require(authz.ProjectOpen), s.projectIcon) // the card's image: whoever sees the card
 	api.PUT("/projects/:slug/icon", s.require(authz.ProjectConfig), s.putProjectIcon)
 	api.DELETE("/projects/:slug/icon", s.require(authz.ProjectConfig), s.deleteProjectIcon)
 	api.POST("/projects/:slug/rename", s.require(authz.ProjectConfig), s.renameApp)

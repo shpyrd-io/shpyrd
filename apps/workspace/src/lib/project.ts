@@ -1,15 +1,15 @@
 import type { Phase } from "@shpyrd/ui/components/launcher-card";
 import { order, type Tone } from "@shpyrd/ui/lib/chart";
-import type { ProjectSummary } from "@/api/types";
+import type { ProjectCard, ProjectSummary } from "@/api/types";
 
 // How a project is read for the launcher card: its light, where it
 // answers, whether it is locked, and the ink it keeps.
 
-export function phaseOf(p: ProjectSummary): Phase {
+export function phaseOf(p: Pick<ProjectCard, "maintenance" | "processes" | "asleep" | "phase">): Phase {
   // The page in front of it is a choice, said before whatever runs behind.
   if (p.maintenance?.enabled) return "maintenance";
   const processes = Object.values(p.processes ?? {});
-  if (processes.some((s) => s.sleep?.state === "sleeping")) return "sleeping";
+  if (p.asleep || processes.some((s) => s.sleep?.state === "sleeping")) return "sleeping";
   switch (p.phase) {
     case "Running":
       return "running";

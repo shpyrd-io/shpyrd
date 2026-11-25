@@ -129,7 +129,7 @@ func (s *Server) require(action authz.Action) gin.HandlerFunc {
 			abort(c, http.StatusForbidden, projectDenial(roles, action, project, key))
 			return
 		}
-		if project != "" && action != authz.ProjectView && strings.HasPrefix(string(action), "project.") && !strings.HasPrefix(c.FullPath(), "/api/project-archives/") {
+		if project != "" && action != authz.ProjectView && action != authz.ProjectOpen && strings.HasPrefix(string(action), "project.") && !strings.HasPrefix(c.FullPath(), "/api/project-archives/") {
 			if app, err := s.projectApp(c); err == nil {
 				gate := s.projectGate(app.Namespace)
 				if !gate.TryRLock() {

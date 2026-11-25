@@ -285,7 +285,36 @@ export type ProjectSummary = {
   domain?: string;
   // The teams that have access to it; only in the list.
   teams?: string[];
+  // Only in the list, and only for someone whose role on the project just
+  // opens it (user or reader): their role, and whether a process sleeps.
+  // Such an answer is a ProjectCard: the rest of this is not in it.
+  role?: ProjectRole;
+  asleep?: boolean;
 };
+
+// What a project's card on the launcher reads: all that someone who only
+// opens the project is told of it.
+export type ProjectCard = Pick<
+  ProjectSummary,
+  | "slug"
+  | "displayName"
+  | "description"
+  | "featured"
+  | "phase"
+  | "url"
+  | "exposure"
+  | "access"
+  | "maintenance"
+  | "icon"
+  | "iconColor"
+  | "iconUrl"
+  | "iconType"
+  | "domain"
+  | "teams"
+  | "processes"
+  | "role"
+  | "asleep"
+>;
 
 export type Project = ProjectSummary & {
   spec: {
